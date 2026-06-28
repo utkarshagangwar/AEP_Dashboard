@@ -1,0 +1,97 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - aep_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../automation:/automation
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL}
+      FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      AUTOMATION_ROOT: /automation
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - aep_network
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: ../docker/Dockerfile.backend
+    command: celery -A app.workers.celery_app:celery_app worker --loglevel=info
+    volumes:
+      - ../automation:/automation
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL}
+      FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      AUTOMATION_ROOT: /automation
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - aep_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+      FASTAPI_URL: http://backend:8000
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+    depends_on:
+      - backend
+    networks:
+      - aep_network
+
+  nginx:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/ssl/cert.pem:/etc/nginx/ssl/cert.pem:ro
+      - ./docker/ssl/key.pem:/etc/nginx/ssl/key.pem:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - aep_network
+
+networks:
+  aep_network:
+    driver: bridge

@@ -1,0 +1,58 @@
+# Environment variables / secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.staging
+!.env.example
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+
+# Credentials
+credentials.json
+service-account*.json
+**/secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+nul
+
+# Build outputs
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# Test artifacts
+results/
+test-artifacts/

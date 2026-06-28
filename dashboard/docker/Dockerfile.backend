@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps for psycopg2, Node.js (needed by robotframework-browser/Playwright)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Backend Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Robot Framework deps (needed by celery worker to execute tests)
+COPY requirements-robot.txt .
+RUN pip install --no-cache-dir -r requirements-robot.txt && \
+    rfbrowser init
+
+# Install Playwright OS dependencies (Chromium needs these to run in Linux)
+RUN npx --yes playwright install-deps chromium
+
+COPY . .
+
+# Run migrations and start uvicorn
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
