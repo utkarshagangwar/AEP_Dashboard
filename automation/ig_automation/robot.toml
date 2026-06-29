@@ -1,0 +1,6 @@
+[tool.robot]
+paths = ["tests"]
+python-path = ["."]
+
+[tool.robot.output]
+dir = "results"

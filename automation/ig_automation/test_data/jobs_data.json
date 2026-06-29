@@ -1,0 +1,20 @@
+{
+  "job_valid": {
+    "title": "Automation Tester",
+    "employment_types": [
+      "Full Time",
+      "Part Time",
+      "Freelancing"
+      ],
+    "experience": "3"
+  },
+  "job_update": {
+    "new_experience": "5"
+  },
+  "ai_prompt": {
+    "custom_text": "Custom AI prompt override for testing"
+  },
+  "search": {
+    "job_name": "Automation"
+  }
+}
