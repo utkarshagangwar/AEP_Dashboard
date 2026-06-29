@@ -1,0 +1,75 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AEP Dashboard — Docker Build Context Exclusions
+#
+# The Docker build context is the entire repo root (`.`).
+# Anything listed here is NOT sent to the Docker daemon during `docker build`.
+# This keeps build context small and prevents secrets leaking into the image.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Secrets — never ever in the image ────────────────────────────────────────
+**/.env
+**/.env.*
+!**/.env.example   # keep example files — they're documentation, not secrets
+
+# ── Frontend (Next.js) — not needed in the backend image ─────────────────────
+dashboard/frontend/
+.next/
+node_modules/
+
+# ── Python virtual environments ───────────────────────────────────────────────
+**/.venv/
+**/venv/
+**/env/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+
+# ── Test artifacts — results, screenshots, logs ───────────────────────────────
+# NOTE: automation/ source code IS included (needed by Celery workers).
+# Only generated output is excluded.
+automation/results/
+automation/screenshots/
+automation/logs/
+automation/output.xml
+automation/report.html
+automation/log.html
+**/*.mp4           # video recordings from test runs
+
+# ── Python build artifacts ────────────────────────────────────────────────────
+*.egg-info/
+dist/
+build/
+**/.eggs/
+
+# ── Editor and OS noise ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Git — no history needed in the image ─────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── CI/CD config — not needed at runtime ─────────────────────────────────────
+.github/
+.gitlab-ci.yml
+
+# ── Docker files themselves ───────────────────────────────────────────────────
+# (Docker doesn't need to copy itself into the image)
+Dockerfile
+.dockerignore
+
+# ── Docs and non-code ────────────────────────────────────────────────────────
+# NOTE: Do NOT exclude alembic/ README.md — alembic looks for it at runtime.
+# Only exclude top-level docs.
+README.md
+CONTRIBUTING.md
+LICENSE
+docs/
