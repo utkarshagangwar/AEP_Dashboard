@@ -1,0 +1,14 @@
+{
+  "validations": {
+    "min_activity_count": 1
+  },
+  "navigation": {
+    "menu_items": [
+      "Dashboard",
+      "Jobs",
+      "Candidates",
+      "Templates",
+      "Settings"
+    ]
+  }
+}

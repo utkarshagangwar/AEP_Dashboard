@@ -1,0 +1,93 @@
+name: Robot Framework CI
+
+on:
+  schedule:
+    # Runs every day at 9:00 AM IST (3:30 AM UTC)
+    # Cron format: minute hour day month weekday
+    - cron: '30 3 * * *'
+#  push:
+#    branches: [ main ]
+#  pull_request:
+#    branches: [ main ]
+  workflow_dispatch:    # Manual trigger from GitHub Actions UI
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ── 2. Python ────────────────────────────────────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      # ── 3. Dependencies ───────────────────────────────────────────────────────
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── 4. Playwright Browser Binaries ────────────────────────────────────────
+      # rfbrowser init downloads Chromium, Firefox, and WebKit via Playwright.
+      # Replaces the old "browser-actions/setup-chrome" step (Selenium-era).
+      - name: Install Playwright Browsers
+        run: rfbrowser init
+
+      # ── 5. Dry run — catch syntax errors before real run ──────────────────────
+      - name: Verify Robot Parsing
+        env:
+          # App
+          BASE_URL:            ${{ secrets.BASE_URL }}
+          BROWSER:             headlesschrome
+          # Bypass login
+          API_BASE_URL:  ${{ secrets.API_BASE_URL }}
+          BYPASS_ENDPOINT:     ${{ secrets.BYPASS_ENDPOINT }}
+          X_API_KEY:           ${{ secrets.X_API_KEY }}
+          AUTH_COOKIE_NAME:    ${{ secrets.AUTH_COOKIE_NAME }}
+          AUTH_COOKIE_DOMAIN:  ${{ secrets.AUTH_COOKIE_DOMAIN }}
+          # Test account
+          TEST_EMAIL:          ${{ secrets.TEST_EMAIL }}
+          TEST_OTP:            ${{ secrets.TEST_OTP }}
+        run: |
+          robot --dryrun --argumentfile local.args
+
+      # ── 6. Run CI-safe suites only ────────────────────────────────────────────
+      # --include ci-safe ensures login_tests.robot (Suite B / CAPTCHA UI tests)
+      # is skipped automatically — those tests have no ci-safe tag.
+      - name: Run Robot Tests (Headless)
+        env:
+          # App
+          BASE_URL:            ${{ secrets.BASE_URL }}
+          BROWSER:             headlesschrome
+          # Bypass login
+          API_BASE_URL:  ${{ secrets.API_BASE_URL }}
+          BYPASS_ENDPOINT:     ${{ secrets.BYPASS_ENDPOINT }}
+          X_API_KEY:           ${{ secrets.X_API_KEY }}
+          AUTH_COOKIE_NAME:    ${{ secrets.AUTH_COOKIE_NAME }}
+          AUTH_COOKIE_DOMAIN:  ${{ secrets.AUTH_COOKIE_DOMAIN }}
+          # Test account
+          TEST_EMAIL:          ${{ secrets.TEST_EMAIL }}
+          TEST_OTP:            ${{ secrets.TEST_OTP }}
+        run: |
+          robot \
+            --argumentfile local.args \
+            --include ci-safe \
+            --outputdir results/ \
+            --loglevel DEBUG \
+            --timestampoutputs \
+            tests/
+
+      # ── 7. Upload results — always, even on failure ───────────────────────────
+      - name: Upload Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-results-${{ github.run_number }}
+          path: results/
+          retention-days: 14

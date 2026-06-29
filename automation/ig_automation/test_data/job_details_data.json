@@ -1,0 +1,18 @@
+{
+  "search": {
+    "valid_candidate": "Shankar",
+    "invalid_candidate": "XYZ123"
+  },
+  "filters": {
+    "min_score": "50",
+    "max_score": "90"
+  },
+  "rounds": {
+    "first_round": 1,
+    "second_round": 2
+  },
+  "candidates": {
+    "single": 1,
+    "multiple": 2
+  }
+}

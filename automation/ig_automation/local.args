@@ -1,0 +1,10 @@
+--outputdir results
+--variable BROWSER:chromium
+--variable ENV:dev
+--pythonpath .
+
+# Define the exact sequence here
+
+tests/dashboard/dashboard_tests.robot
+tests/jobs/jobs_tests.robot
+tests/job_details/job_details_tests.robot
