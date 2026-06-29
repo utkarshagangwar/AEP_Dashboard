@@ -98,8 +98,8 @@ COPY dashboard/backend/ ./
 
 # Copy automation test suites into /automation inside the container.
 # Celery workers run robot tests from this path.
-# Set AUTOMATION_ROOT env var to /automation on Render.
 COPY automation/ /automation/
+ENV AUTOMATION_ROOT=/automation
 
 # ── 7. Runtime config ─────────────────────────────────────────────────────────
 # start.sh handles: alembic migrations → Celery (background) → uvicorn (foreground)
