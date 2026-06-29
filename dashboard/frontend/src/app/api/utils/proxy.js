@@ -63,9 +63,11 @@ export async function proxyToFastAPI(request, apiPath, options = {}) {
     // Forward relevant response headers
     for (const [key, value] of response.headers.entries()) {
       const lower = key.toLowerCase();
-      // Skip hop-by-hop headers
+      // Skip hop-by-hop and compression headers — Node.js fetch() already
+      // decompresses the body, so forwarding these causes ERR_CONTENT_DECODING_FAILED.
       if (
-        ["transfer-encoding", "connection", "keep-alive", "te", "trailer", "upgrade"].includes(lower)
+        ["transfer-encoding", "connection", "keep-alive", "te", "trailer", "upgrade",
+         "content-encoding", "content-length"].includes(lower)
       ) continue;
       responseHeaders.set(key, value);
     }
