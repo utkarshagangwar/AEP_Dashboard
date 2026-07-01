@@ -1,3 +1,4 @@
+import "./global.css";
 import Providers from "../components/Providers";
 
 // Load Inter font via Google Fonts

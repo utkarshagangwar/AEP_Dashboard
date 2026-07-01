@@ -19,6 +19,7 @@ import {
   LogOut,
   Menu,
   X,
+  Bot,
 } from "lucide-react";
 
 // ─── Navigation items with role requirements ─────────────────────────────────
@@ -33,6 +34,7 @@ const NAV_ITEMS: Array<{
   { label: "Projects", href: "/projects", icon: FolderOpen, roles: null },
   { label: "Reports", href: "/reports", icon: FileBarChart, roles: null },
   { label: "Defects", href: "/defects", icon: Bug, roles: null },
+  { label: "AI Testing", href: "/ai-testing", icon: Bot, roles: ["admin", "qa_lead", "qa_engineer"] },
   { label: "Users", href: "/admin/users", icon: Users, roles: ["admin"] },
   { label: "Audit Log", href: "/audit", icon: Shield, roles: ["admin"] },
 ];

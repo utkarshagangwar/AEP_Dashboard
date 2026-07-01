@@ -6,6 +6,14 @@ from app.models.test_suite import TestSuite, SuiteType
 from app.models.test_run import TestRun, RunStatus
 from app.models.test_result import TestResult, TestStatus
 from app.models.defect import Defect, DefectSeverity, DefectStatus
+from app.models.ai_runs import (
+    AICredentialProfile,
+    AITestRun,
+    AIRunEvent,
+    AIRunStatus,
+    AIEventStatus,
+    AIStepType,
+)
 
 __all__ = [
     "User",
@@ -23,4 +31,10 @@ __all__ = [
     "Defect",
     "DefectSeverity",
     "DefectStatus",
+    "AICredentialProfile",
+    "AITestRun",
+    "AIRunEvent",
+    "AIRunStatus",
+    "AIEventStatus",
+    "AIStepType",
 ]
