@@ -5,7 +5,11 @@
       "mcp__Claude_in_Chrome__browser_batch",
       "mcp__Claude_in_Chrome__computer",
       "mcp__Claude_in_Chrome__read_page",
-      "mcp__Claude_in_Chrome__read_network_requests"
+      "mcp__Claude_in_Chrome__read_network_requests",
+      "WebSearch",
+      "Read(//tmp/**)",
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile app/services/ai_runner.py)"
     ]
   }
 }

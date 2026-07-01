@@ -26,5 +26,8 @@ celery_app.conf.update(
 )
 
 celery_app.conf.update(
-    include=["app.workers.tasks.execution"],
+    include=[
+        "app.workers.tasks.execution",
+        "app.workers.tasks.ai_execution",
+    ],
 )

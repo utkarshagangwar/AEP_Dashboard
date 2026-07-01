@@ -13,3 +13,7 @@ python-multipart==0.0.20
 celery==5.4.0
 redis==5.0.8
 slowapi==0.1.9
+browser-use==0.1.40
+playwright==1.49.0
+cryptography==42.0.8
+langchain-google-genai==2.1.12
