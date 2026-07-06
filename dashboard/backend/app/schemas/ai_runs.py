@@ -60,6 +60,9 @@ class AIRunResponse(BaseModel):
     duration_ms: Optional[int] = None
     step_count: int = 0
     summary: Optional[str] = None
+    raw_summary: Optional[str] = None
+    run_type: str = "ai"
+    skill_id: Optional[UUID] = None
     failing_step_index: Optional[int] = None
     failing_step_description: Optional[str] = None
     failing_step_screenshot_url: Optional[str] = None
@@ -81,6 +84,7 @@ class AIRunListItem(BaseModel):
     completed_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
     step_count: int = 0
+    run_type: str = "ai"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -91,3 +95,33 @@ class AIRunListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class AISkillResponse(BaseModel):
+    id: UUID
+    name: str
+    goal: str
+    source_run_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+    environment: Optional[str] = None
+    credential_profile_id: Optional[UUID] = None
+    step_count: int = 0
+    times_replayed: int = 0
+    last_replay_status: Optional[str] = None
+    last_replayed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AISkillListResponse(BaseModel):
+    data: list[AISkillResponse]
+    total: int
+    page: int
+    limit: int
+
+
+class SkillReplayRequest(BaseModel):
+    credential_profile_id: Optional[UUID] = None
+    allow_ai_fallback: bool = False

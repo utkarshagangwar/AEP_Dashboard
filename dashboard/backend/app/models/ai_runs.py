@@ -49,6 +49,53 @@ class AICredentialProfile(Base):
     )
 
 
+class AISkill(Base):
+    """Reusable action recording captured from a passed AI test run.
+
+    history_json stores the browser-use AgentHistoryList (screenshots
+    stripped) so the run can be replayed via Agent.rerun_history() without
+    any LLM planning calls.
+    """
+
+    __tablename__ = "ai_skills"
+
+    id = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = mapped_column(String(300), nullable=False)
+    goal = mapped_column(Text, nullable=False)
+    goal_hash = mapped_column(String(64), nullable=False, unique=True, index=True)
+    source_run_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_test_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    project_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    environment = mapped_column(String(200), nullable=True)
+    credential_profile_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_credential_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    history_json = mapped_column(Text, nullable=False)
+    step_count = mapped_column(Integer, default=0)
+    times_replayed = mapped_column(Integer, default=0, nullable=False)
+    last_replay_status = mapped_column(String(20), nullable=True)
+    last_replayed_at = mapped_column(DateTime, nullable=True)
+    created_by = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AITestRun(Base):
     __tablename__ = "ai_test_runs"
 
@@ -77,6 +124,13 @@ class AITestRun(Base):
     duration_ms = mapped_column(Integer, nullable=True)
     step_count = mapped_column(Integer, default=0)
     summary = mapped_column(Text, nullable=True)
+    raw_summary = mapped_column(Text, nullable=True)
+    run_type = mapped_column(String(20), nullable=False, server_default="ai")
+    skill_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_skills.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
     failing_step_index = mapped_column(Integer, nullable=True)
     failing_step_description = mapped_column(Text, nullable=True)
     failing_step_screenshot_url = mapped_column(Text, nullable=True)

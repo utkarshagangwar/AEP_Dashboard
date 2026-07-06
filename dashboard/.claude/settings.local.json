@@ -9,7 +9,11 @@
       "WebSearch",
       "Read(//tmp/**)",
       "Bash(python -c ' *)",
-      "Bash(python -m py_compile app/services/ai_runner.py)"
+      "Bash(python -m py_compile app/services/ai_runner.py)",
+      "PowerShell(docker compose ps 2>&1)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8000/api/v1/visual-audits/references)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/api/v1/visual-audits/references)",
+      "Bash(curl -sk -o /dev/null -w \"%{http_code}\\\\n\" https://localhost/api/v1/visual-audits/references)"
     ]
   }
 }

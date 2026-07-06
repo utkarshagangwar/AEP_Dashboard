@@ -8,11 +8,28 @@ from app.models.test_result import TestResult, TestStatus
 from app.models.defect import Defect, DefectSeverity, DefectStatus
 from app.models.ai_runs import (
     AICredentialProfile,
+    AISkill,
     AITestRun,
     AIRunEvent,
     AIRunStatus,
     AIEventStatus,
     AIStepType,
+)
+from app.models.visual_qa import (
+    DesignArtifact,
+    DesignRule,
+    VisualRun,
+    VisualFinding,
+    ArtifactType,
+    VisualRunStatus,
+    FindingEngine,
+    FindingSeverity,
+)
+from app.models.orchestrator import (
+    OrchestratorRun,
+    OrchestratorStepDecision,
+    OrchestratorRunStatus,
+    OrchestratorStep,
 )
 
 __all__ = [
@@ -37,4 +54,16 @@ __all__ = [
     "AIRunStatus",
     "AIEventStatus",
     "AIStepType",
+    "DesignArtifact",
+    "DesignRule",
+    "VisualRun",
+    "VisualFinding",
+    "ArtifactType",
+    "VisualRunStatus",
+    "FindingEngine",
+    "FindingSeverity",
+    "OrchestratorRun",
+    "OrchestratorStepDecision",
+    "OrchestratorRunStatus",
+    "OrchestratorStep",
 ]

@@ -126,7 +126,7 @@ const NAV = [
     ),
   },
   {
-    label: "AI Testing",
+    label: "Vibe Testing",
     href: "/ai-testing",
     icon: (
       <svg

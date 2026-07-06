@@ -4,6 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, apiFetch, apiPost } from "@/utils/apiClient";
 import AppShell from "@/components/AppShell";
+import AutonomousQASection from "@/components/AutonomousQASection";
+import VisualAuditSection from "@/components/VisualAuditSection";
+import SowCheckpointsSection from "@/components/SowCheckpointsSection";
+import FigmaImportSection from "@/components/FigmaImportSection";
+import ResultsTab from "@/components/ai-testing/ResultsTab";
+import SkillsTab from "@/components/ai-testing/SkillsTab";
+import {
+  RunEvent,
+  RunResult,
+  StepIcon,
+  ScreenshotPane,
+  StepRow,
+  formatDuration,
+  formatElapsed,
+} from "@/components/ai-testing/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,40 +34,7 @@ import {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type UIState = "idle" | "running" | "complete";
-
-interface RunEvent {
-  sequence: number;
-  status: "pending" | "running" | "passed" | "failed" | "inconclusive";
-  description: string;
-  step_type: "deterministic" | "ai_scoped";
-  elapsed_ms?: number;
-  screenshot_url?: string | null;
-  highlighted_element?: {
-    x_pct: number;
-    y_pct: number;
-    w_pct: number;
-    h_pct: number;
-    label: string;
-  } | null;
-  is_failing_step: boolean;
-}
-
-interface RunResult {
-  run_id: string;
-  goal: string;
-  environment?: string;
-  credential_profile_name?: string;
-  project_id?: string;
-  status: "passed" | "failed" | "inconclusive" | "cancelled";
-  duration_ms?: number;
-  step_count: number;
-  summary?: string;
-  failing_step_index?: number;
-  failing_step_description?: string;
-  failing_step_screenshot_url?: string;
-  events: RunEvent[];
-  created_at?: string;
-}
+type PageTab = "new" | "results" | "skills";
 
 interface Environment {
   id: string;
@@ -85,164 +67,36 @@ function isGoalValid(goal: string): boolean {
   return g.length >= 10 && ACTION_WORDS.some((w) => g.includes(w));
 }
 
-function formatDuration(ms?: number): string {
-  if (!ms) return "—";
-  const totalSec = Math.floor(ms / 1000);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
+// ── Top-level tab bar (New Test | Results | Skills) ─────────────────────────
 
-function formatElapsed(ms?: number): string {
-  if (ms == null) return "—";
-  const totalSec = Math.floor(ms / 1000);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
+const PAGE_TABS: { id: PageTab; label: string }[] = [
+  { id: "new", label: "New Test" },
+  { id: "results", label: "Results" },
+  { id: "skills", label: "Skills" },
+];
 
-// ── Sub-components ───────────────────────────────────────────────────────────
-
-function StepIcon({ status }: { status: string }) {
-  if (status === "running") {
-    return (
-      <span className="w-5 h-5 flex-shrink-0 rounded-full border-2 border-blue-500 border-t-transparent animate-spin inline-block" />
-    );
-  }
-  if (status === "passed") {
-    return (
-      <span className="w-5 h-5 flex-shrink-0 rounded-full bg-green-500 flex items-center justify-center">
-        <svg className="w-3 h-3 text-white" viewBox="0 0 12 12" fill="none">
-          <path
-            d="M2 6l3 3 5-5"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </span>
-    );
-  }
-  if (status === "failed") {
-    return (
-      <span className="w-5 h-5 flex-shrink-0 rounded-full bg-red-500 flex items-center justify-center">
-        <svg className="w-3 h-3 text-white" viewBox="0 0 12 12" fill="none">
-          <path
-            d="M3 3l6 6M9 3l-6 6"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </svg>
-      </span>
-    );
-  }
-  return (
-    <span className="w-5 h-5 flex-shrink-0 rounded-full border-2 border-gray-300 bg-gray-50 inline-block" />
-  );
-}
-
-function ScreenshotPane({
-  screenshotUrl,
-  highlight,
+function PageTabBar({
+  active,
+  onChange,
 }: {
-  screenshotUrl?: string | null;
-  highlight?: RunEvent["highlighted_element"] | null;
+  active: PageTab;
+  onChange: (tab: PageTab) => void;
 }) {
-  if (!screenshotUrl) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-gray-100 text-gray-400 text-sm min-h-[200px] rounded-lg">
-        Waiting for screenshot…
-      </div>
-    );
-  }
   return (
-    <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-black">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={screenshotUrl}
-        alt="Browser screenshot"
-        className="w-full h-auto block"
-      />
-      {highlight && (
-        <div
-          className="absolute border-2 border-blue-400 bg-blue-400/10 rounded-sm"
-          style={{
-            left: `${highlight.x_pct}%`,
-            top: `${highlight.y_pct}%`,
-            width: `${highlight.w_pct}%`,
-            height: `${highlight.h_pct}%`,
-          }}
-        >
-          <span className="absolute -top-6 left-0 bg-blue-500 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap shadow">
-            {highlight.label}
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StepRow({ event }: { event: RunEvent }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div
-      className={`rounded-lg border transition-colors ${
-        event.is_failing_step
-          ? "border-red-200 bg-red-50"
-          : "border-gray-100 bg-white"
-      }`}
-    >
-      <button
-        onClick={() => setExpanded((x) => !x)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left"
-      >
-        <StepIcon status={event.status} />
-        <span className="flex-1 text-sm text-gray-700 min-w-0">
-          {event.description}
-        </span>
-        <Badge
-          variant="outline"
-          className={`text-xs flex-shrink-0 ${
-            event.step_type === "ai_scoped"
-              ? "border-purple-200 text-purple-600"
-              : "border-gray-200 text-gray-500"
+    <div className="flex border-b border-gray-200 gap-6 mb-8">
+      {PAGE_TABS.map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => onChange(tab.id)}
+          className={`pb-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            active === tab.id
+              ? "border-gray-900 text-gray-900"
+              : "border-transparent text-gray-500 hover:text-gray-700"
           }`}
         >
-          {event.step_type === "ai_scoped" ? "AI" : "Script"}
-        </Badge>
-        {event.elapsed_ms != null && (
-          <span className="text-xs text-gray-400 flex-shrink-0">
-            {formatElapsed(event.elapsed_ms)}
-          </span>
-        )}
-        {event.screenshot_url && (
-          <svg
-            className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${
-              expanded ? "rotate-180" : ""
-            }`}
-            viewBox="0 0 16 16"
-            fill="none"
-          >
-            <path
-              d="M4 6l4 4 4-4"
-              stroke="currentColor"
-              strokeWidth="1.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        )}
-      </button>
-      {expanded && event.screenshot_url && (
-        <div className="px-4 pb-4">
-          <ScreenshotPane
-            screenshotUrl={event.screenshot_url}
-            highlight={event.highlighted_element}
-          />
-        </div>
-      )}
+          {tab.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -251,6 +105,7 @@ function StepRow({ event }: { event: RunEvent }) {
 
 export default function AITestingPage() {
   const [uiState, setUiState] = useState<UIState>("idle");
+  const [pageTab, setPageTab] = useState<PageTab>("new");
   const [goal, setGoal] = useState("");
   const [projectId, setProjectId] = useState<string>("");
   const [profileId, setProfileId] = useState<string>("");
@@ -333,6 +188,9 @@ export default function AITestingPage() {
         duration_ms: run.duration_ms,
         step_count: run.step_count,
         summary: run.summary,
+        raw_summary: run.raw_summary,
+        run_type: run.run_type,
+        skill_id: run.skill_id,
         failing_step_index: run.failing_step_index,
         failing_step_description: run.failing_step_description,
         failing_step_screenshot_url: run.failing_step_screenshot_url,
@@ -516,6 +374,23 @@ export default function AITestingPage() {
     setSubmitError(null);
   };
 
+  // A skill replay started from the Skills tab hands off into the existing
+  // live-run view — same run_id/SSE flow as a goal-based run.
+  const handleReplayStarted = (newRunId: string, skillGoal: string) => {
+    setEvents([]);
+    setLiveScreenshot(null);
+    setLiveHighlight(null);
+    setElapsedMs(0);
+    setRunResult(null);
+    setDefectLogged(false);
+    setSubmitError(null);
+    stepStartRef.current.clear();
+    setGoal(skillGoal);
+    setRunId(newRunId);
+    setPageTab("new");
+    setUiState("running");
+  };
+
   const handleOpenLogDefect = () => {
     if (!runResult) return;
     setDefectTitle(
@@ -554,25 +429,63 @@ export default function AITestingPage() {
     }
   };
 
+  // ── Results / Skills tabs ─────────────────────────────────────────────────
+  // The live-run view takes over the whole page, so tab navigation is only
+  // available when no run is actively streaming.
+
+  if (pageTab !== "new" && uiState !== "running") {
+    return (
+      <AppShell noPadding>
+        <div className="min-h-full bg-gray-50">
+          <div className="max-w-7xl mx-auto px-6 py-12">
+            <div className="mb-8">
+              <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
+              <p className="text-gray-500 mt-1">
+                {pageTab === "results"
+                  ? "Every goal-based test run is saved here — open one to review its summary, steps, and screenshots."
+                  : "Recurring tests saved as replayable skills — rerun them without burning AI planning tokens."}
+              </p>
+            </div>
+            <PageTabBar active={pageTab} onChange={setPageTab} />
+            {pageTab === "results" ? (
+              <ResultsTab />
+            ) : (
+              <SkillsTab onReplayStarted={handleReplayStarted} />
+            )}
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
+
   // ── State 1: Prompt ───────────────────────────────────────────────────────
 
   if (uiState === "idle") {
     return (
       <AppShell noPadding>
         <div className="min-h-full bg-gray-50">
-          <div className="max-w-3xl mx-auto px-6 py-12">
+          <div className="max-w-7xl mx-auto px-6 py-12">
             <div className="mb-8">
-              <h1 className="text-3xl font-bold text-gray-900">AI Testing</h1>
+              <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
               <p className="text-gray-500 mt-1">
-                Create and run browser-driven tests from plain language goals.
+                Autonomous visual QA — upload design files and let the AI audit
+                your live site.
               </p>
+            </div>
+
+            <PageTabBar active={pageTab} onChange={setPageTab} />
+
+            {/* Autonomous Visual QA hero (design Revision 2) — renders only
+                when the backend feature flag VISUAL_AUDIT_ENABLED is on. */}
+            <div className="mb-6">
+              <AutonomousQASection />
             </div>
 
             <Card className="shadow-sm">
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle className="text-lg">New AI UI Test</CardTitle>
+                    <CardTitle className="text-lg">New Vibe UI Test</CardTitle>
                     <p className="text-sm text-gray-500 mt-1">
                       Describe a goal in plain language and let the AI drive the
                       browser.
@@ -728,6 +641,30 @@ export default function AITestingPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Visual QA (Phases 2–3) — these render only when the backend
+                feature flag VISUAL_AUDIT_ENABLED is on; otherwise null. */}
+            <SowCheckpointsSection
+              onUseGoal={(g) => {
+                setGoal(g);
+                setSubmitError(null);
+                if (typeof window !== "undefined") {
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }
+              }}
+            />
+            <SowCheckpointsSection
+              variant="video"
+              onUseGoal={(g) => {
+                setGoal(g);
+                setSubmitError(null);
+                if (typeof window !== "undefined") {
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }
+              }}
+            />
+            <VisualAuditSection />
+            <FigmaImportSection />
           </div>
 
           <div className="sticky bottom-0 left-0 right-0 border-t border-gray-100 bg-white px-6 py-3 flex items-center justify-between text-xs text-gray-400">
@@ -744,7 +681,7 @@ export default function AITestingPage() {
                   strokeLinejoin="round"
                 />
               </svg>
-              AI-driven · no test script required
+              AI-driven · no test script required · pixel-diff accuracy
             </div>
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -975,7 +912,9 @@ export default function AITestingPage() {
           <span className="text-gray-700">{result.goal}</span>
         </div>
 
-        <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+        <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+          <PageTabBar active={pageTab} onChange={setPageTab} />
+
           {/* Status banner */}
           <div
             className={`rounded-xl px-8 py-6 flex items-center justify-between ${
@@ -1177,7 +1116,7 @@ export default function AITestingPage() {
                           clipRule="evenodd"
                         />
                       </svg>
-                      <p>{result.summary}</p>
+                      <p className="whitespace-pre-line">{result.summary}</p>
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-4">
@@ -1195,17 +1134,7 @@ export default function AITestingPage() {
                           ENVIRONMENT
                         </div>
                         <p className="text-sm text-gray-800">
-                          {result.environment || "—"}
-                        </p>
-                      </CardContent>
-                    </Card>
-                    <Card>
-                      <CardContent className="pt-4 pb-4">
-                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">
-                          CREDENTIAL PROFILE
-                        </div>
-                        <p className="text-sm text-gray-800">
-                          {result.credential_profile_name || "None"}
+                          {result.environment || "Custom"}
                         </p>
                       </CardContent>
                     </Card>

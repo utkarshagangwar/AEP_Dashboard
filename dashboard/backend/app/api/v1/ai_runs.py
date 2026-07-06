@@ -16,6 +16,7 @@ from app.models.ai_runs import (
     AICredentialProfile,
     AIRunEvent,
     AIRunStatus,
+    AISkill,
     AITestRun,
 )
 from app.models.user import User, UserRole
@@ -25,8 +26,11 @@ from app.schemas.ai_runs import (
     AIRunListItem,
     AIRunListResponse,
     AIRunResponse,
+    AISkillListResponse,
+    AISkillResponse,
     CredentialProfileCreate,
     CredentialProfileResponse,
+    SkillReplayRequest,
 )
 from app.services.audit_service import write_audit_log
 
@@ -233,7 +237,8 @@ def list_runs(
         rows = db.execute(
             text(
                 "SELECT id, goal, environment, credential_profile_name, status,"
-                "  started_at, completed_at, duration_ms, step_count, created_at"
+                "  started_at, completed_at, duration_ms, step_count, run_type,"
+                "  created_at"
                 " FROM ai_test_runs"
                 " ORDER BY created_at DESC"
                 " LIMIT :lim OFFSET :off"
@@ -252,6 +257,7 @@ def list_runs(
                 completed_at=r.completed_at,
                 duration_ms=r.duration_ms,
                 step_count=r.step_count or 0,
+                run_type=r.run_type or "ai",
                 created_at=r.created_at,
             )
             for r in rows
@@ -293,6 +299,9 @@ def get_run(
             duration_ms=run.duration_ms,
             step_count=run.step_count or 0,
             summary=run.summary,
+            raw_summary=run.raw_summary,
+            run_type=run.run_type or "ai",
+            skill_id=run.skill_id,
             failing_step_index=run.failing_step_index,
             failing_step_description=run.failing_step_description,
             failing_step_screenshot_url=run.failing_step_screenshot_url,
@@ -332,34 +341,188 @@ def cancel_run(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Cancel a pending or running AI test run."""
+    """Cancel a pending/running AI test run, or delete a finished one.
+
+    Same verb, two behaviors: an in-flight run is cancelled (kept in
+    history); a run that already reached a terminal status is permanently
+    deleted along with its events (FK cascade)."""
     try:
         run = db.get(AITestRun, run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="AI test run not found")
-        if run.status not in (AIRunStatus.pending, AIRunStatus.running):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot cancel run with status '{run.status.value}'",
+
+        if run.status in (AIRunStatus.pending, AIRunStatus.running):
+            run.status = AIRunStatus.cancelled
+            run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+            write_audit_log(
+                db,
+                user_id=current_user.id,
+                action="cancel_ai_run",
+                resource_type="ai_test_run",
+                resource_id=str(run_id),
+                ip_address=_client_ip(request),
             )
+            return {"message": "Run cancelled"}
 
-        run.status = AIRunStatus.cancelled
-        run.completed_at = datetime.now(timezone.utc)
+        db.delete(run)
         db.commit()
-
         write_audit_log(
             db,
             user_id=current_user.id,
-            action="cancel_ai_run",
+            action="delete_ai_run",
             resource_type="ai_test_run",
             resource_id=str(run_id),
             ip_address=_client_ip(request),
         )
-        return {"message": "Run cancelled"}
+        return {"message": "Run deleted"}
     except HTTPException:
         raise
     except SQLAlchemyError as exc:
         db.rollback()
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+# ── Skills ───────────────────────────────────────────────────────────────────
+
+@router.get("/skills", response_model=AISkillListResponse)
+def list_skills(
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return paginated list of saved skills (replayable action recordings)."""
+    try:
+        total = db.query(AISkill).count()
+        skills = (
+            db.query(AISkill)
+            .order_by(AISkill.updated_at.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+            .all()
+        )
+        return AISkillListResponse(
+            data=[AISkillResponse.model_validate(s) for s in skills],
+            total=total,
+            page=page,
+            limit=limit,
+        )
+    except SQLAlchemyError as exc:
+        logger.error("List skills DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.get("/skills/{skill_id}", response_model=AISkillResponse)
+def get_skill(
+    skill_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    skill = db.get(AISkill, skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return AISkillResponse.model_validate(skill)
+
+
+@router.delete("/skills/{skill_id}", status_code=status.HTTP_200_OK)
+def delete_skill(
+    skill_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+):
+    try:
+        skill = db.get(AISkill, skill_id)
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        db.delete(skill)
+        db.commit()
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="delete_ai_skill",
+            resource_type="ai_skill",
+            resource_id=str(skill_id),
+            ip_address=_client_ip(request),
+        )
+        return {"message": "Skill deleted"}
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/skills/{skill_id}/replay", status_code=status.HTTP_201_CREATED)
+def replay_skill(
+    skill_id: UUID,
+    payload: SkillReplayRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles(UserRole.admin, UserRole.qa_lead, UserRole.qa_engineer)
+    ),
+):
+    """Replay a saved skill's recorded actions without LLM planning.
+
+    Creates a normal AI test run (run_type="skill_replay") so the frontend
+    can reuse the exact same live-stream and result views as goal runs."""
+    try:
+        skill = db.get(AISkill, skill_id)
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        if not skill.history_json:
+            raise HTTPException(
+                status_code=409, detail="Skill has no recorded actions to replay"
+            )
+
+        profile_id = payload.credential_profile_id or skill.credential_profile_id
+        profile_name = None
+        if profile_id:
+            profile = db.get(AICredentialProfile, profile_id)
+            if profile is None:
+                raise HTTPException(
+                    status_code=404, detail="Credential profile not found"
+                )
+            profile_name = profile.name
+
+        run = AITestRun(
+            goal=skill.goal,
+            environment=skill.environment,
+            project_id=skill.project_id,
+            credential_profile_id=profile_id,
+            credential_profile_name=profile_name,
+            status=AIRunStatus.pending,
+            run_type="skill_replay",
+            skill_id=skill.id,
+            created_by=current_user.id,
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+
+        from app.workers.tasks.ai_execution import replay_skill_task
+        replay_skill_task.delay(
+            str(run.id), str(skill.id), payload.allow_ai_fallback
+        )
+
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="replay_ai_skill",
+            resource_type="ai_skill",
+            resource_id=str(skill_id),
+            details={"run_id": str(run.id), "allow_ai_fallback": payload.allow_ai_fallback},
+            ip_address=_client_ip(request),
+        )
+        logger.info("Skill %s replay submitted as run %s by %s", skill_id, run.id, current_user.id)
+        return {"run_id": str(run.id), "status": "pending"}
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("Replay skill DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
@@ -382,20 +545,20 @@ async def stream_run(
 
     Note: events are upserted in place (a step is written once as "running"
     then updated to "passed"/"failed" on the same row/sequence once it
-    resolves — see app/workers/tasks/ai_execution.py). A sequence-only
-    high-water mark would miss that second write entirely, since the row's
-    sequence number never changes, only its status/screenshot. So this
-    tracks the last-seen status per sequence and re-emits any event whose
-    status changed since the previous poll, not just brand-new sequences —
-    otherwise a step would appear stuck as "running" in the UI forever
-    even after it actually finished.
+    resolves — see app/workers/tasks/ai_execution.py). A high-water mark
+    or last-seen-status cache that only re-emits events it believes changed
+    can drop that second write under the wrong timing (e.g. a status flip
+    that a cache never observed as distinct), leaving a step stuck as
+    "running" in the UI forever even after it actually finished. To avoid
+    that whole class of bug, every poll simply resends the full current
+    event list — the frontend already upserts by sequence, so this is
+    idempotent and always reflects the true DB state.
     """
     TERMINAL = frozenset({"passed", "failed", "inconclusive", "cancelled"})
 
     async def event_generator():
         from app.core.database import SessionLocal
 
-        known_status: dict[int, str] = {}
         while True:
             session: Session = SessionLocal()
             try:
@@ -408,19 +571,12 @@ async def stream_run(
                     run.status.value if hasattr(run.status, "value") else run.status
                 )
 
-                all_events = (
+                new_events = (
                     session.query(AIRunEvent)
                     .filter(AIRunEvent.run_id == run_id)
                     .order_by(AIRunEvent.sequence)
                     .all()
                 )
-
-                new_events = []
-                for e in all_events:
-                    e_status = e.status.value if hasattr(e.status, "value") else e.status
-                    if known_status.get(e.sequence) != e_status:
-                        known_status[e.sequence] = e_status
-                        new_events.append(e)
 
                 payload = {
                     "run_status": status_val,

@@ -29,5 +29,10 @@ celery_app.conf.update(
     include=[
         "app.workers.tasks.execution",
         "app.workers.tasks.ai_execution",
+        "app.workers.tasks.visual_audit",
+        "app.workers.tasks.sow_ingest",
+        "app.workers.tasks.figma_import",
+        "app.workers.tasks.video_ingest",
+        "app.workers.tasks.orchestrator",
     ],
 )

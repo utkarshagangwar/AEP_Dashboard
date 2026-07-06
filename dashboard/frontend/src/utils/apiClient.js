@@ -59,8 +59,12 @@ async function refreshAccessToken() {
 
 export async function apiFetch(path, options = {}) {
   const { access } = getTokens();
+  // FormData bodies must NOT get an explicit Content-Type — the browser sets
+  // multipart/form-data with the boundary itself.
+  const isFormData =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
   const headers = {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(access ? { Authorization: `Bearer ${access}` } : {}),
     ...options.headers,
   };

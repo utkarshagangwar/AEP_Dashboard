@@ -17,3 +17,20 @@ browser-use==0.1.40
 playwright==1.49.0
 cryptography==42.0.8
 langchain-google-genai==2.1.12
+# Orchestrator ("The Brain"): browser-use==0.1.40 already pulls langchain-openai
+# in transitively (it's one of its own dependencies), but it was never pinned
+# explicitly here even though ai_runner.py imports ChatOpenAI directly. Pinned
+# explicitly so the orchestrator's OpenRouter-via-Hands path (model_pool.py,
+# ChatOpenAI(base_url="https://openrouter.ai/api/v1", ...)) doesn't depend on
+# an unpinned transitive resolution. 0.3.1 co-installs with langchain-core
+# 0.3.x, satisfying the same <0.4.0 ceiling browser-use imposes (see the
+# comment on _google_client in ai_runner.py for the same constraint).
+langchain-openai==0.3.1
+# Visual QA (Phase 1-2): LLM router + deterministic pixel-diff judge
+# 1.74.x is the last line requiring openai>=1.x (not >=2.20), which keeps it
+# co-installable with browser-use -> langchain-openai's openai<2.0.0 pin.
+litellm==1.74.15.post2
+Pillow==11.0.0
+pixelmatch==0.3.0
+# Visual QA (Phase 3): SOW PDF text extraction
+pypdf==5.1.0

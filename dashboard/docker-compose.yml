@@ -19,6 +19,7 @@ services:
       - "8000:8000"
     volumes:
       - ../automation:/automation
+      - visual_qa_data:/app/visual_qa_data
     environment:
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
@@ -33,7 +34,22 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_API_KEYS: ${GOOGLE_API_KEYS:-}
       AI_LLM_MODEL: ${AI_LLM_MODEL:-}
+      VISUAL_AUDIT_ENABLED: ${VISUAL_AUDIT_ENABLED:-false}
+      VISUAL_DATA_DIR: /app/visual_qa_data
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      FIGMA_API_TOKEN: ${FIGMA_API_TOKEN:-}
+      VISUAL_LLM_PRIMARY: ${VISUAL_LLM_PRIMARY:-gemini/gemini-3.5-flash}
+      VISUAL_LLM_FALLBACKS: ${VISUAL_LLM_FALLBACKS:-gemini/gemini-2.5-flash}
+      VISUAL_LLM_TIMEOUT_S: ${VISUAL_LLM_TIMEOUT_S:-120}
+      VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-2}
+      VISUAL_DIFF_THRESHOLD: ${VISUAL_DIFF_THRESHOLD:-0.1}
+      VISUAL_DIFF_MIN_REGION_PX: ${VISUAL_DIFF_MIN_REGION_PX:-64}
+      VISUAL_FAIL_MISMATCH_PCT: ${VISUAL_FAIL_MISMATCH_PCT:-1.0}
+      VISUAL_VIDEO_MODEL: ${VISUAL_VIDEO_MODEL:-gemini-3.5-flash}
+      VISUAL_VIDEO_FALLBACK: ${VISUAL_VIDEO_FALLBACK:-gemini-2.5-flash}
+      VISUAL_VIDEO_MAX_MB: ${VISUAL_VIDEO_MAX_MB:-100}
     depends_on:
       redis:
         condition: service_healthy
@@ -47,6 +63,7 @@ services:
     command: celery -A app.workers.celery_app:celery_app worker --loglevel=info
     volumes:
       - ../automation:/automation
+      - visual_qa_data:/app/visual_qa_data
     environment:
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
@@ -61,7 +78,22 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_API_KEYS: ${GOOGLE_API_KEYS:-}
       AI_LLM_MODEL: ${AI_LLM_MODEL:-}
+      VISUAL_AUDIT_ENABLED: ${VISUAL_AUDIT_ENABLED:-false}
+      VISUAL_DATA_DIR: /app/visual_qa_data
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      FIGMA_API_TOKEN: ${FIGMA_API_TOKEN:-}
+      VISUAL_LLM_PRIMARY: ${VISUAL_LLM_PRIMARY:-gemini/gemini-3.5-flash}
+      VISUAL_LLM_FALLBACKS: ${VISUAL_LLM_FALLBACKS:-gemini/gemini-2.5-flash}
+      VISUAL_LLM_TIMEOUT_S: ${VISUAL_LLM_TIMEOUT_S:-120}
+      VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-2}
+      VISUAL_DIFF_THRESHOLD: ${VISUAL_DIFF_THRESHOLD:-0.1}
+      VISUAL_DIFF_MIN_REGION_PX: ${VISUAL_DIFF_MIN_REGION_PX:-64}
+      VISUAL_FAIL_MISMATCH_PCT: ${VISUAL_FAIL_MISMATCH_PCT:-1.0}
+      VISUAL_VIDEO_MODEL: ${VISUAL_VIDEO_MODEL:-gemini-3.5-flash}
+      VISUAL_VIDEO_FALLBACK: ${VISUAL_VIDEO_FALLBACK:-gemini-2.5-flash}
+      VISUAL_VIDEO_MAX_MB: ${VISUAL_VIDEO_MAX_MB:-100}
     depends_on:
       redis:
         condition: service_healthy
@@ -103,3 +135,9 @@ services:
 networks:
   aep_network:
     driver: bridge
+
+volumes:
+  # Shared between backend (API uploads) and celery_worker (SOW/video/Figma
+  # parsing, screenshot capture) — without this the worker can't see files
+  # the API wrote, and vice versa for generated screenshots/diffs.
+  visual_qa_data:
