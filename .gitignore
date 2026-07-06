@@ -5,6 +5,9 @@
 .env.development
 .env.production
 .env.staging
+.env.test
+.env.ci
+.env.*
 !.env.example
 
 # Private keys and certificates
@@ -15,11 +18,27 @@
 *.crt
 *.cer
 *.jks
+id_rsa
+id_rsa.pub
+id_dsa
+id_ecdsa
+id_ed25519
+id_ed25519.pub
+*.ppk
 
 # Credentials
 credentials.json
 service-account*.json
+*-key.json
+*_key.json
+*.secrets.*
+secrets.json
+secrets.yaml
+secrets.yml
 **/secrets/
+.npmrc
+.netrc
+.pypirc
 
 # Python
 __pycache__/

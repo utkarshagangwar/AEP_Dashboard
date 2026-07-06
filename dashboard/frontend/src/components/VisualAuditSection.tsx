@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiGet, apiPost } from "@/utils/apiClient";
+import { ColorSwatch } from "@/components/ai-testing/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -347,11 +348,11 @@ export default function VisualAuditSection() {
                               {f.element ? `${f.element}: ` : ""}
                               {f.issue}
                             </td>
-                            <td className="px-3 py-2 font-mono text-xs text-gray-600">
-                              {f.expected || "—"}
+                            <td className="px-3 py-2 text-xs text-gray-600">
+                              {f.expected ? <ColorSwatch hex={f.expected} /> : "—"}
                             </td>
-                            <td className="px-3 py-2 font-mono text-xs text-gray-600">
-                              {f.actual || "—"}
+                            <td className="px-3 py-2 text-xs text-gray-600">
+                              {f.actual ? <ColorSwatch hex={f.actual} /> : "—"}
                             </td>
                           </tr>
                         ))}

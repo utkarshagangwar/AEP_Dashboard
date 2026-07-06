@@ -19,6 +19,8 @@ from app.models.ai_runs import (
     AISkill,
     AITestRun,
 )
+from app.models.orchestrator import OrchestratorRun, OrchestratorRunStatus, OrchestratorStepDecision
+from app.models.visual_qa import VisualFinding, VisualRun
 from app.models.user import User, UserRole
 from app.schemas.ai_runs import (
     AIRunCreate,
@@ -30,7 +32,9 @@ from app.schemas.ai_runs import (
     AISkillResponse,
     CredentialProfileCreate,
     CredentialProfileResponse,
+    OrchestratorDecisionResponse,
     SkillReplayRequest,
+    VisualFindingResponse,
 )
 from app.services.audit_service import write_audit_log
 
@@ -228,18 +232,42 @@ def list_runs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return paginated list of AI test runs."""
+    """Return paginated list of AI test runs — plain "ai"/"skill_replay" runs
+    from ai_test_runs, merged with "autonomous_qa" runs from orchestrator_runs
+    (the New Autonomous Visual QA Run flow) so both appear in one history."""
     try:
         offset = (page - 1) * limit
         total = int(
-            db.execute(text("SELECT COUNT(*) FROM ai_test_runs")).scalar() or 0
+            db.execute(
+                text(
+                    "SELECT (SELECT COUNT(*) FROM ai_test_runs)"
+                    " + (SELECT COUNT(*) FROM orchestrator_runs)"
+                )
+            ).scalar()
+            or 0
         )
         rows = db.execute(
             text(
                 "SELECT id, goal, environment, credential_profile_name, status,"
                 "  started_at, completed_at, duration_ms, step_count, run_type,"
                 "  created_at"
-                " FROM ai_test_runs"
+                " FROM ("
+                "   SELECT id, goal, environment, credential_profile_name,"
+                "     status::text AS status, started_at, completed_at,"
+                "     duration_ms, step_count, run_type, created_at"
+                "   FROM ai_test_runs"
+                "   UNION ALL"
+                "   SELECT r.id,"
+                "     COALESCE(r.goal, 'Visual audit (no goal specified)') AS goal,"
+                "     r.environment, cp.name AS credential_profile_name,"
+                "     r.status::text AS status, r.started_at, r.completed_at,"
+                "     r.duration_ms,"
+                "     (SELECT COUNT(*) FROM orchestrator_step_decisions d"
+                "        WHERE d.run_id = r.id AND d.invoked = true) AS step_count,"
+                "     'autonomous_qa' AS run_type, r.created_at"
+                "   FROM orchestrator_runs r"
+                "   LEFT JOIN ai_credential_profiles cp ON cp.id = r.credential_profile_id"
+                " ) combined_runs"
                 " ORDER BY created_at DESC"
                 " LIMIT :lim OFFSET :off"
             ),
@@ -268,17 +296,101 @@ def list_runs(
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
+def _get_orchestrator_run(run_id: UUID, db: Session) -> AIRunResponse:
+    """Build an AIRunResponse for an autonomous QA (orchestrator) run.
+
+    Shaped differently from a plain AITestRun: no step events, instead a
+    routing decision trail (which sub-agents ran) plus, if Judge ran,
+    the linked visual run's findings — pulled in directly so the Results
+    tab can render a full report without a second round-trip.
+    """
+    run = db.get(OrchestratorRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    credential_profile_name = None
+    if run.credential_profile_id is not None:
+        profile = db.get(AICredentialProfile, run.credential_profile_id)
+        credential_profile_name = profile.name if profile else None
+
+    decisions = (
+        db.query(OrchestratorStepDecision)
+        .filter(OrchestratorStepDecision.run_id == run_id)
+        .order_by(OrchestratorStepDecision.sequence)
+        .all()
+    )
+
+    pixel_mismatch_pct = None
+    findings: list[VisualFindingResponse] = []
+    if run.visual_run_id is not None:
+        visual_run = db.get(VisualRun, run.visual_run_id)
+        if visual_run is not None:
+            pixel_mismatch_pct = visual_run.pixel_mismatch_pct
+            findings = [
+                VisualFindingResponse(
+                    engine=f.engine.value if hasattr(f.engine, "value") else f.engine,
+                    severity=f.severity.value if hasattr(f.severity, "value") else f.severity,
+                    element=f.element,
+                    issue=f.issue,
+                    expected=f.expected,
+                    actual=f.actual,
+                )
+                for f in db.query(VisualFinding)
+                .filter(VisualFinding.run_id == run.visual_run_id)
+                .all()
+            ]
+
+    return AIRunResponse(
+        id=run.id,
+        goal=run.goal or "Visual audit (no goal specified)",
+        environment=run.environment,
+        project_id=run.project_id,
+        credential_profile_id=run.credential_profile_id,
+        credential_profile_name=credential_profile_name,
+        status=run.status.value if hasattr(run.status, "value") else run.status,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        duration_ms=run.duration_ms,
+        step_count=sum(1 for d in decisions if d.invoked),
+        summary=run.summary,
+        run_type="autonomous_qa",
+        created_by=run.created_by,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        events=[],
+        error_message=run.error_message,
+        ai_test_run_id=run.ai_test_run_id,
+        visual_run_id=run.visual_run_id,
+        self_execute_answer=run.self_execute_answer,
+        pixel_mismatch_pct=pixel_mismatch_pct,
+        decisions=[
+            OrchestratorDecisionResponse(
+                step=d.step.value if hasattr(d.step, "value") else d.step,
+                invoked=d.invoked,
+                model_provider=d.model_provider,
+                model_name=d.model_name,
+                is_deterministic=d.is_deterministic,
+                rationale=d.rationale,
+                sequence=d.sequence,
+            )
+            for d in decisions
+        ],
+        findings=findings,
+    )
+
+
 @router.get("/runs/{run_id}", response_model=AIRunResponse)
 def get_run(
     run_id: UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return a single AI test run with all its events."""
+    """Return a single run with all its events — either a plain AI test run
+    or an autonomous QA (orchestrator) run, whichever table has this id."""
     try:
         run = db.get(AITestRun, run_id)
         if run is None:
-            raise HTTPException(status_code=404, detail="AI test run not found")
+            return _get_orchestrator_run(run_id, db)
 
         events = (
             db.query(AIRunEvent)
@@ -349,7 +461,7 @@ def cancel_run(
     try:
         run = db.get(AITestRun, run_id)
         if run is None:
-            raise HTTPException(status_code=404, detail="AI test run not found")
+            return _cancel_orchestrator_run(run_id, db, current_user, request)
 
         if run.status in (AIRunStatus.pending, AIRunStatus.running):
             run.status = AIRunStatus.cancelled
@@ -381,6 +493,50 @@ def cancel_run(
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+def _cancel_orchestrator_run(
+    run_id: UUID, db: Session, current_user: User, request: Request
+) -> dict:
+    """Same cancel-or-delete behavior as cancel_run, for orchestrator runs.
+
+    Only the orchestrator_runs row (and its step decisions, via FK cascade)
+    is removed — the linked AITestRun/VisualRun sub-runs are left intact
+    since they're independently viewable history."""
+    run = db.get(OrchestratorRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    in_flight = run.status in (
+        OrchestratorRunStatus.pending,
+        OrchestratorRunStatus.planning,
+        OrchestratorRunStatus.running,
+    )
+    if in_flight:
+        run.status = OrchestratorRunStatus.cancelled
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="cancel_ai_run",
+            resource_type="orchestrator_run",
+            resource_id=str(run_id),
+            ip_address=_client_ip(request),
+        )
+        return {"message": "Run cancelled"}
+
+    db.delete(run)
+    db.commit()
+    write_audit_log(
+        db,
+        user_id=current_user.id,
+        action="delete_ai_run",
+        resource_type="orchestrator_run",
+        resource_id=str(run_id),
+        ip_address=_client_ip(request),
+    )
+    return {"message": "Run deleted"}
 
 
 # ── Skills ───────────────────────────────────────────────────────────────────

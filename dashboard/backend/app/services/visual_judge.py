@@ -77,6 +77,34 @@ def _rgb_to_hex(px) -> str:
     return "#{:02X}{:02X}{:02X}".format(px[0], px[1], px[2])
 
 
+def _describe_region(region: dict) -> tuple[str, str]:
+    """Turn a {x_pct,y_pct,w_pct,h_pct} bounding box into a plain-language
+    (location, size) pair for non-technical readers, e.g. ("the top-right of
+    the page", "a small area") instead of raw percentages.
+    """
+    cx = region["x_pct"] + region["w_pct"] / 2
+    cy = region["y_pct"] + region["h_pct"] / 2
+    vert = "top" if cy < 33 else "bottom" if cy > 66 else "middle"
+    horiz = "left" if cx < 33 else "right" if cx > 66 else "center"
+    if vert == "middle" and horiz == "center":
+        location = "the center of the page"
+    elif vert == "middle":
+        location = f"the {horiz} side of the page"
+    elif horiz == "center":
+        location = f"the {vert} of the page"
+    else:
+        location = f"the {vert}-{horiz} of the page"
+
+    area_pct = region["w_pct"] * region["h_pct"] / 100
+    size = (
+        "most of the page" if area_pct > 40 else
+        "a large area" if area_pct > 15 else
+        "a noticeable area" if area_pct > 3 else
+        "a small area"
+    )
+    return location, size
+
+
 def _cluster_regions(mask, width: int, height: int, min_px: int) -> list[dict]:
     """Group mismatched pixels into rectangular regions via a coarse grid scan.
 
@@ -111,16 +139,22 @@ def _cluster_regions(mask, width: int, height: int, min_px: int) -> list[dict]:
             continue
         ys = [p[0] for p in members]
         xs = [p[1] for p in members]
+        mid_y = (min(ys) + max(ys)) / 2
+        mid_x = (min(xs) + max(xs)) / 2
+        # Sample an actual mismatched pixel closest to the bbox midpoint —
+        # NOT the raw midpoint itself, which can land on a pixel that happens
+        # to match (irregular diff shapes), producing a confusing
+        # "Expected: #FFF · Actual: #FFF" for a region flagged as differing.
+        sample_y, sample_x = min(
+            members, key=lambda p: (p[0] - mid_y) ** 2 + (p[1] - mid_x) ** 2
+        )
         regions.append(
             {
                 "x_pct": round(min(xs) / width * 100, 2),
                 "y_pct": round(min(ys) / height * 100, 2),
                 "w_pct": round((max(xs) - min(xs) + 1) / width * 100, 2),
                 "h_pct": round((max(ys) - min(ys) + 1) / height * 100, 2),
-                "center": (
-                    (min(ys) + max(ys)) // 2,
-                    (min(xs) + max(xs)) // 2,
-                ),
+                "sample_point": (sample_y, sample_x),
                 "pixel_count": len(members),
             }
         )
@@ -174,18 +208,19 @@ def run_pixel_diff(
     shot_px = shot.load()
     findings = []
     for region in _cluster_regions(mask, width, height, min_region):
-        cy, cx = region.pop("center")
-        expected_hex = _rgb_to_hex(ref_px[cx, cy])
-        actual_hex = _rgb_to_hex(shot_px[cx, cy])
+        sy, sx = region.pop("sample_point")
+        expected_hex = _rgb_to_hex(ref_px[sx, sy])
+        actual_hex = _rgb_to_hex(shot_px[sx, sy])
         region.pop("pixel_count", None)
+        location, size = _describe_region(region)
         findings.append(
             {
                 "engine": "pixel_diff",
                 "severity": "major" if region["w_pct"] * region["h_pct"] > 1 else "minor",
                 "element": None,
                 "issue": (
-                    f"Region differs from design "
-                    f"({region['w_pct']}% x {region['h_pct']}% of viewport)"
+                    f"The design and the live page don't match in {size} near "
+                    f"{location} ({region['w_pct']}% x {region['h_pct']}% of the viewport)."
                 ),
                 "expected": expected_hex,
                 "actual": actual_hex,

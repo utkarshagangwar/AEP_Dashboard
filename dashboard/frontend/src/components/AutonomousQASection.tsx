@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiGet, apiPost } from "@/utils/apiClient";
+import { FindingCard } from "@/components/ai-testing/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -115,13 +116,6 @@ interface UploadState {
 }
 
 const TERMINAL = new Set(["passed", "failed", "partial", "error", "cancelled"]);
-
-const SEVERITY_STYLES: Record<string, string> = {
-  critical: "text-red-700 border-red-300 bg-red-50",
-  major: "text-orange-700 border-orange-300 bg-orange-50",
-  minor: "text-yellow-700 border-yellow-300 bg-yellow-50",
-  info: "text-gray-600 border-gray-300 bg-gray-50",
-};
 
 const STATUS_STYLES: Record<string, string> = {
   passed: "text-green-600 border-green-300 bg-green-50",
@@ -806,33 +800,7 @@ export default function AutonomousQASection() {
               {(visualDetail?.findings.length ?? 0) > 0 && (
                 <div className="space-y-2">
                   {(visualDetail?.findings ?? []).map((f, i) => (
-                    <div
-                      key={i}
-                      className="rounded-md border border-gray-200 bg-white px-3 py-2"
-                    >
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge
-                          variant="outline"
-                          className={`text-xs ${SEVERITY_STYLES[f.severity] || SEVERITY_STYLES.info}`}
-                        >
-                          {f.severity}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs text-gray-500">
-                          {f.engine === "pixel_diff" ? "Pixel-diff" : "Vision"}
-                        </Badge>
-                        {f.element && (
-                          <span className="text-xs text-gray-500">{f.element}</span>
-                        )}
-                      </div>
-                      <p className="text-sm text-gray-700 mt-1">{f.issue}</p>
-                      {(f.expected || f.actual) && (
-                        <p className="text-xs text-gray-500 mt-0.5">
-                          {f.expected ? `Expected: ${f.expected}` : ""}
-                          {f.expected && f.actual ? " · " : ""}
-                          {f.actual ? `Actual: ${f.actual}` : ""}
-                        </p>
-                      )}
-                    </div>
+                    <FindingCard key={i} finding={f} />
                   ))}
                 </div>
               )}

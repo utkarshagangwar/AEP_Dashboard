@@ -47,6 +47,29 @@ class AIRunEventResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OrchestratorDecisionResponse(BaseModel):
+    step: str
+    invoked: bool
+    model_provider: Optional[str] = None
+    model_name: Optional[str] = None
+    is_deterministic: bool = True
+    rationale: str
+    sequence: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class VisualFindingResponse(BaseModel):
+    engine: str
+    severity: str
+    element: Optional[str] = None
+    issue: str
+    expected: Optional[str] = None
+    actual: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class AIRunResponse(BaseModel):
     id: UUID
     goal: str
@@ -70,6 +93,14 @@ class AIRunResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     events: list[AIRunEventResponse] = []
+    # Autonomous QA (orchestrator) runs only — empty/None for plain "ai" runs.
+    error_message: Optional[str] = None
+    ai_test_run_id: Optional[UUID] = None
+    visual_run_id: Optional[UUID] = None
+    self_execute_answer: Optional[str] = None
+    pixel_mismatch_pct: Optional[int] = None
+    decisions: list[OrchestratorDecisionResponse] = []
+    findings: list[VisualFindingResponse] = []
 
     model_config = {"from_attributes": True}
 

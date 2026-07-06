@@ -22,13 +22,32 @@ export interface RunEvent {
   is_failing_step: boolean;
 }
 
+export interface OrchestratorDecision {
+  step: "hands" | "judge" | "self_execute";
+  invoked: boolean;
+  model_provider?: string | null;
+  model_name?: string | null;
+  is_deterministic: boolean;
+  rationale: string;
+  sequence: number;
+}
+
+export interface VisualFinding {
+  engine: "pixel_diff" | "vision";
+  severity: "critical" | "major" | "minor" | "info";
+  element?: string | null;
+  issue: string;
+  expected?: string | null;
+  actual?: string | null;
+}
+
 export interface RunResult {
   run_id: string;
   goal: string;
   environment?: string;
   credential_profile_name?: string;
   project_id?: string;
-  status: "passed" | "failed" | "inconclusive" | "cancelled" | "pending" | "running";
+  status: string;
   duration_ms?: number;
   step_count: number;
   summary?: string;
@@ -40,6 +59,72 @@ export interface RunResult {
   failing_step_screenshot_url?: string;
   events: RunEvent[];
   created_at?: string;
+  // Autonomous QA (orchestrator) runs only:
+  error_message?: string | null;
+  ai_test_run_id?: string | null;
+  visual_run_id?: string | null;
+  self_execute_answer?: string | null;
+  pixel_mismatch_pct?: number | null;
+  decisions?: OrchestratorDecision[];
+  findings?: VisualFinding[];
+}
+
+export const SEVERITY_STYLES: Record<string, string> = {
+  critical: "text-red-700 border-red-300 bg-red-50",
+  major: "text-orange-700 border-orange-300 bg-orange-50",
+  minor: "text-yellow-700 border-yellow-300 bg-yellow-50",
+  info: "text-gray-600 border-gray-300 bg-gray-50",
+};
+
+/** Small color chip next to a hex code — much easier to compare at a glance
+ * than reading two hex strings side by side. */
+export function ColorSwatch({ hex }: { hex?: string | null }) {
+  if (!hex) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className="inline-block w-3 h-3 rounded-sm border border-gray-300"
+        style={{ backgroundColor: hex }}
+      />
+      <span className="font-mono">{hex}</span>
+    </span>
+  );
+}
+
+export function FindingCard({ finding }: { finding: VisualFinding }) {
+  return (
+    <div className="rounded-md border border-gray-200 bg-white px-3 py-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge
+          variant="outline"
+          className={`text-xs ${SEVERITY_STYLES[finding.severity] || SEVERITY_STYLES.info}`}
+        >
+          {finding.severity}
+        </Badge>
+        <Badge variant="outline" className="text-xs text-gray-500">
+          {finding.engine === "pixel_diff" ? "Pixel-diff" : "Vision"}
+        </Badge>
+        {finding.element && (
+          <span className="text-xs text-gray-500">{finding.element}</span>
+        )}
+      </div>
+      <p className="text-sm text-gray-700 mt-1">{finding.issue}</p>
+      {(finding.expected || finding.actual) && (
+        <div className="flex items-center gap-4 text-xs text-gray-500 mt-1.5">
+          {finding.expected && (
+            <span className="flex items-center gap-1">
+              Expected: <ColorSwatch hex={finding.expected} />
+            </span>
+          )}
+          {finding.actual && (
+            <span className="flex items-center gap-1">
+              Actual: <ColorSwatch hex={finding.actual} />
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -214,6 +299,9 @@ export function RunStatusBadge({ status }: { status: string }) {
     pending: "border-gray-200 text-gray-500 bg-gray-50",
     inconclusive: "border-amber-300 text-amber-700 bg-amber-50",
     cancelled: "border-gray-300 text-gray-600 bg-gray-100",
+    partial: "border-amber-300 text-amber-700 bg-amber-50",
+    error: "border-red-300 text-red-700 bg-red-50",
+    planning: "border-blue-300 text-blue-700 bg-blue-50",
   };
   return (
     <Badge

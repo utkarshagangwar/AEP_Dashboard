@@ -35,6 +35,45 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Plain-language summary phrases shown directly to non-technical users —
+# the raw sub-agent status ('failed', 'partial', etc.) is still available
+# via run.status for anyone who wants it, but the summary text should read
+# like an explanation, not a status dump.
+_HANDS_PHRASES = {
+    "passed": "The AI agent completed the requested actions successfully.",
+    "failed": (
+        "The AI agent could not complete the requested actions — open the "
+        "linked test run below to see exactly which step failed."
+    ),
+    "inconclusive": (
+        "The AI agent finished but couldn't confirm whether the goal was "
+        "met — open the linked test run below to review what happened."
+    ),
+    "cancelled": "The AI agent run was cancelled before it finished.",
+}
+
+_JUDGE_PHRASES = {
+    "passed": "The live page matches the design closely — no significant differences found.",
+    "failed": (
+        "The live page doesn't match the design — see the differences listed below."
+    ),
+    "partial": (
+        "The pixel-level comparison finished, but the AI structural check "
+        "was unavailable. The results below are based on pixel comparison only."
+    ),
+    "error": "The visual comparison could not be completed.",
+    "cancelled": "The visual comparison was cancelled before it finished.",
+}
+
+
+def _hands_summary_phrase(status: Optional[str]) -> str:
+    return _HANDS_PHRASES.get(status, f"The AI agent finished with status '{status}'.")
+
+
+def _judge_summary_phrase(status: Optional[str]) -> str:
+    return _JUDGE_PHRASES.get(status, f"The visual comparison finished with status '{status}'.")
+
+
 _CLASSIFIER_SYSTEM = (
     "You are a routing coordinator for a QA automation platform. Given a "
     "task description, decide: (1) does it require live browser interaction "
@@ -286,7 +325,11 @@ def _run_hands(
     from app.core.database import SessionLocal
     from app.models.ai_runs import AICredentialProfile, AIRunStatus, AITestRun
     from app.services import ai_runner, model_pool
-    from app.workers.tasks.ai_execution import _make_live_event_sink, _upsert_ai_run_event
+    from app.workers.tasks.ai_execution import (
+        _make_live_event_sink,
+        _maybe_save_skill,
+        _upsert_ai_run_event,
+    )
 
     session = SessionLocal()
     try:
@@ -352,6 +395,13 @@ def _run_hands(
             run.failing_step_description = failing.get("description")
             run.failing_step_screenshot_url = failing.get("screenshot_url")
         session.commit()
+
+        # Same auto-save-on-pass behavior as the plain New Test flow
+        # (run_ai_test_task) — Hands runs invoked via the orchestrator were
+        # missing this entirely, so a passing Autonomous QA run never became
+        # a replayable skill.
+        if run.status == AIRunStatus.passed:
+            _maybe_save_skill(session, run, result.get("history_json"))
     finally:
         session.close()
 
@@ -587,13 +637,11 @@ def execute_run(run_id: str) -> None:
                 sensitive_data=sensitive_data,
                 model_choice=plan.hands_choice,
             )
-            summary_parts.append(
-                f"Hands finished with status '{hands_status}' — see the linked AI test run for step-by-step details."
-            )
+            summary_parts.append(_hands_summary_phrase(hands_status))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Orchestrator: Hands execution failed for run %s", run_id)
             had_error = True
-            error_message = f"Hands execution failed: {exc}"
+            error_message = f"The AI agent hit an unexpected error and couldn't finish ({exc})."
 
     if plan.needs_judge and not had_error:
         try:
@@ -604,13 +652,11 @@ def execute_run(run_id: str) -> None:
                 project_id=project_id,
                 model_choice=plan.judge_choice,
             )
-            summary_parts.append(
-                f"Judge finished with status '{judge_status}' — see the linked visual run for findings."
-            )
+            summary_parts.append(_judge_summary_phrase(judge_status))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Orchestrator: Judge execution failed for run %s", run_id)
             had_error = True
-            error_message = f"Judge execution failed: {exc}"
+            error_message = f"The visual comparison hit an unexpected error and couldn't finish ({exc})."
 
     if not plan.needs_hands and not plan.needs_judge and not had_error:
         try:
@@ -625,7 +671,7 @@ def execute_run(run_id: str) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Orchestrator: self-execution failed for run %s", run_id)
             had_error = True
-            error_message = f"Self-execution failed: {exc}"
+            error_message = f"Couldn't generate an answer due to an unexpected error ({exc})."
 
     # Sub-agent statuses that mean "invoked but did not achieve the goal /
     # infrastructure problem" (as opposed to Judge's "failed" = a genuine,

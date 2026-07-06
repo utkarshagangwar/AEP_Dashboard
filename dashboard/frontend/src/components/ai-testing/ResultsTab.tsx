@@ -6,6 +6,7 @@ import { apiGet, apiFetch } from "@/utils/apiClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import OrchestratorRunDetail from "./OrchestratorRunDetail";
 import RunDetail from "./RunDetail";
 import { RunResult, RunStatusBadge, formatDuration } from "./shared";
 
@@ -96,6 +97,13 @@ export default function ResultsTab() {
         failing_step_screenshot_url: run.failing_step_screenshot_url,
         events: run.events || [],
         created_at: run.created_at,
+        error_message: run.error_message,
+        ai_test_run_id: run.ai_test_run_id,
+        visual_run_id: run.visual_run_id,
+        self_execute_answer: run.self_execute_answer,
+        pixel_mismatch_pct: run.pixel_mismatch_pct,
+        decisions: run.decisions || [],
+        findings: run.findings || [],
       } as RunResult;
     },
     enabled: !!selectedRunId,
@@ -125,6 +133,11 @@ export default function ResultsTab() {
             <Skeleton className="h-28 w-full rounded-xl" />
             <Skeleton className="h-64 w-full rounded-xl" />
           </div>
+        ) : detail.run_type === "autonomous_qa" ? (
+          <OrchestratorRunDetail
+            result={detail}
+            onNavigateToRun={(runId) => setSelectedRunId(runId)}
+          />
         ) : (
           <RunDetail result={detail} />
         )}
@@ -204,10 +217,16 @@ export default function ResultsTab() {
                     className={`text-xs ${
                       run.run_type === "skill_replay"
                         ? "border-indigo-200 text-indigo-600"
-                        : "border-purple-200 text-purple-600"
+                        : run.run_type === "autonomous_qa"
+                          ? "border-teal-200 text-teal-600"
+                          : "border-purple-200 text-purple-600"
                     }`}
                   >
-                    {run.run_type === "skill_replay" ? "Replay" : "AI"}
+                    {run.run_type === "skill_replay"
+                      ? "Replay"
+                      : run.run_type === "autonomous_qa"
+                        ? "Autonomous QA"
+                        : "AI"}
                   </Badge>
                 </td>
                 <td className="px-4 py-3 text-gray-500">
