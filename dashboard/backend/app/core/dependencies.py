@@ -59,6 +59,34 @@ def get_current_user(
     return user
 
 
+def require_permission(key: str):
+    """Dependency factory enforcing that the current user has been
+    explicitly granted the feature-access permission `key` (see
+    app/core/permissions.py for valid keys). Admins bypass this check and
+    always have full access; every other user — regardless of role — needs
+    `key` explicitly granted via the Users admin page, since role carries
+    no implicit access.
+
+    Usage:
+        user: User = Depends(require_permission("projects"))
+    """
+
+    def _checker(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role == UserRole.admin:
+            return current_user
+        if key not in (current_user.permissions or []):
+            logger.warning(
+                "Permission denied: user %s lacks '%s'", current_user.id, key
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action",
+            )
+        return current_user
+
+    return _checker
+
+
 def require_roles(*roles: UserRole):
     """Dependency factory enforcing that the current user has an allowed role.
 

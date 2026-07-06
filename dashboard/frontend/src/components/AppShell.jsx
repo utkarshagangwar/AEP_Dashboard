@@ -7,6 +7,7 @@ const NAV = [
   {
     label: "Dashboard",
     href: "/dashboard",
+    // No permission key — the stats overview is open to anyone logged in.
     icon: (
       <svg
         width="16"
@@ -26,6 +27,7 @@ const NAV = [
   {
     label: "Projects",
     href: "/projects",
+    permission: "projects",
     icon: (
       <svg
         width="16"
@@ -42,6 +44,7 @@ const NAV = [
   {
     label: "Test Suites",
     href: "/test-suites",
+    permission: "test_suites",
     icon: (
       <svg
         width="16"
@@ -59,6 +62,7 @@ const NAV = [
   {
     label: "Test Runs",
     href: "/test-runs",
+    permission: "test_runs",
     icon: (
       <svg
         width="16"
@@ -75,6 +79,7 @@ const NAV = [
   {
     label: "Defects",
     href: "/defects",
+    permission: "defects",
     icon: (
       <svg
         width="16"
@@ -93,6 +98,7 @@ const NAV = [
   {
     label: "Execute",
     href: "/execute",
+    permission: "execute",
     icon: (
       <svg
         width="16"
@@ -109,6 +115,7 @@ const NAV = [
   {
     label: "Reports",
     href: "/reports",
+    permission: "reports",
     icon: (
       <svg
         width="16"
@@ -128,6 +135,7 @@ const NAV = [
   {
     label: "Vibe Testing",
     href: "/ai-testing",
+    permission: "vibe_testing",
     icon: (
       <svg
         width="16"
@@ -266,7 +274,14 @@ export default function AppShell({ children, noPadding = false }) {
 
   if (!user) return null;
 
-  const isAdminOrLead = user.role === "admin" || user.role === "qa_lead";
+  // Role carries no implicit access — admins always see everything, every
+  // other role (old or new) only sees nav items explicitly granted via
+  // user.permissions. Users/Audit Logs stay admin-only, matching the
+  // backend (they're the access-control mechanism itself).
+  const isAdmin = user.role === "admin";
+  const visibleNav = NAV.filter(
+    (n) => isAdmin || !n.permission || (user.permissions || []).includes(n.permission),
+  );
 
   return (
     <div
@@ -364,12 +379,12 @@ export default function AppShell({ children, noPadding = false }) {
             >
               Navigation
             </p>
-            {NAV.map((n) => (
+            {visibleNav.map((n) => (
               <NavLink key={n.href} {...n} />
             ))}
           </div>
 
-          {isAdminOrLead && (
+          {isAdmin && (
             <div
               style={{
                 marginTop: 16,

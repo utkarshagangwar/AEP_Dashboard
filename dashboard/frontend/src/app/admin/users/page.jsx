@@ -2,16 +2,28 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
-import { apiGet, apiPost, apiPut, apiDelete } from "../../../utils/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
-const ROLES = ["admin", "qa_lead", "qa_engineer", "developer", "viewer"];
+const ROLES = [
+  "admin",
+  "qa_lead",
+  "qa_engineer",
+  "developer",
+  "viewer",
+  "sales",
+  "ba",
+  "hr",
+];
 const ROLE_COLORS = {
   admin: "#7C3AED",
   qa_lead: "#2563EB",
   qa_engineer: "#0891B2",
   developer: "#16A34A",
   viewer: "#6B7280",
+  sales: "#DB2777",
+  ba: "#D97706",
+  hr: "#059669",
 };
 const ROLE_BG = {
   admin: "#EDE9FE",
@@ -19,7 +31,23 @@ const ROLE_BG = {
   qa_engineer: "#CFFAFE",
   developer: "#DCFCE7",
   viewer: "#F3F4F6",
+  sales: "#FCE7F3",
+  ba: "#FEF3C7",
+  hr: "#D1FAE5",
 };
+
+// Feature-access grants — independent of role. Role has no implicit
+// access (except admin, which always has everything); an admin explicitly
+// checks these boxes per user at creation or edit time.
+const PERMISSIONS = [
+  { key: "projects", label: "Projects" },
+  { key: "test_suites", label: "Test Suites" },
+  { key: "test_runs", label: "Test Runs" },
+  { key: "execute", label: "Execute" },
+  { key: "defects", label: "Defects" },
+  { key: "reports", label: "Reports" },
+  { key: "vibe_testing", label: "Vibe Testing" },
+];
 
 export default function UsersPage() {
   const qc = useQueryClient();
@@ -33,6 +61,7 @@ export default function UsersPage() {
     password: "",
     full_name: "",
     role: "viewer",
+    permissions: [],
   });
   const [formError, setFormError] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -56,13 +85,15 @@ export default function UsersPage() {
     onSuccess: () => {
       qc.invalidateQueries(["users"]);
       setShowModal(false);
-      setForm({ email: "", password: "", full_name: "", role: "viewer" });
+      setForm({ email: "", password: "", full_name: "", role: "viewer", permissions: [] });
     },
     onError: (e) => setFormError(e.message),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, ...body }) => apiPut(`/api/users/${id}`, body),
+    // PATCH (not PUT) — matches the backend route; the app previously had
+    // no PUT handler registered here, so saves failed with a 405.
+    mutationFn: ({ id, ...body }) => apiPatch(`/api/users/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries(["users"]);
       setEditUser(null);
@@ -507,6 +538,52 @@ export default function UsersPage() {
                   ))}
                 </div>
               </div>
+              <div style={{ marginBottom: 20 }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: "#374151",
+                    marginBottom: 6,
+                  }}
+                >
+                  Feature Access
+                </label>
+                <p style={{ margin: "0 0 8px", fontSize: 11, color: "#9CA3AF" }}>
+                  Role carries no automatic access — check what this user can use.
+                </p>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {PERMISSIONS.map(({ key, label }) => {
+                    const checked = form.permissions.includes(key);
+                    return (
+                      <button
+                        key={key}
+                        onClick={() =>
+                          setForm((f) => ({
+                            ...f,
+                            permissions: checked
+                              ? f.permissions.filter((p) => p !== key)
+                              : [...f.permissions, key],
+                          }))
+                        }
+                        style={{
+                          padding: "5px 10px",
+                          fontSize: 11,
+                          fontWeight: checked ? 600 : 400,
+                          border: `1px solid ${checked ? "#2563EB" : "#E5E7EB"}`,
+                          borderRadius: 999,
+                          background: checked ? "#DBEAFE" : "#fff",
+                          color: checked ? "#2563EB" : "#6B7280",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               {formError && (
                 <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
                   {formError}
@@ -669,6 +746,52 @@ export default function UsersPage() {
                   ))}
                 </div>
               </div>
+              <div style={{ marginBottom: 20 }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: "#374151",
+                    marginBottom: 8,
+                  }}
+                >
+                  Feature Access
+                </label>
+                <p style={{ margin: "0 0 8px", fontSize: 11, color: "#9CA3AF" }}>
+                  Role carries no automatic access — check what this user can use.
+                </p>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {PERMISSIONS.map(({ key, label }) => {
+                    const checked = (editUser.permissions || []).includes(key);
+                    return (
+                      <button
+                        key={key}
+                        onClick={() =>
+                          setEditUser((u) => ({
+                            ...u,
+                            permissions: checked
+                              ? (u.permissions || []).filter((p) => p !== key)
+                              : [...(u.permissions || []), key],
+                          }))
+                        }
+                        style={{
+                          padding: "5px 10px",
+                          fontSize: 11,
+                          fontWeight: checked ? 600 : 400,
+                          border: `1px solid ${checked ? "#2563EB" : "#E5E7EB"}`,
+                          borderRadius: 999,
+                          background: checked ? "#DBEAFE" : "#fff",
+                          color: checked ? "#2563EB" : "#6B7280",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               {formError && (
                 <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
                   {formError}
@@ -698,6 +821,7 @@ export default function UsersPage() {
                       id: editUser.id,
                       role: editUser.newRole,
                       is_active: editUser.is_active,
+                      permissions: editUser.permissions || [],
                     })
                   }
                   disabled={updateMutation.isPending}

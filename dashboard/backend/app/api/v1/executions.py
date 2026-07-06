@@ -12,12 +12,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.dependencies import get_current_user, get_db, require_roles
+from app.core.dependencies import get_current_user, get_db, require_permission
 from app.core.logging import get_logger
 from app.models.test_result import TestResult, TestStatus
 from app.models.test_run import RunStatus, TestRun
 from app.models.test_suite import TestSuite
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.run import (
     RunCreate,
     RunDetailResponse,
@@ -50,7 +50,7 @@ def trigger_run(
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.admin, UserRole.qa_lead, UserRole.qa_engineer)
+        require_permission("execute")
     ),
 ):
     """Create a test run and enqueue it for execution."""
@@ -294,7 +294,7 @@ def cancel_run(
     run_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("execute")),
 ):
     """Cancel a queued or running test run and revoke the Celery task."""
     try:
@@ -349,7 +349,7 @@ def delete_run(
     run_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("execute")),
 ):
     """Permanently delete a test run and its results."""
     try:
@@ -472,7 +472,7 @@ def reconcile_run(
     run_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("execute")),
 ):
     """Manually reconcile a stuck run by re-parsing its output.xml."""
     try:

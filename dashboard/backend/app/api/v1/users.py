@@ -92,7 +92,7 @@ def update_user(
 ):
     """Update a user's role and/or active status (Admin only)."""
     try:
-        if payload.role is None and payload.is_active is None:
+        if payload.role is None and payload.is_active is None and payload.permissions is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="No fields to update",

@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_current_user, get_db
+from app.core.dependencies import get_current_user, get_db, require_permission
 from app.core.logging import get_logger
 from app.models.user import User
 from app.models.visual_qa import (
@@ -197,7 +197,7 @@ async def upload_reference(
     target_page: str | None = Form(default=None),
     project_id: uuid.UUID | None = Form(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
 
@@ -292,7 +292,7 @@ def list_figma_frames(
 def import_figma_frames(
     payload: FigmaImportRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     """Queue selected frames for download as reference designs."""
     _feature_enabled()
@@ -371,7 +371,7 @@ async def upload_sow(
     file: UploadFile = File(...),
     project_id: uuid.UUID | None = Form(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
 
@@ -519,7 +519,7 @@ async def upload_video(
     file: UploadFile = File(...),
     project_id: uuid.UUID | None = Form(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
 
@@ -651,7 +651,7 @@ def get_video(
 def create_run(
     payload: RunCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
 
@@ -724,7 +724,7 @@ def get_run(
 def cancel_run(
     run_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
     run = db.query(VisualRun).filter(VisualRun.id == run_id).one_or_none()

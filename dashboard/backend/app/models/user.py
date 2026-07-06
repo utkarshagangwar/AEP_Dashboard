@@ -4,20 +4,26 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum as SAEnum, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
 
 class UserRole(str, enum.Enum):
-    """Allowed RBAC roles."""
+    """Descriptive label only — carries no implicit access. Feature access
+    is granted per user via the `permissions` column below (see
+    app/core/permissions.py and app/core/dependencies.require_permission),
+    except for `admin`, which always has full access."""
 
     admin = "admin"
     qa_lead = "qa_lead"
     qa_engineer = "qa_engineer"
     developer = "developer"
     viewer = "viewer"
+    sales = "sales"
+    ba = "ba"
+    hr = "hr"
 
 
 class User(Base):
@@ -40,6 +46,12 @@ class User(Base):
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
+    )
+    # Explicit feature-access grants (see app/core/permissions.py for the
+    # valid keys) — empty by default, including for admins, who bypass this
+    # check entirely rather than needing every key listed here.
+    permissions: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_current_user, get_db, require_roles
+from app.core.dependencies import get_current_user, get_db, require_permission, require_roles
 from app.core.logging import get_logger
 from app.models.project import Project
 from app.models.test_suite import TestSuite
@@ -42,7 +42,7 @@ def create_suite(
     payload: SuiteCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("test_suites")),
 ):
     """Create a test suite under a project (Admin, QA Lead only)."""
     try:
@@ -130,7 +130,7 @@ def update_suite(
     payload: SuiteUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("test_suites")),
 ):
     """Update a test suite (Admin, QA Lead only)."""
     try:

@@ -27,6 +27,7 @@ def create_user(db: Session, payload: UserCreate) -> User:
         hashed_password=hash_password(payload.password),
         full_name=(payload.full_name or payload.email.split("@")[0]).strip(),
         role=payload.role,
+        permissions=payload.permissions,
     )
     db.add(user)
     db.commit()
@@ -59,6 +60,8 @@ def update_user(db: Session, user: User, payload: UserUpdate) -> User:
         user.role = payload.role
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    if payload.permissions is not None:
+        user.permissions = payload.permissions
     db.add(user)
     db.commit()
     db.refresh(user)

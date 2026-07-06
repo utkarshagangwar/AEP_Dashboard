@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_current_user, get_db, require_roles
+from app.core.dependencies import get_current_user, get_db, require_permission
 from app.core.logging import get_logger
 from app.models.ai_runs import (
     AICredentialProfile,
@@ -21,7 +21,7 @@ from app.models.ai_runs import (
 )
 from app.models.orchestrator import OrchestratorRun, OrchestratorRunStatus, OrchestratorStepDecision
 from app.models.visual_qa import VisualFinding, VisualRun
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.ai_runs import (
     AIRunCreate,
     AIRunEventResponse,
@@ -77,7 +77,7 @@ def create_credential_profile(
     payload: CredentialProfileCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     """Create a new credential profile with optional encrypted credentials."""
     try:
@@ -116,7 +116,7 @@ def delete_credential_profile(
     profile_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     try:
         profile = db.get(AICredentialProfile, profile_id)
@@ -166,7 +166,7 @@ def submit_run(
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.admin, UserRole.qa_lead, UserRole.qa_engineer)
+        require_permission("vibe_testing")
     ),
 ):
     """Submit a new AI test goal. Returns run_id immediately; execution is async."""
@@ -586,7 +586,7 @@ def delete_skill(
     skill_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     try:
         skill = db.get(AISkill, skill_id)
@@ -617,7 +617,7 @@ def replay_skill(
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.admin, UserRole.qa_lead, UserRole.qa_engineer)
+        require_permission("vibe_testing")
     ),
 ):
     """Replay a saved skill's recorded actions without LLM planning.

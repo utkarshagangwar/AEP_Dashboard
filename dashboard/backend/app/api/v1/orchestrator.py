@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_current_user, get_db
+from app.core.dependencies import get_current_user, get_db, require_permission
 from app.core.logging import get_logger
 from app.models.orchestrator import (
     OrchestratorRun,
@@ -138,7 +138,7 @@ def create_run(
     payload: OrchestratorRunCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
 
@@ -212,7 +212,7 @@ def get_run(
 def cancel_run(
     run_id: uuid.UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
     run = db.query(OrchestratorRun).filter(OrchestratorRun.id == run_id).one_or_none()

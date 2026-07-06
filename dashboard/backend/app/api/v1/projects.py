@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_current_user, get_db, require_roles
+from app.core.dependencies import get_current_user, get_db, require_permission, require_roles
 from app.core.logging import get_logger
 from app.models.project import Project
 from app.models.test_suite import TestSuite
@@ -35,7 +35,7 @@ def _client_ip(request: Request) -> str | None:
 @router.post("/discover-suites", status_code=status.HTTP_200_OK)
 def discover_suites(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("projects")),
 ):
     """Scan automation folder and auto-register test suites."""
     from app.services.suite_discovery import discover_and_register_suites
@@ -48,7 +48,7 @@ def create_project(
     payload: ProjectCreate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("projects")),
 ):
     """Create a new project (Admin, QA Lead only)."""
     try:
@@ -213,7 +213,7 @@ def update_project(
     payload: ProjectUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+    current_user: User = Depends(require_permission("projects")),
 ):
     """Update a project (Admin, QA Lead only)."""
     try:

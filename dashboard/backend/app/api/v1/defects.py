@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.core.dependencies import get_current_user, get_db, require_roles
+from app.core.dependencies import get_current_user, get_db, require_permission
 from app.core.logging import get_logger
 from app.models.defect import DefectSeverity, DefectStatus
 from app.models.user import User, UserRole
@@ -50,7 +50,7 @@ def create_defect(
     body: DefectCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles(UserRole.admin, UserRole.qa_lead, UserRole.qa_engineer)
+        require_permission("defects")
     ),
 ):
     """Create a defect linked to a failed test result."""
@@ -288,7 +288,7 @@ def update_defect(
     defect_id: UUID,
     body: DefectUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("defects")),
 ):
     """Update a defect with RBAC-enforced field restrictions and status transitions."""
     try:
