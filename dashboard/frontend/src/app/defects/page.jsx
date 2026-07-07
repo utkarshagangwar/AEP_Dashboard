@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import PageContainer from "../../components/PageContainer";
 import { apiGet, apiPost, apiPatch } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
 
@@ -66,6 +67,12 @@ export default function DefectsPage() {
     queryFn: () => apiGet("/api/projects?limit=100"),
   });
 
+  const { data: assignableData } = useQuery({
+    queryKey: ["users-assignable"],
+    queryFn: () => apiGet("/api/users/assignable"),
+    enabled: !!canWrite,
+  });
+
   const createMutation = useMutation({
     mutationFn: (body) => apiPost("/api/defects", body),
     onSuccess: () => {
@@ -81,20 +88,26 @@ export default function DefectsPage() {
     onError: (e) => setFormError(e.message),
   });
 
+  const [editError, setEditError] = useState("");
+
   const updateMutation = useMutation({
     mutationFn: ({ id, ...body }) => apiPatch(`/api/defects/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries(["defects"]);
       setEditDefect(null);
+      setEditError("");
     },
+    onError: (e) =>
+      setEditError(typeof e.message === "string" ? e.message : "Failed to update defect"),
   });
 
   const defects = data?.data || [];
-  const projects = Array.isArray(projectsData) ? projectsData : [];
+  const projects = projectsData?.data || [];
+  const assignableUsers = assignableData || [];
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1200 }}>
+    <AppShell noPadding>
+      <PageContainer>
         <div
           style={{
             display: "flex",
@@ -652,7 +665,18 @@ export default function DefectsPage() {
                   Cancel
                 </button>
                 <button
-                  onClick={() => createMutation.mutate(form)}
+                  onClick={() => {
+                    if (!form.title.trim()) {
+                      setFormError("Title is required");
+                      return;
+                    }
+                    if (!form.project_id) {
+                      setFormError("Project is required");
+                      return;
+                    }
+                    setFormError("");
+                    createMutation.mutate(form);
+                  }}
                   disabled={createMutation.isPending}
                   style={{
                     padding: "8px 16px",
@@ -778,11 +802,58 @@ export default function DefectsPage() {
                   ))}
                 </div>
               </div>
+              <div style={{ marginBottom: 20 }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: "#374151",
+                    marginBottom: 6,
+                  }}
+                >
+                  Assigned To
+                </label>
+                <select
+                  value={editDefect.assigned_to || ""}
+                  onChange={(e) =>
+                    setEditDefect((d) => ({ ...d, assigned_to: e.target.value }))
+                  }
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    outline: "none",
+                    background: "#fff",
+                  }}
+                >
+                  <option value="">
+                    {editDefect.assigned_to_name
+                      ? `Currently: ${editDefect.assigned_to_name}`
+                      : "Unassigned"}
+                  </option>
+                  {assignableUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.full_name} ({u.role.replace("_", " ")})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {editError && (
+                <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
+                  {editError}
+                </p>
+              )}
               <div
                 style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
               >
                 <button
-                  onClick={() => setEditDefect(null)}
+                  onClick={() => {
+                    setEditDefect(null);
+                    setEditError("");
+                  }}
                   style={{
                     padding: "8px 16px",
                     fontSize: 13,
@@ -802,6 +873,9 @@ export default function DefectsPage() {
                       id: editDefect.id,
                       status: editDefect.status,
                       severity: editDefect.severity,
+                      ...(editDefect.assigned_to
+                        ? { assigned_to: editDefect.assigned_to }
+                        : {}),
                     })
                   }
                   disabled={updateMutation.isPending}
@@ -822,7 +896,7 @@ export default function DefectsPage() {
             </div>
           </div>
         )}
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

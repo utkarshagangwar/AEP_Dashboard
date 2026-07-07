@@ -66,6 +66,7 @@ class DefectListItem(BaseModel):
     project_id: Optional[UUID] = None
     project_name: Optional[str] = None
     reported_by_name: Optional[str] = None
+    assigned_to: Optional[UUID] = None
     assigned_to_name: Optional[str] = None
     linked_test_name: Optional[str] = None
     created_at: datetime

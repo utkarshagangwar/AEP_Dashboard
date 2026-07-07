@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import PageContainer from "../../components/PageContainer";
 import { apiGet } from "../../utils/apiClient";
 
 const STATUS_COLORS = {
@@ -156,10 +157,11 @@ function PassRate({ passed, total }) {
 export default function DashboardPage() {
   const [selectedProject, setSelectedProject] = useState("");
 
-  const { data: projects } = useQuery({
+  const { data: projectsData } = useQuery({
     queryKey: ["projects"],
     queryFn: () => apiGet("/api/projects"),
   });
+  const projects = projectsData?.data || [];
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["dashboard-stats", selectedProject],
@@ -167,16 +169,19 @@ export default function DashboardPage() {
       apiGet(
         `/api/dashboard/stats${selectedProject ? `?project_id=${selectedProject}` : ""}`,
       ),
-    refetchInterval: 10000,
+    // 30s — was 10s. Dashboard stats don't need near-real-time refresh, and
+    // this cuts background DB load (and Neon wake-ups) by two-thirds for
+    // every open dashboard tab.
+    refetchInterval: 30000,
   });
 
   const selectedProjectName = selectedProject
-    ? projects?.find((p) => p.id === selectedProject)?.name
+    ? projects.find((p) => p.id === selectedProject)?.name
     : null;
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1100 }}>
+    <AppShell noPadding>
+      <PageContainer>
         {/* Header */}
         <div
           style={{
@@ -223,7 +228,7 @@ export default function DashboardPage() {
             }}
           >
             <option value="">All Projects</option>
-            {(projects || []).map((p) => (
+            {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -515,7 +520,7 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

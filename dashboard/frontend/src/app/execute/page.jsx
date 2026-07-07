@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import PageContainer from "../../components/PageContainer";
 import { apiGet, apiPost, apiDelete } from "../../utils/apiClient";
 
 const STORAGE_KEY = "aep_execute_run_state";
@@ -121,8 +122,8 @@ export default function ExecutePage() {
     enabled: !!selectedProject,
   });
 
-  const projects = Array.isArray(projectsData) ? projectsData : [];
-  const suites = Array.isArray(suitesData) ? suitesData : [];
+  const projects = projectsData?.data || [];
+  const suites = suitesData?.data || [];
 
   /* ── Filter suites by selected project ──────────────────────────────── */
   const filteredSuites = suites;
@@ -272,8 +273,8 @@ export default function ExecutePage() {
   const selectedProjectObj = projects.find((p) => p.id === selectedProject);
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1200 }}>
+    <AppShell noPadding>
+      <PageContainer>
         {/* Header */}
         <div style={{ marginBottom: 28, display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
@@ -788,7 +789,7 @@ export default function ExecutePage() {
             )}
           </div>
         )}
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

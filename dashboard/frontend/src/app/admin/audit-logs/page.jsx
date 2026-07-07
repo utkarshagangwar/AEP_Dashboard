@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
+import PageContainer from "../../../components/PageContainer";
 import { apiGet } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -51,8 +52,8 @@ export default function AuditLogsPage() {
   if (!user) return null;
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1100 }}>
+    <AppShell noPadding>
+      <PageContainer>
         <div style={{ marginBottom: 24 }}>
           <h1
             style={{
@@ -375,7 +376,7 @@ export default function AuditLogsPage() {
             </button>
           </div>
         </div>
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

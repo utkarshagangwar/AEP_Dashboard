@@ -1,4 +1,5 @@
 robotframework==7.4.2
 robotframework-jsonlibrary==0.5
 robotframework-browser==18.9.1
+robotframework-pabot==2.18.0
 requests

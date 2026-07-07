@@ -1,8 +1,9 @@
 """Project management routes: CRUD operations with RBAC."""
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from app.models.user import User, UserRole
 from app.schemas.project import (
     ProjectCreate,
     ProjectDetailResponse,
+    ProjectListResponse,
     ProjectResponse,
     ProjectUpdate,
     SuiteSummary,
@@ -107,13 +109,26 @@ def create_project(
         ) from exc
 
 
-@router.get("", response_model=list[ProjectResponse])
+@router.get("", response_model=ProjectListResponse)
 def list_projects(
+    search: Optional[str] = Query(
+        None, description="Case-insensitive filter on project name/description"
+    ),
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return all active projects with suite counts."""
+    """Return active projects with suite counts, optionally filtered by
+    name/description (search) and capped/paginated (page, limit)."""
     try:
+        filters = [Project.is_active.is_(True)]
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            filters.append(or_(Project.name.ilike(term), Project.description.ilike(term)))
+
+        total = db.query(func.count(Project.id)).filter(*filters).scalar() or 0
+
         suite_count_sq = (
             db.query(func.count(TestSuite.id))
             .filter(TestSuite.project_id == Project.id, TestSuite.is_active.is_(True))
@@ -121,15 +136,17 @@ def list_projects(
             .scalar_subquery()
         )
 
+        offset = (page - 1) * limit
         projects = (
             db.query(Project, suite_count_sq.label("suite_count"))
-            .filter(Project.is_active.is_(True))
+            .filter(*filters)
             .order_by(Project.created_at.desc())
+            .offset(offset)
+            .limit(limit)
             .all()
         )
 
-        logger.info("Projects listed by %s (count=%d)", current_user.id, len(projects))
-        return [
+        data = [
             ProjectResponse(
                 id=p.id,
                 name=p.name,
@@ -141,6 +158,12 @@ def list_projects(
             )
             for p, sc in projects
         ]
+
+        logger.info(
+            "Projects listed by %s (count=%d, total=%d, search=%r)",
+            current_user.id, len(data), total, search,
+        )
+        return ProjectListResponse(data=data, total=total, page=page, limit=limit)
     except SQLAlchemyError as exc:
         logger.error("List projects DB error: %s", exc)
         raise HTTPException(

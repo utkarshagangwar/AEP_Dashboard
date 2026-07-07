@@ -59,3 +59,13 @@ class PaginatedUsers(BaseModel):
     total: int
     page: int
     limit: int
+
+
+class UserBrief(BaseModel):
+    """Minimal user info for pickers (e.g. defect assignment) — no email/permissions."""
+
+    id: UUID
+    full_name: str
+    role: UserRole
+
+    model_config = {"from_attributes": True}

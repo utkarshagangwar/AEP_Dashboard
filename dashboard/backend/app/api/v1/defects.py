@@ -182,7 +182,7 @@ def list_defects(
                 SELECT d.id, d.title, d.description, d.severity, d.status,
                        d.project_id, p.name AS project_name,
                        r.full_name AS reported_by_name,
-                       a.full_name AS assigned_to_name,
+                       d.assigned_to, a.full_name AS assigned_to_name,
                        tr.test_name AS linked_test_name,
                        d.created_at
                 FROM defects d
@@ -206,8 +206,8 @@ def list_defects(
                 id=r[0], title=r[1], description=r[2],
                 severity=r[3], status=r[4],
                 project_id=r[5], project_name=r[6],
-                reported_by_name=r[7], assigned_to_name=r[8],
-                linked_test_name=r[9], created_at=r[10],
+                reported_by_name=r[7], assigned_to=r[8], assigned_to_name=r[9],
+                linked_test_name=r[10], created_at=r[11],
             )
             for r in rows
         ]
@@ -292,9 +292,16 @@ def update_defect(
 ):
     """Update a defect with RBAC-enforced field restrictions and status transitions."""
     try:
-        # Fetch current defect
+        # Fetch current defect. Explicit column list — do not use SELECT *:
+        # project_id/reported_by were added later via ALTER TABLE ADD COLUMN
+        # (migration 0005), which appends them at the end of the physical
+        # column order in Postgres, not where they logically belong.
         row = db.execute(
-            text("SELECT * FROM defects WHERE id = :did"),
+            text(
+                "SELECT id, test_result_id, project_id, reported_by, title, description, "
+                "severity, status, assigned_to, created_at, updated_at "
+                "FROM defects WHERE id = :did"
+            ),
             {"did": str(defect_id)},
         ).fetchone()
 

@@ -1,7 +1,7 @@
 """Reports API — list, detail, export, and summary stats for test runs."""
 import json
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import UUID
@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user, get_db, require_roles
 from app.core.logging import get_logger
-from app.models.test_run import RunStatus, TestRun
 from app.models.user import User, UserRole
 from app.schemas.report import (
     ReportDetailResponse,
@@ -26,31 +25,13 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
-STALE_RUN_THRESHOLD_MINUTES = 10
-
-
-def _reconcile_stale_runs(db: Session) -> None:
-    """Find and reconcile any runs stuck in running/queued past the threshold."""
-    from app.api.v1.executions import _reconcile_run
-
-    stale_runs = (
-        db.query(TestRun)
-        .filter(
-            TestRun.status.in_([RunStatus.running, RunStatus.queued]),
-            TestRun.started_at.isnot(None),
-        )
-        .all()
-    )
-
-    now = datetime.now(timezone.utc)
-    for run in stale_runs:
-        started = run.started_at.replace(tzinfo=timezone.utc) if run.started_at.tzinfo is None else run.started_at
-        if (now - started) > timedelta(minutes=STALE_RUN_THRESHOLD_MINUTES):
-            logger.warning("Reconciling stale run %s (started_at=%s)", run.id, run.started_at)
-            try:
-                _reconcile_run(run, db)
-            except Exception as exc:
-                logger.error("Failed to reconcile run %s: %s", run.id, exc)
+# NOTE: stale-run reconciliation used to run inline here on every single
+# request to /stats/summary and this list endpoint (i.e. every 10-30s poll
+# from any open Reports tab). It's now a periodic Celery Beat task —
+# see app/workers/tasks/execution.py::reconcile_stale_runs and the
+# beat_schedule in app/workers/celery_app.py. Runs stuck past the threshold
+# are still caught and reconciled, just on a fixed 5-minute schedule instead
+# of on every request.
 
 
 @router.get("/stats/summary", response_model=ReportSummaryResponse)
@@ -60,8 +41,6 @@ def get_summary(
 ):
     """Aggregate summary: total runs, pass rate, avg duration, runs per project (last 30 days)."""
     try:
-        _reconcile_stale_runs(db)
-
         from sqlalchemy import text
 
         # Total runs and pass rate in last 30 days
@@ -150,8 +129,6 @@ def list_reports(
     from sqlalchemy import text
 
     try:
-        _reconcile_stale_runs(db)
-
         offset = (page - 1) * limit
         where = "WHERE 1=1"
         params: dict = {}

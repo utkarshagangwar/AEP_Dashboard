@@ -1,9 +1,9 @@
 "use client";
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import PageContainer from "../../components/PageContainer";
 import { apiGet, apiPost } from "../../utils/apiClient";
-import { getStoredUser } from "../../utils/authStore";
 
 const STATUS_COLORS = {
   active: "#16A34A",
@@ -18,16 +18,10 @@ const STATUS_BG = {
 
 export default function ProjectsPage() {
   const qc = useQueryClient();
-  const user = typeof window !== "undefined" ? getStoredUser() : null;
-  const canWrite = user && ["admin", "qa_lead"].includes(user.role);
 
   const [search, setSearch] = useState("");
-  const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-  });
-  const [formError, setFormError] = useState("");
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["projects", search],
@@ -35,21 +29,29 @@ export default function ProjectsPage() {
       apiGet(`/api/projects?search=${encodeURIComponent(search)}&limit=50`),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (body) => apiPost("/api/projects", body),
-    onSuccess: () => {
+  /* ── Discover projects from automation folder ──────────────────────── */
+  async function handleDiscoverProjects() {
+    setIsDiscovering(true);
+    setDiscoveryResult(null);
+    try {
+      const result = await apiPost("/api/projects/discover-suites");
+      setDiscoveryResult(result);
       qc.invalidateQueries(["projects"]);
-      setShowModal(false);
-      setForm({ name: "", description: "" });
-    },
-    onError: (e) => setFormError(e.message),
-  });
+    } catch (err) {
+      setDiscoveryResult({ errors: [err.message] });
+    } finally {
+      setIsDiscovering(false);
+    }
+  }
 
-  const projects = Array.isArray(data) ? data : [];
+  const projects = data?.data || [];
+  const discoveredProjectCount = new Set(
+    (discoveryResult?.discovered || []).map((d) => d.project)
+  ).size;
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1200 }}>
+    <AppShell noPadding>
+      <PageContainer>
         {/* Header */}
         <div
           style={{
@@ -76,27 +78,55 @@ export default function ProjectsPage() {
               RevOps, LMS
             </p>
           </div>
-          {canWrite && (
-            <button
-              onClick={() => {
-                setShowModal(true);
-                setFormError("");
-              }}
-              style={{
-                padding: "9px 16px",
-                background: "#2563EB",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              + New Project
-            </button>
-          )}
+          <button
+            onClick={handleDiscoverProjects}
+            disabled={isDiscovering}
+            style={{
+              padding: "7px 16px",
+              fontSize: 12,
+              fontWeight: 600,
+              background: isDiscovering ? "#D1D5DB" : "#F3F4F6",
+              color: "#374151",
+              border: "1px solid #E5E7EB",
+              borderRadius: 8,
+              cursor: isDiscovering ? "not-allowed" : "pointer",
+              whiteSpace: "nowrap",
+              transition: "background 0.15s",
+            }}
+          >
+            {isDiscovering ? "Scanning…" : "Discover Project"}
+          </button>
         </div>
+
+        {/* Discovery result banner */}
+        {discoveryResult && (
+          <div
+            style={{
+              marginBottom: 16,
+              padding: "10px 14px",
+              background: discoveryResult.errors?.length ? "#FEF2F2" : "#F0FDF4",
+              border: `1px solid ${discoveryResult.errors?.length ? "#FECACA" : "#BBF7D0"}`,
+              borderRadius: 8,
+              fontSize: 13,
+              color: discoveryResult.errors?.length ? "#DC2626" : "#166534",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>
+              {discoveryResult.errors?.length
+                ? `Error: ${discoveryResult.errors[0]}`
+                : `Found ${discoveredProjectCount} project(s) with ${discoveryResult.discovered?.length || 0} suite(s), registered ${discoveryResult.registered?.length || 0} new`}
+            </span>
+            <button
+              onClick={() => setDiscoveryResult(null)}
+              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "inherit" }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {/* Search */}
         <div style={{ marginBottom: 20 }}>
@@ -189,8 +219,7 @@ export default function ProjectsPage() {
                 fontSize: 13,
               }}
             >
-              No projects found.
-              {canWrite && " Create your first project above."}
+              No projects found. Try &ldquo;Discover Project&rdquo; above.
             </div>
           ) : (
             projects.map((p, i) => (
@@ -295,145 +324,7 @@ export default function ProjectsPage() {
           )}
         </div>
 
-        {/* Modal */}
-        {showModal && (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0,0,0,0.4)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              zIndex: 50,
-            }}
-          >
-            <div
-              style={{
-                background: "#fff",
-                border: "1px solid #E5E7EB",
-                borderRadius: 12,
-                padding: 28,
-                width: 440,
-                boxShadow: "0 10px 40px rgba(0,0,0,0.12)",
-              }}
-            >
-              <h2
-                style={{
-                  margin: "0 0 20px",
-                  fontSize: 16,
-                  fontWeight: 600,
-                  color: "#111827",
-                }}
-              >
-                New Project
-              </h2>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#374151",
-                  marginBottom: 6,
-                }}
-              >
-                Name *
-              </label>
-              <input
-                value={form.name}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, name: e.target.value }))
-                }
-                placeholder="e.g. Vikaas"
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  fontSize: 13,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  outline: "none",
-                  marginBottom: 14,
-                  boxSizing: "border-box",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
-                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
-              />
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#374151",
-                  marginBottom: 6,
-                }}
-              >
-                Description
-              </label>
-              <textarea
-                value={form.description}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, description: e.target.value }))
-                }
-                rows={3}
-                placeholder="Optional…"
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  fontSize: 13,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  outline: "none",
-                  resize: "vertical",
-                  marginBottom: 14,
-                  boxSizing: "border-box",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
-                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
-              />
-              {formError && (
-                <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
-                  {formError}
-                </p>
-              )}
-              <div
-                style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
-              >
-                <button
-                  onClick={() => setShowModal(false)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => createMutation.mutate(form)}
-                  disabled={createMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                  }}
-                >
-                  {createMutation.isPending ? "Creating…" : "Create Project"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

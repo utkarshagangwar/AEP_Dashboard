@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
+import PageContainer from "../../../components/PageContainer";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -42,7 +43,6 @@ const ROLE_BG = {
 const PERMISSIONS = [
   { key: "projects", label: "Projects" },
   { key: "test_suites", label: "Test Suites" },
-  { key: "test_runs", label: "Test Runs" },
   { key: "execute", label: "Execute" },
   { key: "defects", label: "Defects" },
   { key: "reports", label: "Reports" },
@@ -114,8 +114,8 @@ export default function UsersPage() {
   if (!user) return null;
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1000 }}>
+    <AppShell noPadding>
+      <PageContainer>
         <div
           style={{
             display: "flex",
@@ -156,7 +156,7 @@ export default function UsersPage() {
               cursor: "pointer",
             }}
           >
-            + Invite User
+            + Invite/Add User
           </button>
         </div>
 
@@ -449,7 +449,7 @@ export default function UsersPage() {
                   color: "#111827",
                 }}
               >
-                Invite Team Member
+                Invite/Add Team Member
               </h2>
               {[
                 {
@@ -918,7 +918,7 @@ export default function UsersPage() {
             </div>
           </div>
         )}
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

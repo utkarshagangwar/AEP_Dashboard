@@ -1,8 +1,10 @@
 "use client";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
-import { apiGet } from "../../utils/apiClient";
+import PageContainer from "../../components/PageContainer";
+import { apiGet, apiDelete } from "../../utils/apiClient";
+import { getStoredUser } from "../../utils/authStore";
 
 const STATUS_COLORS = {
   passed: "#16A34A",
@@ -70,6 +72,11 @@ function formatDuration(ms) {
 }
 
 export default function ReportsPage() {
+  const qc = useQueryClient();
+  const user = typeof window !== "undefined" ? getStoredUser() : null;
+  const canWrite =
+    user && ["admin", "qa_lead", "qa_engineer"].includes(user.role);
+
   const [projectFilter, setProjectFilter] = useState("");
   const [suiteFilter, setSuiteFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -89,13 +96,14 @@ export default function ReportsPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["reports", projectFilter, suiteFilter, statusFilter, fromDate, toDate, page],
     queryFn: () => apiGet(`/api/reports?${params.toString()}`),
-    refetchInterval: 10000,
+    // 30s — was 10s. See dashboard/page.jsx for the same change/reasoning.
+    refetchInterval: 30000,
   });
 
   const { data: summaryData } = useQuery({
     queryKey: ["reports-summary"],
     queryFn: () => apiGet("/api/reports/stats/summary"),
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   const { data: projectsData } = useQuery({
@@ -110,13 +118,18 @@ export default function ReportsPage() {
 
   const runs = data?.data || [];
   const total = data?.total || 0;
-  const projects = Array.isArray(projectsData) ? projectsData : [];
-  const suites = Array.isArray(suitesData) ? suitesData : [];
+  const projects = projectsData?.data || [];
+  const suites = suitesData?.data || [];
   const summary = summaryData || {};
 
+  const deleteMutation = useMutation({
+    mutationFn: (id) => apiDelete(`/api/test-runs/${id}?action=delete`),
+    onSuccess: () => qc.invalidateQueries(["reports"]),
+  });
+
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1200 }}>
+    <AppShell noPadding>
+      <PageContainer>
         <div
           style={{
             display: "flex",
@@ -354,7 +367,7 @@ export default function ReportsPage() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "2fr 1.2fr minmax(80px, 0.8fr) 0.6fr 0.6fr 0.8fr 80px",
+              gridTemplateColumns: "2fr 1.2fr minmax(80px, 0.8fr) 0.6fr 0.6fr 0.8fr 80px 90px",
               gap: 16,
               padding: "10px 32px",
               borderBottom: "1px solid #E5E7EB",
@@ -369,6 +382,7 @@ export default function ReportsPage() {
               "Failed",
               "Duration",
               "Date",
+              "Actions",
             ].map((h) => (
               <span
                 key={h}
@@ -413,7 +427,7 @@ export default function ReportsPage() {
                 href={`/reports/${run.id}`}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "2fr 1.2fr minmax(80px, 0.8fr) 0.6fr 0.6fr 0.8fr 80px",
+                  gridTemplateColumns: "2fr 1.2fr minmax(80px, 0.8fr) 0.6fr 0.6fr 0.8fr 80px 90px",
               gap: 16,
                   padding: "13px 32px",
                   borderBottom:
@@ -502,6 +516,31 @@ export default function ReportsPage() {
                     month: "short",
                   })}
                 </span>
+                <div>
+                  {canWrite &&
+                    !["running", "queued", "pending"].includes(run.status) && (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (window.confirm("Delete this test run permanently?")) {
+                            deleteMutation.mutate(run.id);
+                          }
+                        }}
+                        style={{
+                          fontSize: 11,
+                          padding: "4px 8px",
+                          border: "1px solid #FECACA",
+                          borderRadius: 6,
+                          background: "#FEF2F2",
+                          color: "#DC2626",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                </div>
               </a>
             ))
           )}
@@ -560,7 +599,7 @@ export default function ReportsPage() {
             </button>
           </div>
         )}
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

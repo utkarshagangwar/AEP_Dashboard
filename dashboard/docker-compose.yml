@@ -50,6 +50,7 @@ services:
       VISUAL_VIDEO_MODEL: ${VISUAL_VIDEO_MODEL:-gemini-3.5-flash}
       VISUAL_VIDEO_FALLBACK: ${VISUAL_VIDEO_FALLBACK:-gemini-2.5-flash}
       VISUAL_VIDEO_MAX_MB: ${VISUAL_VIDEO_MAX_MB:-100}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     depends_on:
       redis:
         condition: service_healthy
@@ -60,7 +61,14 @@ services:
     build:
       context: ./backend
       dockerfile: ../docker/Dockerfile.backend
-    command: celery -A app.workers.celery_app:celery_app worker --loglevel=info
+    # -B runs Celery Beat embedded in this same process (safe here since only
+    #    one celery_worker instance/replica runs — beat schedule is defined in
+    #    celery_app.py and currently just handles periodic stale-run reconciliation).
+    # --concurrency is now explicit instead of Celery's implicit CPU-count
+    #    default, so cross-suite parallelism is a documented, tunable knob
+    #    (CELERY_CONCURRENCY in .env) rather than an accident of the host's
+    #    reported CPU count.
+    command: celery -A app.workers.celery_app:celery_app worker -B --loglevel=info --concurrency=${CELERY_CONCURRENCY:-2}
     volumes:
       - ../automation:/automation
       - visual_qa_data:/app/visual_qa_data
@@ -75,6 +83,7 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       AUTOMATION_ROOT: /automation
+      PABOT_PROCESSES: ${PABOT_PROCESSES:-1}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}

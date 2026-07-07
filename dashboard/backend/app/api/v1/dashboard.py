@@ -28,9 +28,12 @@ def dashboard_stats(
     Pass ``project_id`` to scope every metric to a single project.
     """
     try:
-        from app.api.v1.reports import _reconcile_stale_runs
-        _reconcile_stale_runs(db)
-
+        # NOTE: stale-run reconciliation is handled by the Celery Beat periodic
+        # task `workers.tasks.execution.reconcile_stale_runs` (every 5 min) —
+        # see app/workers/tasks/execution.py. Do not call it inline here; the
+        # old inline helper (`reports._reconcile_stale_runs`) was removed when
+        # reconciliation was migrated off the request path, which is what was
+        # causing this endpoint to 500 (dangling import of a deleted function).
         logger.info("Dashboard stats requested by %s", current_user.id)
         data = get_dashboard_stats(
             db,

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import AppShell from "../../../components/AppShell";
+import PageContainer from "../../../components/PageContainer";
 import { apiGet, apiPost, apiFetch } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -195,20 +196,20 @@ export default function ReportDetailPage() {
 
   if (isLoading) {
     return (
-      <AppShell>
-        <div style={{ maxWidth: 1100 }}>
+      <AppShell noPadding>
+        <PageContainer>
           <div style={{ padding: 40, textAlign: "center", color: "#9CA3AF" }}>
             Loading report…
           </div>
-        </div>
+        </PageContainer>
       </AppShell>
     );
   }
 
   if (error) {
     return (
-      <AppShell>
-        <div style={{ maxWidth: 1100 }}>
+      <AppShell noPadding>
+        <PageContainer>
           <div
             style={{
               background: "#FEF2F2",
@@ -232,7 +233,7 @@ export default function ReportDetailPage() {
               {error.message}
             </p>
           </div>
-        </div>
+        </PageContainer>
       </AppShell>
     );
   }
@@ -256,8 +257,8 @@ export default function ReportDetailPage() {
   }
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1100 }}>
+    <AppShell noPadding>
+      <PageContainer>
         {/* Header */}
         <div
           style={{
@@ -1292,7 +1293,7 @@ export default function ReportDetailPage() {
             </div>
           )}
         </div>
-      </div>
+      </PageContainer>
 
       {/* Log Defect Slide-Over */}
       {logDefectFor && (

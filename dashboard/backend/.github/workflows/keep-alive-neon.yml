@@ -1,0 +1,42 @@
+name: Keep Neon Database Awake (IST Work Hours)
+# Companion to keep-alive.yml (which keeps the Render backend awake).
+# Neon's serverless compute suspends after a short period of inactivity —
+# an HTTP ping to the backend does NOT prevent this, only an actual DB
+# connection/query does. This workflow runs a trivial query on a schedule
+# so the compute endpoint stays warm and the first real request of the
+# day doesn't pay a cold-start penalty.
+#
+# NOTE: GitHub Actions schedules are best-effort and can slip by several
+# minutes under platform load, especially at 5-minute granularity (the
+# shortest interval GitHub supports). This significantly reduces cold
+# starts but — unlike the Render health-check workflow — can't
+# guarantee zero cold starts.
+#
+# Requires a repo secret: NEON_DATABASE_URL (same connection string as
+# the app's DATABASE_URL).
+
+on:
+  schedule:
+    - cron: '*/5 3-15 * * 1-6'   # Every 5 min, 8:30 AM–9:18 PM IST (approx), Mon-Sat
+    - cron: '*/5 * * * 0'         # Sunday coverage if needed
+  workflow_dispatch:
+
+jobs:
+  ping-neon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Ping Neon (trivial query to prevent compute suspend)
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          if [ -z "$NEON_DATABASE_URL" ]; then
+            echo "NEON_DATABASE_URL secret is not set — add it in repo Settings > Secrets."
+            exit 1
+          fi
+          psql "$NEON_DATABASE_URL" -c "SELECT 1;" --set=ON_ERROR_STOP=1
+          echo "✅ Neon compute pinged successfully."

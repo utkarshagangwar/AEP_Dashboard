@@ -3,7 +3,7 @@ import os
 import re
 import subprocess
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -244,8 +244,7 @@ def execute_test_suite(self, run_id: str):
 
         listener_path = str(Path(__file__).parent / "rf_listener.py")
 
-        cmd = [
-            "robot",
+        common_args = [
             "--outputdir", str(results_dir),
             "--pythonpath", str(project_root),
             "--pythonpath", str(project_root / "libs"),
@@ -254,6 +253,22 @@ def execute_test_suite(self, run_id: str):
             "--loglevel", "DEBUG",
             str(robot_suite_path),
         ]
+
+        if settings.PABOT_PROCESSES > 1:
+            # Parallel execution across PABOT_PROCESSES workers, split by test
+            # case. Safe to do because every test already opens its own
+            # isolated browser context in Test Setup (see video_keywords.resource)
+            # — there's no shared in-suite state for pabot to trip over.
+            # NOTE: pabot's console output interleaves multiple workers, so the
+            # live PASS/FAIL stdout parsing below may not catch every line in
+            # real time during a parallel run. That's a cosmetic-only gap —
+            # the finalization phase already falls back to parsing output.xml
+            # whenever live parsing produced zero rows, so final results,
+            # counts, and pass/fail status are unaffected either way.
+            cmd = ["pabot", "--testlevelsplit", "--processes", str(settings.PABOT_PROCESSES)] + common_args
+        else:
+            # Default: identical to the original single-process behavior.
+            cmd = ["robot"] + common_args
 
         logger.info("Executing robot suite: %s (run_id=%s)", suite_name, run_id)
         logger.info("Command: %s", " ".join(cmd))
@@ -469,6 +484,59 @@ def execute_test_suite(self, run_id: str):
         except Exception:
             pass
 
+        return {"error": str(exc)}
+    finally:
+        session.close()
+
+
+@shared_task(name="workers.tasks.execution.reconcile_stale_runs")
+def reconcile_stale_runs():
+    """Periodic task (scheduled in celery_app.py's beat_schedule, every 5 min):
+    find any runs stuck in running/queued past the staleness threshold and
+    reconcile them by re-parsing output.xml.
+
+    Moved here from reports.py's _reconcile_stale_runs(), which used to run
+    inline on every single Reports/summary request (i.e. every 10-30s poll
+    from any open Reports tab). That made reconciliation dependent on someone
+    having the page open, and repeated the same DB scan far more often than
+    necessary. Running it on a fixed schedule instead means it always runs,
+    regardless of who has what open, at a small fraction of the DB load.
+    """
+    from app.api.v1.executions import STALE_RUN_THRESHOLD_MINUTES, _reconcile_run
+    from app.models.test_run import RunStatus, TestRun
+
+    session = _fresh_session()
+    try:
+        stale_runs = (
+            session.query(TestRun)
+            .filter(
+                TestRun.status.in_([RunStatus.running, RunStatus.queued]),
+                TestRun.started_at.isnot(None),
+            )
+            .all()
+        )
+
+        now = _now()
+        reconciled = 0
+        for run in stale_runs:
+            started = (
+                run.started_at.replace(tzinfo=timezone.utc)
+                if run.started_at.tzinfo is None
+                else run.started_at
+            )
+            if (now - started) > timedelta(minutes=STALE_RUN_THRESHOLD_MINUTES):
+                logger.warning("Reconciling stale run %s (started_at=%s)", run.id, run.started_at)
+                try:
+                    _reconcile_run(run, session)
+                    reconciled += 1
+                except Exception as exc:
+                    logger.error("Failed to reconcile run %s: %s", run.id, exc)
+
+        if reconciled:
+            logger.info("Stale-run sweep: reconciled %d run(s)", reconciled)
+        return {"checked": len(stale_runs), "reconciled": reconciled}
+    except Exception as exc:
+        logger.error("Stale-run sweep failed: %s", exc)
         return {"error": str(exc)}
     finally:
         session.close()

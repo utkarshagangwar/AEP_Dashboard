@@ -2,6 +2,7 @@
 import { useState, use } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
+import PageContainer from "../../../components/PageContainer";
 import { apiGet, apiPost } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -162,8 +163,8 @@ export default function ProjectDetailPage({ params }) {
   }
 
   return (
-    <AppShell>
-      <div style={{ maxWidth: 1100 }}>
+    <AppShell noPadding>
+      <PageContainer>
         {/* Breadcrumb */}
         <div style={{ marginBottom: 16 }}>
           <a
@@ -607,7 +608,7 @@ export default function ProjectDetailPage({ params }) {
             </div>
           </div>
         )}
-      </div>
+      </PageContainer>
     </AppShell>
   );
 }

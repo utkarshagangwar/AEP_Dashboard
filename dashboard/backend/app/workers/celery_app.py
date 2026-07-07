@@ -36,3 +36,14 @@ celery_app.conf.update(
         "app.workers.tasks.orchestrator",
     ],
 )
+
+# ── Periodic tasks (requires the worker to run with -B, see docker-compose.yml) ──
+# Stale-run reconciliation used to run inline on every Reports/summary API
+# request (see reports.py history) — moved here so it runs on a fixed
+# schedule regardless of whether anyone has the Reports page open.
+celery_app.conf.beat_schedule = {
+    "reconcile-stale-runs": {
+        "task": "workers.tasks.execution.reconcile_stale_runs",
+        "schedule": 300.0,  # every 5 minutes
+    },
+}

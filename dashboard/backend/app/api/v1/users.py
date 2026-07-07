@@ -2,13 +2,14 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_db, require_roles
+from app.core.dependencies import get_db, require_permission, require_roles
 from app.core.logging import get_logger
 from app.models.user import User, UserRole
-from app.schemas.user import PaginatedUsers, UserCreate, UserOut, UserUpdate
+from app.schemas.user import PaginatedUsers, UserBrief, UserCreate, UserOut, UserUpdate
 from app.services import user_service
 from app.services.audit_service import write_audit_log
 
@@ -18,6 +19,29 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 # Admin-only guard for every route in this module.
 AdminUser = Depends(require_roles(UserRole.admin))
+
+
+@router.get("/assignable", response_model=list[UserBrief])
+def list_assignable_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("defects")),
+):
+    """Lightweight active-user list for defect assignment (name + role only).
+
+    Uses the "defects" permission (same as PATCH /defects) rather than the
+    admin-only guard on the rest of this router, so qa_lead can populate an
+    assignee picker without needing full user-management access.
+    """
+    users = (
+        db.execute(
+            select(User)
+            .where(User.is_active.is_(True))
+            .order_by(User.full_name)
+        )
+        .scalars()
+        .all()
+    )
+    return list(users)
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

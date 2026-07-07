@@ -1,0 +1,34 @@
+name: Keep Backend Awake (IST Work Hours)
+on:
+  schedule:
+    - cron: '0,12,24,36,48 3-15 * * 1-6'   # Every 12 min, 8:30 AM–9:18 PM IST (approx)
+    - cron: '0,12,24,36,48 * * * 0'         # Sunday coverage if needed
+  workflow_dispatch:
+
+jobs:
+  check-and-restart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check Backend Health
+        id: check
+        run: |
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
+            --max-time 10 \
+            "https://aep-backend-o69s.onrender.com/health")
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "HTTP status: $STATUS"
+
+      - name: Restart Render Service if Down
+        if: ${{ steps.check.outputs.status != '200' }}
+        run: |
+          echo "Backend is down (Status: ${{ steps.check.outputs.status }}). Triggering restart..."
+          curl -X POST "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
+            -H "Accept: application/json" \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
+          echo "Restart triggered. Service should be back online in 1-2 minutes."
+
+      - name: Success Message
+        if: ${{ steps.check.outputs.status == '200' }}
+        run: |
+          echo "✅ Backend is healthy and running!"

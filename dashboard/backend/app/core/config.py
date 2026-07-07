@@ -33,6 +33,22 @@ class Settings(BaseSettings):
     # ─── Automation ───────────────────────────────────────────────────────────
     AUTOMATION_ROOT: str = ""
 
+    # Number of parallel pabot processes to use when executing a suite.
+    # 1 (default) = current behavior exactly: plain `robot`, no pabot involved,
+    # single browser, single process. Only raise this once you've confirmed the
+    # host has the CPU/RAM headroom for that many concurrent headless browsers —
+    # each pabot process opens and drives its own browser.
+    PABOT_PROCESSES: int = 1
+
+    # ─── CORS ──────────────────────────────────────────────────────────────────
+    # Comma-separated list of origins allowed to call this API directly from
+    # the browser (bypassing the Next.js proxy route). Empty by default — no
+    # behavior change until you explicitly set this to your frontend's public
+    # URL (e.g. https://your-frontend.onrender.com), which only matters if you
+    # also point NEXT_PUBLIC_DIRECT_API_URL at this backend on the frontend
+    # side. See .env.example.
+    CORS_ALLOWED_ORIGINS: str = ""
+
     # ─── Logging ───────────────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
 

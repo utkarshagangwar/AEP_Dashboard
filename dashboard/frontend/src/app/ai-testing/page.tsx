@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, apiFetch, apiPost } from "@/utils/apiClient";
 import AppShell from "@/components/AppShell";
+import PageContainer from "@/components/PageContainer";
 import AutonomousQASection from "@/components/AutonomousQASection";
 import VisualAuditSection from "@/components/VisualAuditSection";
 import SowCheckpointsSection from "@/components/SowCheckpointsSection";
@@ -437,7 +438,7 @@ export default function AITestingPage() {
     return (
       <AppShell noPadding>
         <div className="min-h-full bg-gray-50">
-          <div className="max-w-7xl mx-auto px-6 py-12">
+          <PageContainer>
             <div className="mb-8">
               <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
               <p className="text-gray-500 mt-1">
@@ -452,7 +453,7 @@ export default function AITestingPage() {
             ) : (
               <SkillsTab onReplayStarted={handleReplayStarted} />
             )}
-          </div>
+          </PageContainer>
         </div>
       </AppShell>
     );
@@ -464,7 +465,7 @@ export default function AITestingPage() {
     return (
       <AppShell noPadding>
         <div className="min-h-full bg-gray-50">
-          <div className="max-w-7xl mx-auto px-6 py-12">
+          <PageContainer>
             <div className="mb-8">
               <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
               <p className="text-gray-500 mt-1">
@@ -665,7 +666,7 @@ export default function AITestingPage() {
             />
             <VisualAuditSection />
             <FigmaImportSection />
-          </div>
+          </PageContainer>
 
           <div className="sticky bottom-0 left-0 right-0 border-t border-gray-100 bg-white px-6 py-3 flex items-center justify-between text-xs text-gray-400">
             <div className="flex items-center gap-2">
@@ -912,7 +913,8 @@ export default function AITestingPage() {
           <span className="text-gray-700">{result.goal}</span>
         </div>
 
-        <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+        <PageContainer>
+          <div className="space-y-6">
           <PageTabBar active={pageTab} onChange={setPageTab} />
 
           {/* Status banner */}
@@ -1295,7 +1297,8 @@ export default function AITestingPage() {
               Run Another Test
             </Button>
           </div>
-        </div>
+          </div>
+        </PageContainer>
 
         {/* Log Defect modal */}
         {loggingDefect && (

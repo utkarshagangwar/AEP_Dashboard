@@ -2,11 +2,13 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.v1.router import api_router
+from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.core.rate_limit import limiter
 from app.core.seed import seed_initial_admin
@@ -29,6 +31,24 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# Prerequisite for eventually letting the browser call this API directly
+# (bypassing the Next.js proxy route) — see .env.example for why the frontend
+# half isn't wired up yet. CORS_ALLOWED_ORIGINS is empty by default, which
+# means this changes nothing: same-origin/proxied requests never carry a
+# browser Origin header in the first place, so this middleware has nothing to
+# do with them either way. Only actual cross-origin browser requests are
+# affected, and only once an origin is explicitly listed here.
+_cors_origins = [o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 # SlowAPIMiddleware applies the default limit to ALL routes automatically.

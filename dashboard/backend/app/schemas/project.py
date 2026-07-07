@@ -35,6 +35,16 @@ class ProjectResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProjectListResponse(BaseModel):
+    """Envelope for the project list endpoint, matching the {data, total,
+    page, limit} shape used by every other list endpoint in the API."""
+
+    data: list[ProjectResponse]
+    total: int
+    page: int
+    limit: int
+
+
 class ProjectDetailResponse(ProjectResponse):
     """Project detail response including nested test suites."""
 
