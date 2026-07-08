@@ -1,8 +1,8 @@
 name: Keep Backend Awake (IST Work Hours)
 on:
   schedule:
-    - cron: '0,12,24,36,48 3-15 * * 1-6'   # Every 12 min, 8:30 AM–9:18 PM IST (approx)
-    - cron: '0,12,24,36,48 * * * 0'         # Sunday coverage if needed
+    - cron: '0,15,30,45 3-15 * * 1-6'   # Every 15 min.
+    - cron: '0,15,30,45 3-15 * * 0'         # Sunday coverage if needed
   workflow_dispatch:
 
 jobs:
@@ -14,7 +14,8 @@ jobs:
         id: check
         run: |
           STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
-            --max-time 10 \
+            --max-time 20 \
+            --connect-timeout 5 \
             "https://aep-backend-o69s.onrender.com/health")
           echo "status=$STATUS" >> $GITHUB_OUTPUT
           echo "HTTP status: $STATUS"
