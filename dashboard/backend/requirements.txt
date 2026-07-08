@@ -30,7 +30,7 @@ langchain-openai==1.1.14
 # 1.74.x is the last line requiring openai>=1.x (not >=2.20), which keeps it
 # co-installable with browser-use -> langchain-openai's openai<2.0.0 pin.
 litellm==1.74.15.post2
-Pillow==11.0.0
+Pillow==12.2.0
 pixelmatch==0.3.0
 # Visual QA (Phase 3): SOW PDF text extraction
 pypdf==6.13.3
