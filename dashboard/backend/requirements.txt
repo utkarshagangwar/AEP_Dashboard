@@ -25,7 +25,7 @@ langchain-google-genai==2.1.12
 # an unpinned transitive resolution. 0.3.1 co-installs with langchain-core
 # 0.3.x, satisfying the same <0.4.0 ceiling browser-use imposes (see the
 # comment on _google_client in ai_runner.py for the same constraint).
-langchain-openai==0.3.1
+langchain-openai==1.1.14
 # Visual QA (Phase 1-2): LLM router + deterministic pixel-diff judge
 # 1.74.x is the last line requiring openai>=1.x (not >=2.20), which keeps it
 # co-installable with browser-use -> langchain-openai's openai<2.0.0 pin.
