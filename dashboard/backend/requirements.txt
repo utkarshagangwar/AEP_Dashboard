@@ -33,4 +33,4 @@ litellm==1.74.15.post2
 Pillow==11.0.0
 pixelmatch==0.3.0
 # Visual QA (Phase 3): SOW PDF text extraction
-pypdf==5.1.0
+pypdf==6.13.3
