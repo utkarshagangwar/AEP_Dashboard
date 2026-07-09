@@ -17,8 +17,8 @@ name: Keep Neon Database Awake (IST Work Hours)
 
 on:
   schedule:
-    - cron: '*/5 3-15 * * 1-6'   # Every 5 min, 8:30 AM–9:18 PM IST (approx), Mon-Sat
-    - cron: '*/5 * * * 0'         # Sunday coverage if needed
+    - cron: '*/15 5-15 * * 1-6'   # Every 15 min, 8:30 AM–9:18 PM IST (approx), Mon-Sat
+    - cron: '*/15 * * 0'         # Sunday coverage if needed
   workflow_dispatch:
 
 jobs:

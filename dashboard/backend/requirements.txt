@@ -5,32 +5,53 @@ psycopg2-binary==2.9.10
 alembic==1.14.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]==3.4.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
 email-validator==2.2.0
-python-multipart==0.0.20
+python-multipart==0.0.31
 celery==5.4.0
 redis==5.0.8
 slowapi==0.1.9
-browser-use==0.1.40
+# SECURITY (2026-07-09): fixes a URL-whitelist bypass (GHSA-x39x-9qw5-ghrf)
+# that undermined ai_runner.py's allowed_domains credential-leak gate. See
+# 2026-07-09 fix in ai_runner.py: allowed_domains is now actually threaded
+# into BrowserContextConfig (it previously wasn't, on any version).
+# 0.1.45 promotes faiss-cpu, mem0ai, botocore, google-api-core, langchain-aws,
+# langchain-deepseek, patchright, textual from dev-only extras to real core
+# installs, and forces langchain-google-genai==2.1.2 / langchain-openai==0.3.11
+# below. Verified compatible: Agent/Browser/BrowserConfig/BrowserContextConfig/
+# rerun_history/AgentHistoryList API surface used in ai_runner.py is unchanged
+# 0.1.40->0.1.45 (diffed both wheels directly).
+browser-use==0.1.45
 playwright==1.49.0
-cryptography==42.0.8
-langchain-google-genai==2.1.12
-# Orchestrator ("The Brain"): browser-use==0.1.40 already pulls langchain-openai
-# in transitively (it's one of its own dependencies), but it was never pinned
-# explicitly here even though ai_runner.py imports ChatOpenAI directly. Pinned
-# explicitly so the orchestrator's OpenRouter-via-Hands path (model_pool.py,
-# ChatOpenAI(base_url="https://openrouter.ai/api/v1", ...)) doesn't depend on
-# an unpinned transitive resolution. 0.3.1 co-installs with langchain-core
-# 0.3.x, satisfying the same <0.4.0 ceiling browser-use imposes (see the
-# comment on _google_client in ai_runner.py for the same constraint).
-langchain-openai==0.3.1
+cryptography==48.0.1
+# Pinned to 2.1.2 (down from 2.1.12) because browser-use==0.1.45 hard-pins
+# langchain-google-genai==2.1.2 as a core dependency (was dev-only under
+# 0.1.40). Verified _generate/_agenerate signatures used by the
+# _RotatingGoogleChat subclass in ai_runner.py are identical between 2.1.2
+# and 2.1.12 -- the key-rotation trick still works unchanged.
+langchain-google-genai==2.1.2
+# Orchestrator ("The Brain"): browser-use==0.1.45 now hard-pins
+# langchain-openai==0.3.11 as a core dependency (was 0.3.1 under 0.1.40, and
+# only a transitive/dev pin even then). Bumped to match. Still does NOT close
+# langchain-openai's own SSRF/DNS-rebinding CVE (GHSA-r7w7-9xr2-qq2r, fixed in
+# 1.1.14) -- no browser-use 0.1.x/0.3.x combination supports that; would
+# require the 0.13.x line and an ai_runner.py rewrite (BrowserSession API).
+# Tracked separately. ChatOpenAI(model=, api_key=, base_url=) field aliases
+# confirmed unchanged 0.3.1->0.3.11.
+langchain-openai==0.3.11
 # Visual QA (Phase 1-2): LLM router + deterministic pixel-diff judge
 # 1.74.x is the last line requiring openai>=1.x (not >=2.20), which keeps it
 # co-installable with browser-use -> langchain-openai's openai<2.0.0 pin.
+# SECURITY (2026-07-09): Dependabot flags CVEs fixed in >=1.83.0, all of them
+# in the LiteLLM *proxy* server's admin/auth endpoints (/config/update, JWT
+# OIDC cache, /user/update, MCP test routes). llm_router.py only calls
+# litellm.completion() as an SDK -- the proxy never runs here, so none of
+# these are reachable. Bumping would also force openai>=2.20.0, breaking the
+# pin above. Left as-is; do not install the "proxy" extra on this package.
 litellm==1.74.15.post2
-Pillow==11.0.0
+Pillow==12.2.0
 pixelmatch==0.3.0
 # Visual QA (Phase 3): SOW PDF text extraction
-pypdf==5.1.0
+pypdf==6.14.2

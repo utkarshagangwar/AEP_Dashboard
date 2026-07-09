@@ -508,7 +508,15 @@ async def resolve_with_ai(
             cdp_url=cdp_url,
             disable_security=True,
             new_context_config=BrowserContextConfig(
-                browser_window_size=_VIEWPORT, no_viewport=False
+                browser_window_size=_VIEWPORT,
+                no_viewport=False,
+                # BUG FIX (2026-07-09): this was never set despite the
+                # ValueError gate above claiming it was enforced -- the
+                # allowed_domains param was validated then silently dropped,
+                # so browser_use never actually restricted navigation.
+                # This is the field browser_use itself checks (context.py:
+                # BrowserContext._check_and_handle_navigation).
+                allowed_domains=allowed_domains,
             ),
         )
     )
@@ -1014,6 +1022,7 @@ async def _replay_history(
     cdp_url: str,
     goal: str,
     history_json: str,
+    allowed_domains: Optional[list[str]],
     sensitive_data: Optional[dict],
     max_duration_s: int,
     on_step: Optional[Callable[[str, bool, Optional[str]], None]] = None,
@@ -1029,10 +1038,22 @@ async def _replay_history(
     on_step(description, ok, error) is invoked once per replayed step after
     the rerun completes (rerun_history exposes no live hook in 0.1.40).
 
+    allowed_domains required when sensitive_data present (same gate as
+    resolve_with_ai — replay still drives a real browser with real
+    credentials, so the same credential-leak containment applies).
+
     Returns {"success": bool, "action_summary": str, "duration_ms": int}.
     """
     from browser_use import Agent, Browser, BrowserConfig, BrowserContextConfig
     from browser_use.agent.views import AgentHistoryList
+
+    # Safety gate — mirrors resolve_with_ai(). See the 2026-07-09 fix note
+    # below: this parameter previously wasn't even accepted by this function.
+    if sensitive_data and not allowed_domains:
+        raise ValueError(
+            "allowed_domains must be provided when sensitive_data is set. "
+            "Omitting it risks credential leakage to out-of-scope domains."
+        )
 
     try:
         llm = _build_llm()
@@ -1059,7 +1080,12 @@ async def _replay_history(
             cdp_url=cdp_url,
             disable_security=True,
             new_context_config=BrowserContextConfig(
-                browser_window_size=_VIEWPORT, no_viewport=False
+                browser_window_size=_VIEWPORT,
+                no_viewport=False,
+                # BUG FIX (2026-07-09): see the matching fix + comment in
+                # resolve_with_ai() above -- allowed_domains was accepted and
+                # gated on but never forwarded to browser_use.
+                allowed_domains=allowed_domains,
             ),
         )
     )
@@ -1232,6 +1258,7 @@ async def _execute_replay_steps(
             cdp_url=cdp_url,
             goal=goal,
             history_json=history_json,
+            allowed_domains=allowed_domains,
             sensitive_data=sensitive_data,
             max_duration_s=max_duration_s,
             on_step=_on_replay_step,
