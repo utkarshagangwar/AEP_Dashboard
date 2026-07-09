@@ -14,7 +14,8 @@ jobs:
         id: check
         run: |
           STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
-            --max-time 10 \
+            --max-time 20 \
+            --connect-timeout 5 \
             "https://aep-backend-o69s.onrender.com/health")
           echo "status=$STATUS" >> $GITHUB_OUTPUT
           echo "HTTP status: $STATUS"
