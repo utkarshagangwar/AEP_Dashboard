@@ -3,8 +3,13 @@ import { useState, use } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
-import { apiGet, apiPost } from "../../../utils/apiClient";
+import { apiGet, apiPost, apiPatch } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
+
+const ENV_OPTIONS = ["dev", "staging", "production"];
+
+const STATUS_COLORS = { active: "#16A34A", inactive: "#6B7280" };
+const STATUS_BG = { active: "#DCFCE7", inactive: "#F3F4F6" };
 
 const SUITE_TYPE_COLORS = {
   smoke: { bg: "#DBEAFE", color: "#2563EB", border: "#BFDBFE" },
@@ -15,6 +20,9 @@ const SUITE_TYPE_COLORS = {
 };
 
 function SuiteTypeBadge({ type }) {
+  if (!type) {
+    return <span style={{ fontSize: 13, color: "#9CA3AF" }}>—</span>;
+  }
   const style = SUITE_TYPE_COLORS[type] || {
     bg: "#F3F4F6",
     color: "#6B7280",
@@ -34,6 +42,7 @@ function SuiteTypeBadge({ type }) {
         fontSize: 11,
         fontWeight: 600,
         textTransform: "capitalize",
+        width: "fit-content",
       }}
     >
       {type}
@@ -50,6 +59,19 @@ export default function ProjectDetailPage({ params }) {
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ name: "", suite_type: "smoke", description: "" });
   const [formError, setFormError] = useState("");
+
+  const [showEditProject, setShowEditProject] = useState(false);
+  const [projectForm, setProjectForm] = useState({ name: "", description: "", is_active: true });
+  const [projectFormError, setProjectFormError] = useState("");
+
+  const [showEnvModal, setShowEnvModal] = useState(false);
+  const [envForm, setEnvForm] = useState([]);
+  const [envError, setEnvError] = useState("");
+
+  const [openSuiteMenuId, setOpenSuiteMenuId] = useState(null);
+  const [editingSuite, setEditingSuite] = useState(null);
+  const [suiteEditForm, setSuiteEditForm] = useState({ name: "", suite_type: "smoke", description: "" });
+  const [suiteEditError, setSuiteEditError] = useState("");
 
   const projectId = resolvedParams?.id;
 
@@ -69,6 +91,65 @@ export default function ProjectDetailPage({ params }) {
     },
     onError: (e) => setFormError(e.message),
   });
+
+  const updateProjectMutation = useMutation({
+    mutationFn: (body) => apiPatch(`/api/projects/${projectId}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries(["project", projectId]);
+      setShowEditProject(false);
+      setShowEnvModal(false);
+      setProjectFormError("");
+      setEnvError("");
+    },
+    onError: (e) => {
+      setProjectFormError(e.message);
+      setEnvError(e.message);
+    },
+  });
+
+  const updateSuiteMutation = useMutation({
+    mutationFn: ({ suiteId, body }) =>
+      apiPatch(`/api/projects/${projectId}/suites/${suiteId}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries(["project", projectId]);
+      setEditingSuite(null);
+      setSuiteEditError("");
+    },
+    onError: (e) => setSuiteEditError(e.message),
+  });
+
+  function openEditProjectModal() {
+    setProjectForm({
+      name: project?.name || "",
+      description: project?.description || "",
+      is_active: project?.is_active ?? true,
+    });
+    setProjectFormError("");
+    setShowEditProject(true);
+  }
+
+  function openEnvModal() {
+    setEnvForm(project?.environments || ENV_OPTIONS);
+    setEnvError("");
+    setShowEnvModal(true);
+  }
+
+  function toggleEnv(env) {
+    setEnvForm((cur) =>
+      cur.includes(env) ? cur.filter((e) => e !== env) : [...cur, env]
+    );
+  }
+
+  function openEditSuiteModal(suite) {
+    setEditingSuite(suite);
+    setSuiteEditForm({
+      name: suite.name,
+      suite_type: suite.suite_type || "smoke",
+      description: suite.description || "",
+    });
+    setSuiteEditError("");
+    setOpenSuiteMenuId(null);
+  }
 
   const suites = project?.suites || [];
 
@@ -270,6 +351,24 @@ export default function ProjectDetailPage({ params }) {
                 )}
               </div>
             </div>
+            {canWrite && (
+              <button
+                onClick={openEditProjectModal}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: "#fff",
+                  color: "#374151",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Edit
+              </button>
+            )}
           </div>
         </div>
 
@@ -283,11 +382,33 @@ export default function ProjectDetailPage({ params }) {
             marginBottom: 24,
           }}
         >
-          <h2 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 600, color: "#111827" }}>
-            Environments
-          </h2>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "#111827" }}>
+              Environments
+            </h2>
+            {canWrite && (
+              <button
+                onClick={openEnvModal}
+                style={{
+                  padding: "6px 14px",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: "#fff",
+                  color: "#374151",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                }}
+              >
+                Edit
+              </button>
+            )}
+          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {(project?.environments || ["dev", "staging", "production"]).map((env) => (
+            {project?.environments && project.environments.length === 0 ? (
+              <span style={{ fontSize: 13, color: "#9CA3AF" }}>No environments configured.</span>
+            ) : null}
+            {(project?.environments ?? ENV_OPTIONS).map((env) => (
               <span
                 key={env}
                 style={{
@@ -359,19 +480,20 @@ export default function ProjectDetailPage({ params }) {
             background: "#fff",
             border: "1px solid #E5E7EB",
             borderRadius: 12,
-            overflow: "hidden",
+            overflow: openSuiteMenuId ? "visible" : "hidden",
           }}
         >
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "2fr 1fr 1fr 120px",
+              gridTemplateColumns: "1.6fr 110px 2fr 100px 40px",
+              gap: 16,
               padding: "10px 20px",
               borderBottom: "1px solid #E5E7EB",
               background: "#F9FAFB",
             }}
           >
-            {["Name", "Type", "Description", "Created"].map((h) => (
+            {["Name", "Type", "Description", "Created", ""].map((h) => (
               <span
                 key={h}
                 style={{
@@ -405,7 +527,8 @@ export default function ProjectDetailPage({ params }) {
                 key={suite.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "2fr 1fr 1fr 120px",
+                  gridTemplateColumns: "1.6fr 110px 2fr 100px 40px",
+                  gap: 16,
                   padding: "14px 20px",
                   borderBottom:
                     i < suites.length - 1 ? "1px solid #F3F4F6" : "none",
@@ -425,6 +548,9 @@ export default function ProjectDetailPage({ params }) {
                     fontSize: 13,
                     fontWeight: 600,
                     color: "#111827",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   {suite.name}
@@ -448,6 +574,71 @@ export default function ProjectDetailPage({ params }) {
                     month: "short",
                   })}
                 </span>
+                {canWrite ? (
+                  <div style={{ position: "relative" }}>
+                    <button
+                      onClick={() =>
+                        setOpenSuiteMenuId(openSuiteMenuId === suite.id ? null : suite.id)
+                      }
+                      aria-label="Suite actions"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: openSuiteMenuId === suite.id ? "#F3F4F6" : "transparent",
+                        border: "none",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        color: "#6B7280",
+                      }}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.8" />
+                        <circle cx="12" cy="12" r="1.8" />
+                        <circle cx="12" cy="19" r="1.8" />
+                      </svg>
+                    </button>
+                    {openSuiteMenuId === suite.id && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          right: 0,
+                          top: "calc(100% + 4px)",
+                          background: "#fff",
+                          border: "1px solid #E5E7EB",
+                          borderRadius: 8,
+                          boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+                          zIndex: 20,
+                          minWidth: 130,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <button
+                          onClick={() => openEditSuiteModal(suite)}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 14px",
+                            fontSize: 13,
+                            color: "#374151",
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <span />
+                )}
               </div>
             ))
           )}
@@ -603,6 +794,419 @@ export default function ProjectDetailPage({ params }) {
                   }}
                 >
                   {createSuiteMutation.isPending ? "Creating…" : "Add Suite"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Click-outside overlay to close the suite action menu */}
+        {openSuiteMenuId && (
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 10 }}
+            onClick={() => setOpenSuiteMenuId(null)}
+          />
+        )}
+
+        {/* Edit Project Modal */}
+        {showEditProject && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 50,
+            }}
+          >
+            <div
+              style={{
+                background: "#fff",
+                border: "1px solid #E5E7EB",
+                borderRadius: 12,
+                padding: 28,
+                width: 440,
+                boxShadow: "0 10px 40px rgba(0,0,0,0.12)",
+              }}
+            >
+              <h2 style={{ margin: "0 0 20px", fontSize: 16, fontWeight: 600, color: "#111827" }}>
+                Edit Project
+              </h2>
+
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Name *
+              </label>
+              <input
+                value={projectForm.name}
+                onChange={(e) => setProjectForm((f) => ({ ...f, name: e.target.value }))}
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  outline: "none",
+                  marginBottom: 14,
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
+                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+              />
+
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Description
+              </label>
+              <textarea
+                value={projectForm.description}
+                onChange={(e) => setProjectForm((f) => ({ ...f, description: e.target.value }))}
+                rows={3}
+                placeholder="Optional description…"
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  outline: "none",
+                  resize: "vertical",
+                  marginBottom: 14,
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
+                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+              />
+
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Status
+              </label>
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                {["active", "inactive"].map((s) => {
+                  const isSelected = (projectForm.is_active ? "active" : "inactive") === s;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setProjectForm((f) => ({ ...f, is_active: s === "active" }))}
+                      style={{
+                        padding: "6px 14px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        textTransform: "capitalize",
+                        border: `1.5px solid ${isSelected ? STATUS_COLORS[s] : "#E5E7EB"}`,
+                        borderRadius: 999,
+                        background: isSelected ? STATUS_BG[s] : "#fff",
+                        color: isSelected ? STATUS_COLORS[s] : "#6B7280",
+                        cursor: "pointer",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {s}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {projectFormError && (
+                <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
+                  {projectFormError}
+                </p>
+              )}
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setShowEditProject(false)}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    background: "#fff",
+                    cursor: "pointer",
+                    color: "#374151",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() =>
+                    updateProjectMutation.mutate({
+                      name: projectForm.name,
+                      description: projectForm.description,
+                      is_active: projectForm.is_active,
+                    })
+                  }
+                  disabled={updateProjectMutation.isPending}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: "#2563EB",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    opacity: updateProjectMutation.isPending ? 0.7 : 1,
+                  }}
+                >
+                  {updateProjectMutation.isPending ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Environments Modal */}
+        {showEnvModal && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 50,
+            }}
+          >
+            <div
+              style={{
+                background: "#fff",
+                border: "1px solid #E5E7EB",
+                borderRadius: 12,
+                padding: 28,
+                width: 400,
+                boxShadow: "0 10px 40px rgba(0,0,0,0.12)",
+              }}
+            >
+              <h2 style={{ margin: "0 0 20px", fontSize: 16, fontWeight: 600, color: "#111827" }}>
+                Edit Environments
+              </h2>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+                {ENV_OPTIONS.map((env) => {
+                  const checked = envForm.includes(env);
+                  return (
+                    <label
+                      key={env}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "8px 12px",
+                        border: "1px solid #E5E7EB",
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        fontSize: 13,
+                        color: "#374151",
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleEnv(env)}
+                      />
+                      {env}
+                    </label>
+                  );
+                })}
+              </div>
+
+              {envError && (
+                <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
+                  {envError}
+                </p>
+              )}
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setShowEnvModal(false)}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    background: "#fff",
+                    cursor: "pointer",
+                    color: "#374151",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => updateProjectMutation.mutate({ environments: envForm })}
+                  disabled={updateProjectMutation.isPending}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: "#2563EB",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    opacity: updateProjectMutation.isPending ? 0.7 : 1,
+                  }}
+                >
+                  {updateProjectMutation.isPending ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Suite Modal */}
+        {editingSuite && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 50,
+            }}
+          >
+            <div
+              style={{
+                background: "#fff",
+                border: "1px solid #E5E7EB",
+                borderRadius: 12,
+                padding: 28,
+                width: 440,
+                boxShadow: "0 10px 40px rgba(0,0,0,0.12)",
+              }}
+            >
+              <h2 style={{ margin: "0 0 20px", fontSize: 16, fontWeight: 600, color: "#111827" }}>
+                Edit Test Suite
+              </h2>
+
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Name *
+              </label>
+              <input
+                value={suiteEditForm.name}
+                onChange={(e) => setSuiteEditForm((f) => ({ ...f, name: e.target.value }))}
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  outline: "none",
+                  marginBottom: 14,
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
+                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+              />
+
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Suite Type *
+              </label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                {["smoke", "regression", "sanity", "exploratory", "full"].map((t) => {
+                  const isSelected = suiteEditForm.suite_type === t;
+                  const colors = SUITE_TYPE_COLORS[t];
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setSuiteEditForm((f) => ({ ...f, suite_type: t }))}
+                      style={{
+                        padding: "6px 14px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        textTransform: "capitalize",
+                        border: `1.5px solid ${isSelected ? colors.color : colors.border}`,
+                        borderRadius: 999,
+                        background: isSelected ? colors.bg : "#fff",
+                        color: isSelected ? colors.color : "#6B7280",
+                        cursor: "pointer",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Description
+              </label>
+              <textarea
+                value={suiteEditForm.description}
+                onChange={(e) => setSuiteEditForm((f) => ({ ...f, description: e.target.value }))}
+                rows={3}
+                placeholder="Optional description…"
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  outline: "none",
+                  resize: "vertical",
+                  marginBottom: 14,
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
+                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+              />
+
+              {suiteEditError && (
+                <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
+                  {suiteEditError}
+                </p>
+              )}
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setEditingSuite(null)}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    background: "#fff",
+                    cursor: "pointer",
+                    color: "#374151",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() =>
+                    updateSuiteMutation.mutate({
+                      suiteId: editingSuite.id,
+                      body: {
+                        name: suiteEditForm.name,
+                        suite_type: suiteEditForm.suite_type,
+                        description: suiteEditForm.description,
+                      },
+                    })
+                  }
+                  disabled={updateSuiteMutation.isPending}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: "#2563EB",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    opacity: updateSuiteMutation.isPending ? 0.7 : 1,
+                  }}
+                >
+                  {updateSuiteMutation.isPending ? "Saving…" : "Save"}
                 </button>
               </div>
             </div>

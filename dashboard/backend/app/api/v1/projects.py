@@ -67,6 +67,8 @@ def create_project(
             )
 
         project = Project(name=payload.name.strip(), description=payload.description)
+        if payload.environments is not None:
+            project.environments = payload.environments
         db.add(project)
         db.commit()
         db.refresh(project)
@@ -87,6 +89,7 @@ def create_project(
             name=project.name,
             description=project.description,
             is_active=project.is_active,
+            environments=project.environments,
             suite_count=0,
             created_at=project.created_at,
             updated_at=project.updated_at,
@@ -152,6 +155,7 @@ def list_projects(
                 name=p.name,
                 description=p.description,
                 is_active=p.is_active,
+                environments=p.environments,
                 suite_count=sc or 0,
                 created_at=p.created_at,
                 updated_at=p.updated_at,
@@ -206,6 +210,7 @@ def get_project(
             name=project.name,
             description=project.description,
             is_active=project.is_active,
+            environments=project.environments,
             suite_count=suite_count or 0,
             created_at=project.created_at,
             updated_at=project.updated_at,
@@ -214,6 +219,7 @@ def get_project(
                     id=s.id,
                     name=s.name,
                     suite_type=s.suite_type.value if s.suite_type else None,
+                    description=s.description,
                     is_active=s.is_active,
                     created_at=s.created_at,
                 )
@@ -247,7 +253,12 @@ def update_project(
                 detail="Project not found",
             )
 
-        if payload.name is None and payload.description is None and payload.is_active is None:
+        if (
+            payload.name is None
+            and payload.description is None
+            and payload.is_active is None
+            and payload.environments is None
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="No fields to update",
@@ -274,6 +285,9 @@ def update_project(
         if payload.is_active is not None:
             project.is_active = payload.is_active
 
+        if payload.environments is not None:
+            project.environments = payload.environments
+
         db.commit()
         db.refresh(project)
 
@@ -299,6 +313,7 @@ def update_project(
             name=project.name,
             description=project.description,
             is_active=project.is_active,
+            environments=project.environments,
             suite_count=suite_count or 0,
             created_at=project.created_at,
             updated_at=project.updated_at,

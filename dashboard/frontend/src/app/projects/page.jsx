@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
 import PageContainer from "../../components/PageContainer";
-import { apiGet, apiPost } from "../../utils/apiClient";
+import { apiGet, apiPost, apiPatch } from "../../utils/apiClient";
+import { getStoredUser } from "../../utils/authStore";
 
 const STATUS_COLORS = {
   active: "#16A34A",
@@ -18,16 +19,55 @@ const STATUS_BG = {
 
 export default function ProjectsPage() {
   const qc = useQueryClient();
+  const user = typeof window !== "undefined" ? getStoredUser() : null;
+  const canWrite = user && ["admin", "qa_lead"].includes(user.role);
 
   const [search, setSearch] = useState("");
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryResult, setDiscoveryResult] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [editingProject, setEditingProject] = useState(null);
+  const [editForm, setEditForm] = useState({ name: "", description: "", is_active: true });
+  const [editError, setEditError] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["projects", search],
     queryFn: () =>
       apiGet(`/api/projects?search=${encodeURIComponent(search)}&limit=50`),
   });
+
+  const updateProjectMutation = useMutation({
+    mutationFn: ({ id, body }) => apiPatch(`/api/projects/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries(["projects"]);
+      setEditingProject(null);
+      setEditError("");
+    },
+    onError: (e) => setEditError(e.message),
+  });
+
+  function openEditModal(p) {
+    setEditingProject(p);
+    setEditForm({
+      name: p.name,
+      description: p.description || "",
+      is_active: p.is_active,
+    });
+    setEditError("");
+    setOpenMenuId(null);
+  }
+
+  function saveEdit() {
+    if (!editingProject) return;
+    updateProjectMutation.mutate({
+      id: editingProject.id,
+      body: {
+        name: editForm.name,
+        description: editForm.description,
+        is_active: editForm.is_active,
+      },
+    });
+  }
 
   /* ── Discover projects from automation folder ──────────────────────── */
   async function handleDiscoverProjects() {
@@ -170,20 +210,20 @@ export default function ProjectsPage() {
             background: "#fff",
             border: "1px solid #E5E7EB",
             borderRadius: 12,
-            overflow: "hidden",
+            overflow: openMenuId ? "visible" : "hidden",
           }}
         >
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "2fr 3fr minmax(80px, 0.8fr) 80px 80px",
+              gridTemplateColumns: "2fr 3fr minmax(80px, 0.8fr) 80px 80px 40px",
               gap: 16,
               padding: "10px 32px",
               borderBottom: "1px solid #E5E7EB",
               background: "#F9FAFB",
             }}
           >
-            {["Name", "Description", "Status", "Suites", "Defects"].map((h) => (
+            {["Name", "Description", "Status", "Suites", "Defects", ""].map((h) => (
               <span
                 key={h}
                 style={{
@@ -227,7 +267,7 @@ export default function ProjectsPage() {
                 key={p.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "2fr 3fr minmax(80px, 0.8fr) 80px 80px",
+                  gridTemplateColumns: "2fr 3fr minmax(80px, 0.8fr) 80px 80px 40px",
               gap: 16,
                   padding: "14px 32px",
                   borderBottom:
@@ -319,10 +359,240 @@ export default function ProjectsPage() {
                 >
                   {p.open_defects || 0}
                 </span>
+                {canWrite ? (
+                  <div
+                    style={{ position: "relative" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() =>
+                        setOpenMenuId(openMenuId === p.id ? null : p.id)
+                      }
+                      aria-label="Project actions"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: openMenuId === p.id ? "#F3F4F6" : "transparent",
+                        border: "none",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        color: "#6B7280",
+                      }}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.8" />
+                        <circle cx="12" cy="12" r="1.8" />
+                        <circle cx="12" cy="19" r="1.8" />
+                      </svg>
+                    </button>
+                    {openMenuId === p.id && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          right: 0,
+                          top: "calc(100% + 4px)",
+                          background: "#fff",
+                          border: "1px solid #E5E7EB",
+                          borderRadius: 8,
+                          boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+                          zIndex: 20,
+                          minWidth: 130,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <button
+                          onClick={() => openEditModal(p)}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 14px",
+                            fontSize: 13,
+                            color: "#374151",
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <span />
+                )}
               </div>
             ))
           )}
         </div>
+
+        {/* Click-outside overlay to close the row action menu */}
+        {openMenuId && (
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 10 }}
+            onClick={() => setOpenMenuId(null)}
+          />
+        )}
+
+        {/* Edit Project Modal */}
+        {editingProject && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 50,
+            }}
+          >
+            <div
+              style={{
+                background: "#fff",
+                border: "1px solid #E5E7EB",
+                borderRadius: 12,
+                padding: 28,
+                width: 440,
+                boxShadow: "0 10px 40px rgba(0,0,0,0.12)",
+              }}
+            >
+              <h2
+                style={{
+                  margin: "0 0 20px",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  color: "#111827",
+                }}
+              >
+                Edit Project
+              </h2>
+
+              {/* Name */}
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Name *
+              </label>
+              <input
+                value={editForm.name}
+                onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  outline: "none",
+                  marginBottom: 14,
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
+                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+              />
+
+              {/* Description */}
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Description
+              </label>
+              <textarea
+                value={editForm.description}
+                onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                rows={3}
+                placeholder="Optional description…"
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  outline: "none",
+                  resize: "vertical",
+                  marginBottom: 14,
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
+                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+              />
+
+              {/* Status */}
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Status
+              </label>
+              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                {["active", "inactive"].map((s) => {
+                  const isSelected = (editForm.is_active ? "active" : "inactive") === s;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setEditForm((f) => ({ ...f, is_active: s === "active" }))}
+                      style={{
+                        padding: "6px 14px",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        textTransform: "capitalize",
+                        border: `1.5px solid ${isSelected ? STATUS_COLORS[s] : "#E5E7EB"}`,
+                        borderRadius: 999,
+                        background: isSelected ? STATUS_BG[s] : "#fff",
+                        color: isSelected ? STATUS_COLORS[s] : "#6B7280",
+                        cursor: "pointer",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {s}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {editError && (
+                <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
+                  {editError}
+                </p>
+              )}
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setEditingProject(null)}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    background: "#fff",
+                    cursor: "pointer",
+                    color: "#374151",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveEdit}
+                  disabled={updateProjectMutation.isPending}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: "#2563EB",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    opacity: updateProjectMutation.isPending ? 0.7 : 1,
+                  }}
+                >
+                  {updateProjectMutation.isPending ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </PageContainer>
     </AppShell>

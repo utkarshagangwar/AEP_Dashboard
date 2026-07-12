@@ -11,6 +11,7 @@ class ProjectCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=255)
     description: Optional[str] = None
+    environments: Optional[list[str]] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -19,6 +20,7 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     is_active: Optional[bool] = None
+    environments: Optional[list[str]] = None
 
 
 class ProjectResponse(BaseModel):
@@ -28,6 +30,7 @@ class ProjectResponse(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool
+    environments: Optional[list[str]] = None
     suite_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -57,6 +60,7 @@ class SuiteSummary(BaseModel):
     id: UUID
     name: str
     suite_type: Optional[str] = None
+    description: Optional[str] = None
     is_active: bool
     created_at: datetime
 

@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,9 @@ from app.schemas.ai_runs import (
     AIRunResponse,
     AISkillListResponse,
     AISkillResponse,
+    AISkillUpdate,
+    BulkAssignProjectRequest,
+    BulkSkillIds,
     CredentialProfileCreate,
     CredentialProfileResponse,
     OrchestratorDecisionResponse,
@@ -541,31 +544,161 @@ def _cancel_orchestrator_run(
 
 # ── Skills ───────────────────────────────────────────────────────────────────
 
+def _project_names(db: Session, project_ids: set) -> dict:
+    """id -> name for a set of project ids, one query regardless of set size."""
+    project_ids = {pid for pid in project_ids if pid is not None}
+    if not project_ids:
+        return {}
+    from app.models.project import Project
+
+    rows = db.query(Project.id, Project.name).filter(Project.id.in_(project_ids)).all()
+    return {pid: name for pid, name in rows}
+
+
+def _skill_response(skill: AISkill, project_names: dict) -> AISkillResponse:
+    resp = AISkillResponse.model_validate(skill)
+    resp.project_name = project_names.get(skill.project_id)
+    return resp
+
+
+# Name sorts case-insensitively (func.lower) so "apple" and "Banana" don't
+# sort purely by ASCII case; id is a secondary key so paginated ordering is
+# stable even when many rows share a sort value (e.g. identical timestamps).
+_SKILL_SORT_COLUMNS = {
+    "name": func.lower(AISkill.name),
+    "created_at": AISkill.created_at,
+    "updated_at": AISkill.updated_at,
+}
+
+
 @router.get("/skills", response_model=AISkillListResponse)
 def list_skills(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
+    # UUID string to scope to one project, "none" to scope to unassigned
+    # skills, or omitted for every project — the multi-project categorization
+    # that keeps a skill for Project A from being confused with Project B's.
+    project_id: str | None = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    sort_dir: str = Query(default="desc"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return paginated list of saved skills (replayable action recordings)."""
+    """Return paginated list of saved skills, optionally scoped to a project."""
     try:
-        total = db.query(AISkill).count()
+        if sort_by not in _SKILL_SORT_COLUMNS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"sort_by must be one of: {', '.join(_SKILL_SORT_COLUMNS)}",
+            )
+        if sort_dir not in ("asc", "desc"):
+            raise HTTPException(status_code=400, detail="sort_dir must be 'asc' or 'desc'")
+
+        q = db.query(AISkill)
+        if project_id == "none":
+            q = q.filter(AISkill.project_id.is_(None))
+        elif project_id:
+            try:
+                q = q.filter(AISkill.project_id == UUID(project_id))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="project_id must be a UUID or 'none'")
+
+        total = q.count()
+        column = _SKILL_SORT_COLUMNS[sort_by]
+        order = column.asc() if sort_dir == "asc" else column.desc()
         skills = (
-            db.query(AISkill)
-            .order_by(AISkill.updated_at.desc())
+            q.order_by(order, AISkill.id)
             .offset((page - 1) * limit)
             .limit(limit)
             .all()
         )
+        names = _project_names(db, {s.project_id for s in skills})
         return AISkillListResponse(
-            data=[AISkillResponse.model_validate(s) for s in skills],
+            data=[_skill_response(s, names) for s in skills],
             total=total,
             page=page,
             limit=limit,
         )
+    except HTTPException:
+        raise
     except SQLAlchemyError as exc:
         logger.error("List skills DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/skills/bulk-delete", status_code=status.HTTP_200_OK)
+def bulk_delete_skills(
+    payload: BulkSkillIds,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("vibe_testing")),
+):
+    """Delete every skill in skill_ids that exists, in one transaction.
+    IDs that don't match any row are silently ignored (already gone is not
+    an error for a bulk operation) — the response count tells the caller
+    how many rows were actually removed."""
+    try:
+        skills = db.query(AISkill).filter(AISkill.id.in_(payload.skill_ids)).all()
+        deleted_ids = [str(s.id) for s in skills]
+        for skill in skills:
+            db.delete(skill)
+        db.commit()
+
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="bulk_delete_ai_skills",
+            resource_type="ai_skill",
+            details={"skill_ids": deleted_ids, "count": len(deleted_ids)},
+            ip_address=_client_ip(request),
+        )
+        logger.info("Bulk-deleted %d skill(s) by %s", len(deleted_ids), current_user.id)
+        return {"deleted": len(deleted_ids)}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("Bulk delete skills DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/skills/bulk-assign-project", status_code=status.HTTP_200_OK)
+def bulk_assign_project(
+    payload: BulkAssignProjectRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("vibe_testing")),
+):
+    """Reassign every skill in skill_ids to project_id (or unassign, if
+    project_id is null) in one transaction. Marks each as manually_edited,
+    same as the single-skill PATCH path, so a later SOW/video re-analysis of
+    the source checkpoint won't silently move it back."""
+    try:
+        skills = db.query(AISkill).filter(AISkill.id.in_(payload.skill_ids)).all()
+        updated_ids = [str(s.id) for s in skills]
+        for skill in skills:
+            skill.project_id = payload.project_id
+            skill.manually_edited = True
+        db.commit()
+
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="bulk_assign_ai_skills_project",
+            resource_type="ai_skill",
+            details={
+                "skill_ids": updated_ids,
+                "count": len(updated_ids),
+                "project_id": str(payload.project_id) if payload.project_id else None,
+            },
+            ip_address=_client_ip(request),
+        )
+        logger.info(
+            "Bulk-assigned %d skill(s) to project %s by %s",
+            len(updated_ids), payload.project_id, current_user.id,
+        )
+        return {"updated": len(updated_ids)}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("Bulk assign skills DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
@@ -578,7 +711,79 @@ def get_skill(
     skill = db.get(AISkill, skill_id)
     if skill is None:
         raise HTTPException(status_code=404, detail="Skill not found")
-    return AISkillResponse.model_validate(skill)
+    return _skill_response(skill, _project_names(db, {skill.project_id}))
+
+
+@router.patch("/skills/{skill_id}", response_model=AISkillResponse)
+def update_skill(
+    skill_id: UUID,
+    payload: AISkillUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("vibe_testing")),
+):
+    """Manually view/edit a skill's name, goal text, or project assignment.
+
+    Editing the goal on a skill that has a recorded action history clears
+    that history — the recording no longer matches the edited instructions,
+    so the next run re-plans with AI and records fresh actions instead of
+    silently replaying steps that don't match what's now written down.
+    Sets manually_edited=True so a later SOW/video re-analysis of this
+    skill's source checkpoint won't overwrite the edit (see skill_store)."""
+    try:
+        skill = db.get(AISkill, skill_id)
+        if skill is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+
+        fields = payload.model_dump(exclude_unset=True)
+        if not fields:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        if "name" in fields:
+            name = (fields["name"] or "").strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="Name cannot be empty")
+            skill.name = name[:300]
+
+        goal_changed = False
+        if "goal" in fields:
+            goal = (fields["goal"] or "").strip()
+            if not goal:
+                raise HTTPException(status_code=400, detail="Goal cannot be empty")
+            goal_changed = goal != skill.goal
+            if goal_changed:
+                from app.services.skill_store import compute_goal_hash
+                skill.goal = goal
+                skill.goal_hash = compute_goal_hash(goal)
+
+        if "project_id" in fields:
+            skill.project_id = fields["project_id"]
+
+        if goal_changed and skill.history_json is not None:
+            skill.history_json = None
+            skill.step_count = 0
+
+        skill.manually_edited = True
+        db.commit()
+        db.refresh(skill)
+
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="update_ai_skill",
+            resource_type="ai_skill",
+            resource_id=str(skill_id),
+            details={"fields": list(fields.keys())},
+            ip_address=_client_ip(request),
+        )
+        logger.info("Skill %s updated by %s (fields=%s)", skill_id, current_user.id, list(fields.keys()))
+        return _skill_response(skill, _project_names(db, {skill.project_id}))
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("Update skill DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.delete("/skills/{skill_id}", status_code=status.HTTP_200_OK)
@@ -620,18 +825,20 @@ def replay_skill(
         require_permission("vibe_testing")
     ),
 ):
-    """Replay a saved skill's recorded actions without LLM planning.
+    """Run a saved skill.
 
-    Creates a normal AI test run (run_type="skill_replay") so the frontend
-    can reuse the exact same live-stream and result views as goal runs."""
+    If it has a recorded action history, replay it deterministically (no LLM
+    planning) — run_type="skill_replay". Otherwise it's a prompt-only skill
+    (extracted from a SOW/video, never actually run yet): start a normal
+    AI-planned run using its instruction text as the goal — run_type="ai".
+    A pass there naturally upgrades this same row with a real recording via
+    the existing goal-based auto-save (matched by goal_hash), no special
+    casing needed. Either way this creates a normal AI test run so the
+    frontend can reuse the exact same live-stream and result views."""
     try:
         skill = db.get(AISkill, skill_id)
         if skill is None:
             raise HTTPException(status_code=404, detail="Skill not found")
-        if not skill.history_json:
-            raise HTTPException(
-                status_code=409, detail="Skill has no recorded actions to replay"
-            )
 
         profile_id = payload.credential_profile_id or skill.credential_profile_id
         profile_name = None
@@ -643,25 +850,44 @@ def replay_skill(
                 )
             profile_name = profile.name
 
-        run = AITestRun(
-            goal=skill.goal,
-            environment=skill.environment,
-            project_id=skill.project_id,
-            credential_profile_id=profile_id,
-            credential_profile_name=profile_name,
-            status=AIRunStatus.pending,
-            run_type="skill_replay",
-            skill_id=skill.id,
-            created_by=current_user.id,
-        )
-        db.add(run)
-        db.commit()
-        db.refresh(run)
+        if skill.history_json:
+            run = AITestRun(
+                goal=skill.goal,
+                environment=skill.environment,
+                project_id=skill.project_id,
+                credential_profile_id=profile_id,
+                credential_profile_name=profile_name,
+                status=AIRunStatus.pending,
+                run_type="skill_replay",
+                skill_id=skill.id,
+                created_by=current_user.id,
+            )
+            db.add(run)
+            db.commit()
+            db.refresh(run)
 
-        from app.workers.tasks.ai_execution import replay_skill_task
-        replay_skill_task.delay(
-            str(run.id), str(skill.id), payload.allow_ai_fallback
-        )
+            from app.workers.tasks.ai_execution import replay_skill_task
+            replay_skill_task.delay(
+                str(run.id), str(skill.id), payload.allow_ai_fallback
+            )
+        else:
+            run = AITestRun(
+                goal=skill.goal,
+                environment=skill.environment,
+                project_id=skill.project_id,
+                credential_profile_id=profile_id,
+                credential_profile_name=profile_name,
+                status=AIRunStatus.pending,
+                run_type="ai",
+                skill_id=skill.id,
+                created_by=current_user.id,
+            )
+            db.add(run)
+            db.commit()
+            db.refresh(run)
+
+            from app.workers.tasks.ai_execution import run_ai_test_task
+            run_ai_test_task.delay(str(run.id))
 
         write_audit_log(
             db,

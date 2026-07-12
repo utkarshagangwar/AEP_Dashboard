@@ -30,28 +30,35 @@ def list_audit_logs(
 ):
     """Return paginated audit log entries with optional filters. Admin only."""
     try:
+        # Named bind parameters (SQLAlchemy text() requires :name style, not
+        # raw $1/$2 positional placeholders — those are asyncpg/libpq-native
+        # syntax that text() doesn't recognize as binds, so every call here
+        # used to fail at the database layer, filtered or not, because the
+        # LIMIT/OFFSET placeholders below were always present).
         where_clauses = ["1=1"]
-        params: list = []
+        params: dict = {}
 
         if user_id:
-            params.append(str(user_id))
-            where_clauses.append(f"al.user_id = ${len(params)}::uuid")
+            where_clauses.append("al.user_id = CAST(:user_id AS uuid)")
+            params["user_id"] = str(user_id)
 
         if action:
-            params.append(action)
-            where_clauses.append(f"al.action = ${len(params)}")
+            where_clauses.append("al.action = :action")
+            params["action"] = action
 
         if resource_type:
-            params.append(resource_type)
-            where_clauses.append(f"al.resource_type = ${len(params)}")
+            where_clauses.append("al.resource_type = :resource_type")
+            params["resource_type"] = resource_type
 
         if from_date:
-            params.append(from_date)
-            where_clauses.append(f"al.created_at >= ${len(params)}::date")
+            where_clauses.append("al.created_at >= CAST(:from_date AS date)")
+            params["from_date"] = from_date
 
         if to_date:
-            params.append(to_date)
-            where_clauses.append(f"al.created_at <= (${len(params)}::date + INTERVAL '1 day')")
+            where_clauses.append(
+                "al.created_at <= (CAST(:to_date AS date) + INTERVAL '1 day')"
+            )
+            params["to_date"] = to_date
 
         where_sql = " AND ".join(where_clauses)
 
@@ -63,7 +70,6 @@ def list_audit_logs(
         total = int(count_row[0] or 0)
 
         # Fetch paginated entries with joined user info
-        params.extend([limit, offset])
         rows = db.execute(
             text(
                 f"""
@@ -80,10 +86,10 @@ def list_audit_logs(
                 LEFT JOIN users u ON al.user_id = u.id
                 WHERE {where_sql}
                 ORDER BY al.created_at DESC
-                LIMIT ${len(params) - 1} OFFSET ${len(params)}
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            params,
+            {**params, "limit": limit, "offset": offset},
         ).fetchall()
 
         data = [

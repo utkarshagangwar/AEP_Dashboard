@@ -1,9 +1,11 @@
 "use client";
 import { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -83,42 +85,16 @@ export default function LoginPage() {
             style={{
               display: "inline-flex",
               alignItems: "center",
-              gap: 10,
               marginBottom: 8,
             }}
           >
-            <div
-              style={{
-                width: 32,
-                height: 32,
-                background: "#2563EB",
-                borderRadius: 8,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="white"
-                strokeWidth="2.5"
-              >
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-              </svg>
-            </div>
-            <span
-              style={{
-                fontSize: 18,
-                fontWeight: 600,
-                color: "#111827",
-                letterSpacing: "-0.02em",
-              }}
-            >
-              AEP
-            </span>
+            <img
+              src="/spider-logo.png"
+              alt="AEP logo"
+              width={84}
+              height={53}
+              style={{ flexShrink: 0, objectFit: "contain" }}
+            />
           </div>
           <h1
             style={{
@@ -129,7 +105,7 @@ export default function LoginPage() {
               letterSpacing: "-0.02em",
             }}
           >
-            Automation Execution Platform
+            Automation Execution Platform (AEP)
           </h1>
           <p style={{ fontSize: 13, color: "#6B7280", marginTop: 6 }}>
             Sign in to your workspace
@@ -196,30 +172,54 @@ export default function LoginPage() {
               >
                 Password
               </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleLogin();
-                }}
-                placeholder="••••••••"
-                autoComplete="current-password"
-                style={{
-                  width: "100%",
-                  padding: "9px 12px",
-                  fontSize: 14,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  outline: "none",
-                  color: "#111827",
-                  background: "#fff",
-                  boxSizing: "border-box",
-                  transition: "border-color 0.15s",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
-                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
-              />
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleLogin();
+                  }}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  style={{
+                    width: "100%",
+                    padding: "9px 40px 9px 12px",
+                    fontSize: 14,
+                    border: "1px solid #E5E7EB",
+                    borderRadius: 8,
+                    outline: "none",
+                    color: "#111827",
+                    background: "#fff",
+                    boxSizing: "border-box",
+                    transition: "border-color 0.15s",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
+                  onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  tabIndex={-1}
+                  style={{
+                    position: "absolute",
+                    right: 10,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "none",
+                    border: "none",
+                    padding: 4,
+                    cursor: "pointer",
+                    color: "#6B7280",
+                  }}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
 
             {error && (

@@ -5,31 +5,104 @@ import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
 import { apiGet } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+const ACTION_OPTIONS = [
+  "login",
+  "logout",
+  "create_user",
+  "update_user",
+  "create_project",
+  "update_project",
+  "delete_project",
+  "create_test_suite",
+  "update_test_suite",
+  "delete_test_suite",
+  "trigger_run",
+  "cancel_run",
+  "defect_created",
+  "defect_updated",
+];
 
 const ACTION_COLORS = {
-  LOGIN: "#16A34A",
-  LOGOUT: "#6B7280",
-  CREATE: "#2563EB",
-  UPDATE: "#D97706",
-  DELETE: "#DC2626",
-  TRIGGER: "#7C3AED",
-  SEED: "#0891B2",
+  login: "bg-blue-100 text-blue-700 border-blue-200",
+  logout: "bg-gray-100 text-gray-600 border-gray-200",
+  create_user: "bg-green-100 text-green-700 border-green-200",
+  update_user: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  create_project: "bg-green-100 text-green-700 border-green-200",
+  update_project: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  delete_project: "bg-red-100 text-red-700 border-red-200",
+  create_test_suite: "bg-green-100 text-green-700 border-green-200",
+  update_test_suite: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  delete_test_suite: "bg-red-100 text-red-700 border-red-200",
+  trigger_run: "bg-purple-100 text-purple-700 border-purple-200",
+  cancel_run: "bg-red-100 text-red-700 border-red-200",
+  defect_created: "bg-orange-100 text-orange-700 border-orange-200",
+  defect_updated: "bg-yellow-100 text-yellow-700 border-yellow-200",
 };
-const ACTION_BG = {
-  LOGIN: "#DCFCE7",
-  LOGOUT: "#F3F4F6",
-  CREATE: "#DBEAFE",
-  UPDATE: "#FEF3C7",
-  DELETE: "#FEE2E2",
-  TRIGGER: "#EDE9FE",
-  SEED: "#CFFAFE",
-};
+
+const NO_FILTER = "__all__";
+
+function formatDateTime(dateStr) {
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+function AuditTableSkeleton({ rows = 10 }) {
+  return (
+    <div className="space-y-3 p-5">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex items-center gap-4">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-4 w-12" />
+          <Skeleton className="h-4 w-20" />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function AuditLogsPage() {
   const [user, setUser] = useState(null);
   const [actionFilter, setActionFilter] = useState("");
-  const [resourceFilter, setResourceFilter] = useState("");
+  const [userFilter, setUserFilter] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [page, setPage] = useState(1);
+  const limit = 50;
 
   useEffect(() => {
     // Middleware handles auth + role checks; this is a fallback
@@ -37,344 +110,232 @@ export default function AuditLogsPage() {
     setUser(stored);
   }, []);
 
-  const params = new URLSearchParams({ page, limit: 50 });
+  const params = new URLSearchParams();
   if (actionFilter) params.set("action", actionFilter);
-  if (resourceFilter) params.set("resource_type", resourceFilter);
+  if (userFilter) params.set("user_id", userFilter);
+  if (fromDate) params.set("from_date", fromDate);
+  if (toDate) params.set("to_date", toDate);
+  params.set("limit", String(limit));
+  params.set("offset", String((page - 1) * limit));
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["audit-logs", actionFilter, resourceFilter, page],
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: ["audit-logs", actionFilter, userFilter, fromDate, toDate, page],
     queryFn: () => apiGet(`/api/audit-logs?${params.toString()}`),
+    staleTime: 1000 * 30,
   });
 
-  const logs = data?.data || [];
   const total = data?.total || 0;
+  const logs = data?.data || [];
+  const totalPages = Math.max(1, Math.ceil(total / limit));
 
   if (!user) return null;
 
   return (
     <AppShell noPadding>
       <PageContainer>
-        <div style={{ marginBottom: 24 }}>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 22,
-              fontWeight: 600,
-              color: "#111827",
-              letterSpacing: "-0.02em",
-            }}
-          >
-            Audit Logs
-          </h1>
-          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6B7280" }}>
-            All platform activity — {total.toLocaleString()} total events
-          </p>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            marginBottom: 20,
-            flexWrap: "wrap",
-          }}
-        >
-          <select
-            value={actionFilter}
-            onChange={(e) => {
-              setActionFilter(e.target.value);
-              setPage(1);
-            }}
-            style={{
-              padding: "7px 12px",
-              fontSize: 12,
-              border: "1px solid #E5E7EB",
-              borderRadius: 8,
-              outline: "none",
-              color: "#374151",
-              background: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            <option value="">All Actions</option>
-            {[
-              "LOGIN",
-              "LOGOUT",
-              "CREATE",
-              "UPDATE",
-              "DELETE",
-              "TRIGGER",
-              "SEED",
-            ].map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-          <select
-            value={resourceFilter}
-            onChange={(e) => {
-              setResourceFilter(e.target.value);
-              setPage(1);
-            }}
-            style={{
-              padding: "7px 12px",
-              fontSize: 12,
-              border: "1px solid #E5E7EB",
-              borderRadius: 8,
-              outline: "none",
-              color: "#374151",
-              background: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            <option value="">All Resources</option>
-            {[
-              "user",
-              "project",
-              "test_suite",
-              "test_run",
-              "test_result",
-              "defect",
-            ].map((r) => (
-              <option key={r} value={r}>
-                {r.replace("_", " ")}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {error && (
-          <div
-            style={{
-              background: "#FEF2F2",
-              border: "1px solid #FECACA",
-              borderRadius: 8,
-              padding: "12px 16px",
-              marginBottom: 20,
-            }}
-          >
-            <p style={{ margin: 0, fontSize: 13, color: "#DC2626" }}>
-              {error.message}
-            </p>
-          </div>
-        )}
-
-        <div
-          style={{
-            background: "#fff",
-            border: "1px solid #E5E7EB",
-            borderRadius: 12,
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "140px 1fr 1fr 1fr 160px",
-              padding: "10px 20px",
-              borderBottom: "1px solid #E5E7EB",
-              background: "#F9FAFB",
-            }}
-          >
-            {["Action", "User", "Resource", "Details", "Timestamp"].map((h) => (
-              <span
-                key={h}
-                style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: "#6B7280",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                }}
-              >
-                {h}
-              </span>
-            ))}
+        <div className="max-w-[1400px] space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
+                Audit Logs
+              </h1>
+              <p className="text-sm text-gray-500 mt-1">
+                All platform activity — {total.toLocaleString()} total events
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              disabled={isFetching}
+            >
+              {isFetching ? "Refreshing…" : "Refresh"}
+            </Button>
           </div>
 
-          {isLoading ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: "center",
-                color: "#9CA3AF",
-                fontSize: 13,
-              }}
-            >
-              Loading…
-            </div>
-          ) : !logs.length ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: "center",
-                color: "#9CA3AF",
-                fontSize: 13,
-              }}
-            >
-              No audit logs found.
-            </div>
-          ) : (
-            logs.map((log, i) => (
-              <div
-                key={log.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "140px 1fr 1fr 1fr 160px",
-                  padding: "12px 20px",
-                  borderBottom:
-                    i < logs.length - 1 ? "1px solid #F3F4F6" : "none",
-                  alignItems: "center",
-                }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "#F9FAFB")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "transparent")
-                }
-              >
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    background: ACTION_BG[log.action] || "#F3F4F6",
-                    color: ACTION_COLORS[log.action] || "#6B7280",
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 999,
-                    padding: "2px 8px",
-                    fontSize: 10,
-                    fontWeight: 700,
-                    letterSpacing: "0.05em",
-                    width: "fit-content",
-                  }}
-                >
-                  {log.action}
-                </span>
-                <div>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: "#111827",
+          {/* Filters */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-semibold">Filters</CardTitle>
+            </CardHeader>
+            <Separator />
+            <CardContent className="pt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-500">Action</label>
+                  <Select
+                    value={actionFilter || NO_FILTER}
+                    onValueChange={(v) => {
+                      setActionFilter((v ?? "") === NO_FILTER ? "" : v ?? "");
+                      setPage(1);
                     }}
                   >
-                    {log.user_name || "System"}
-                  </p>
-                  <p style={{ margin: 0, fontSize: 11, color: "#9CA3AF" }}>
-                    {log.user_email || ""}
-                  </p>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="All actions">
+                        {(value) =>
+                          !value || value === NO_FILTER ? "All actions" : value
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NO_FILTER}>All actions</SelectItem>
+                      {ACTION_OPTIONS.map((a) => (
+                        <SelectItem key={a} value={a}>
+                          {a}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      background: "#F3F4F6",
-                      border: "1px solid #E5E7EB",
-                      borderRadius: 4,
-                      padding: "2px 6px",
-                      color: "#374151",
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-500">From Date</label>
+                  <Input
+                    type="date"
+                    value={fromDate}
+                    onChange={(e) => {
+                      setFromDate(e.target.value);
+                      setPage(1);
                     }}
-                  >
-                    {log.resource_type}
-                  </span>
-                  {log.resource_id && (
-                    <p
-                      style={{
-                        margin: "3px 0 0",
-                        fontSize: 10,
-                        color: "#9CA3AF",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {log.resource_id.slice(0, 8)}…
-                    </p>
-                  )}
+                    className="text-sm"
+                  />
                 </div>
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 11,
-                    color: "#6B7280",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {log.details
-                    ? Object.entries(log.details)
-                        .map(([k, v]) => `${k}: ${v}`)
-                        .join(" · ")
-                    : "—"}
-                </p>
-                <div>
-                  <p style={{ margin: 0, fontSize: 12, color: "#374151" }}>
-                    {new Date(log.created_at).toLocaleDateString("en-GB", {
-                      day: "numeric",
-                      month: "short",
-                      year: "2-digit",
-                    })}
-                  </p>
-                  <p style={{ margin: 0, fontSize: 11, color: "#9CA3AF" }}>
-                    {new Date(log.created_at).toLocaleTimeString("en-GB", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })}
-                  </p>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-500">To Date</label>
+                  <Input
+                    type="date"
+                    value={toDate}
+                    onChange={(e) => {
+                      setToDate(e.target.value);
+                      setPage(1);
+                    }}
+                    className="text-sm"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-500">User ID</label>
+                  <Input
+                    placeholder="UUID"
+                    value={userFilter}
+                    onChange={(e) => {
+                      setUserFilter(e.target.value);
+                      setPage(1);
+                    }}
+                    className="text-sm"
+                  />
                 </div>
               </div>
-            ))
-          )}
-        </div>
+            </CardContent>
+          </Card>
 
-        {/* Pagination */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginTop: 16,
-          }}
-        >
-          <p style={{ margin: 0, fontSize: 12, color: "#6B7280" }}>
-            Showing {Math.min((page - 1) * 50 + 1, total)}–
-            {Math.min(page * 50, total)} of {total}
-          </p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-              style={{
-                padding: "6px 12px",
-                fontSize: 12,
-                border: "1px solid #E5E7EB",
-                borderRadius: 6,
-                background: "#fff",
-                color: page === 1 ? "#D1D5DB" : "#374151",
-                cursor: page === 1 ? "not-allowed" : "pointer",
-              }}
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => setPage((p) => p + 1)}
-              disabled={page * 50 >= total}
-              style={{
-                padding: "6px 12px",
-                fontSize: 12,
-                border: "1px solid #E5E7EB",
-                borderRadius: 6,
-                background: "#fff",
-                color: page * 50 >= total ? "#D1D5DB" : "#374151",
-                cursor: page * 50 >= total ? "not-allowed" : "pointer",
-              }}
-            >
-              Next
-            </button>
-          </div>
+          {/* Error banner */}
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+              <p className="text-sm text-red-600 font-medium">
+                Failed to load audit logs: {error.message}
+              </p>
+            </div>
+          )}
+
+          {/* Audit log table */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-semibold">
+                Audit Entries {data ? `(${data.total} total)` : ""}
+              </CardTitle>
+            </CardHeader>
+            <Separator />
+            {isLoading ? (
+              <AuditTableSkeleton />
+            ) : !logs.length ? (
+              <div className="p-8 text-center text-sm text-gray-400">
+                No audit log entries found
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>User</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Entity Type</TableHead>
+                    <TableHead>Entity ID</TableHead>
+                    <TableHead>IP Address</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {logs.map((entry) => (
+                    <TableRow key={entry.id}>
+                      <TableCell className="text-xs text-gray-500 whitespace-nowrap">
+                        {formatDateTime(entry.created_at)}
+                      </TableCell>
+                      <TableCell>
+                        <div>
+                          <p className="text-xs font-medium text-gray-900">
+                            {entry.user_name || "—"}
+                          </p>
+                          <p className="text-[10px] text-gray-400">
+                            {entry.user_email || "—"}
+                          </p>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] h-4 px-1.5 ${
+                            ACTION_COLORS[entry.action] ||
+                            "bg-gray-100 text-gray-600 border-gray-200"
+                          }`}
+                        >
+                          {entry.action}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-gray-500">
+                        {entry.resource_type || "—"}
+                      </TableCell>
+                      <TableCell className="text-[10px] text-gray-400 font-mono max-w-[120px] truncate">
+                        {entry.resource_id || "—"}
+                      </TableCell>
+                      <TableCell className="text-xs text-gray-500 font-mono">
+                        {entry.ip_address || "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+
+            {/* Pagination */}
+            {total > limit && (
+              <div className="flex items-center justify-between px-5 py-3 border-t">
+                <p className="text-xs text-gray-500">
+                  Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of{" "}
+                  {total}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-xs text-gray-500">
+                    Page {page} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </Card>
         </div>
       </PageContainer>
     </AppShell>

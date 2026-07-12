@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps for psycopg2, Node.js (needed by robotframework-browser/Playwright)
+# System deps for psycopg2, Node.js (needed by robotframework-browser/Playwright),
+# ffmpeg (video_ingest.py extracts still frames from walkthrough videos for
+# precise on-screen text/branding reads — Gemini's native video understanding
+# under-attends small persistent UI chrome like a header logo, see README Changelog)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev curl gnupg && \
+    build-essential libpq-dev curl gnupg ffmpeg && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*

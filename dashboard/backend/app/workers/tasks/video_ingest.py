@@ -10,6 +10,48 @@ from app.workers.celery_app import celery_app
 logger = get_logger(__name__)
 
 
+def _save_functional_skills(session, artifact, checkpoints: list[dict]) -> None:
+    """Save every functional checkpoint from this digest directly as a
+    skill — a detailed prompt instruction, no live browser run required.
+    Visual checkpoints are skipped.
+
+    Each checkpoint is saved in its own SAVEPOINT (session.begin_nested()),
+    with an explicit flush to force any DB error (e.g. two checkpoints
+    slugifying to the same source_key) to surface right there instead of
+    silently poisoning the whole transaction at the final commit. A single
+    bad checkpoint is logged and skipped; digestion is never failed by a
+    skill-capture problem."""
+    from app.services.skill_store import upsert_prompt_skill
+
+    seen_titles: set[str] = set()
+    for i, cp in enumerate(checkpoints):
+        if cp.get("type") != "functional" or not cp.get("description"):
+            continue
+        title = (cp.get("title") or cp["description"][:80]).strip()
+        dedup_key = title.lower()
+        if dedup_key in seen_titles:
+            title = f"{title} ({i + 1})"
+        seen_titles.add(dedup_key)
+
+        try:
+            with session.begin_nested():
+                upsert_prompt_skill(
+                    session,
+                    title=title,
+                    instruction=cp["description"],
+                    source_type="video",
+                    artifact_id=artifact.id,
+                    project_id=artifact.project_id,
+                )
+                session.flush()
+        except Exception:
+            logger.exception(
+                "Video ingest: failed to save skill for checkpoint %r of artifact %s "
+                "— skipped, other checkpoints processed normally",
+                title, artifact.id,
+            )
+
+
 @celery_app.task(
     name="video_ingest.ingest_video_task",
     bind=True,
@@ -54,7 +96,9 @@ def ingest_video_task(self, artifact_id: str) -> None:
 
         try:
             checkpoints, model_used = video_ingest.digest_video(
-                artifact.storage_path, artifact.file_name
+                artifact.storage_path,
+                artifact.file_name,
+                artifact.platform_name or "the uploaded application",
             )
         except IngestError as exc:
             artifact.parse_status = ParseStatus.error
@@ -72,6 +116,7 @@ def ingest_video_task(self, artifact_id: str) -> None:
         )
         artifact.parse_status = ParseStatus.done
         artifact.parse_error = None
+        _save_functional_skills(session, artifact, checkpoints)
         session.commit()
         logger.info(
             "Video ingest: artifact %s digested into %d checkpoint(s)",

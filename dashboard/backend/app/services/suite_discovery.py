@@ -79,13 +79,26 @@ def discover_and_register_suites(db: Session) -> dict:
             project_name = item["project"]
             suite_name = item["suite"]
 
+            # Match by the immutable folder_name first — `name` is user-editable
+            # (see projects Edit UI) and must not be used to re-identify a project,
+            # or renaming it causes a duplicate to be registered here.
             project = (
                 db.query(Project)
-                .filter(Project.name == project_name, Project.is_active.is_(True))
+                .filter(Project.folder_name == project_name, Project.is_active.is_(True))
                 .first()
             )
             if project is None:
-                project = Project(name=project_name, is_active=True)
+                # Legacy row from before folder_name existed, or one created
+                # manually with a name matching this folder — adopt and backfill.
+                project = (
+                    db.query(Project)
+                    .filter(Project.name == project_name, Project.is_active.is_(True))
+                    .first()
+                )
+                if project is not None and project.folder_name is None:
+                    project.folder_name = project_name
+            if project is None:
+                project = Project(name=project_name, folder_name=project_name, is_active=True)
                 db.add(project)
                 db.flush()
 
@@ -93,16 +106,29 @@ def discover_and_register_suites(db: Session) -> dict:
                 db.query(TestSuite)
                 .filter(
                     TestSuite.project_id == project.id,
-                    TestSuite.name == suite_name,
+                    TestSuite.folder_name == suite_name,
                     TestSuite.is_active.is_(True),
                 )
                 .first()
             )
+            if existing_suite is None:
+                existing_suite = (
+                    db.query(TestSuite)
+                    .filter(
+                        TestSuite.project_id == project.id,
+                        TestSuite.name == suite_name,
+                        TestSuite.is_active.is_(True),
+                    )
+                    .first()
+                )
+                if existing_suite is not None and existing_suite.folder_name is None:
+                    existing_suite.folder_name = suite_name
 
             if existing_suite is None:
                 suite = TestSuite(
                     project_id=project.id,
                     name=suite_name,
+                    folder_name=suite_name,
                     suite_type=_infer_suite_type(suite_name),
                     is_active=True,
                 )

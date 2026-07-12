@@ -22,6 +22,24 @@ export interface RunEvent {
   is_failing_step: boolean;
 }
 
+export interface Skill {
+  id: string;
+  name: string;
+  goal: string;
+  project_id?: string | null;
+  project_name?: string | null;
+  environment?: string | null;
+  source_type?: "sow" | "video" | null;
+  has_recording: boolean;
+  manually_edited: boolean;
+  step_count: number;
+  times_replayed: number;
+  last_replay_status?: string | null;
+  last_replayed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface OrchestratorDecision {
   step: "hands" | "judge" | "self_execute";
   invoked: boolean;

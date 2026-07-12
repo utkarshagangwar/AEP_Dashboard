@@ -1,126 +1,56 @@
 "use client";
 import { useState, useEffect } from "react";
+import {
+  LayoutDashboard,
+  FolderOpen,
+  Bug,
+  PlayCircle,
+  FileBarChart,
+  Bot,
+  Users,
+  Shield,
+} from "lucide-react";
 import { getStoredUser, clearStoredUser } from "../utils/authStore";
 import { apiFetch } from "../utils/apiClient";
 
+// Icons match the ones from the second (now-removed) sidebar shell, kept
+// consistent as this became the one universal nav for every page.
 const NAV = [
   {
     label: "Dashboard",
     href: "/dashboard",
     // No permission key — the stats overview is open to anyone logged in.
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <rect x="3" y="3" width="7" height="7" />
-        <rect x="14" y="3" width="7" height="7" />
-        <rect x="14" y="14" width="7" height="7" />
-        <rect x="3" y="14" width="7" height="7" />
-      </svg>
-    ),
+    icon: <LayoutDashboard size={16} />,
   },
   {
     label: "Projects",
     href: "/projects",
     permission: "projects",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
+    icon: <FolderOpen size={16} />,
   },
   {
     label: "Defects",
     href: "/defects",
     permission: "defects",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-    ),
+    icon: <Bug size={16} />,
   },
   {
     label: "Execute",
     href: "/execute",
     permission: "execute",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <polygon points="5 3 19 12 5 21 5 3" />
-      </svg>
-    ),
+    icon: <PlayCircle size={16} />,
   },
   {
     label: "Reports",
     href: "/reports",
     permission: "reports",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <polyline points="14 2 14 8 20 8" />
-        <line x1="16" y1="13" x2="8" y2="13" />
-        <line x1="16" y1="17" x2="8" y2="17" />
-      </svg>
-    ),
+    icon: <FileBarChart size={16} />,
   },
   {
     label: "Vibe Testing",
     href: "/ai-testing",
     permission: "vibe_testing",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <rect x="3" y="11" width="18" height="10" rx="2" />
-        <circle cx="12" cy="5" r="2" />
-        <path d="M12 7v4" />
-        <path d="M8 11V10" />
-        <path d="M16 11V10" />
-        <line x1="8" y1="16" x2="8.01" y2="16" strokeWidth="3" />
-        <line x1="16" y1="16" x2="16.01" y2="16" strokeWidth="3" />
-      </svg>
-    ),
+    icon: <Bot size={16} />,
   },
 ];
 
@@ -128,41 +58,12 @@ const ADMIN_NAV = [
   {
     label: "Users",
     href: "/admin/users",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-        <circle cx="9" cy="7" r="4" />
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-      </svg>
-    ),
+    icon: <Users size={16} />,
   },
   {
     label: "Audit Logs",
     href: "/admin/audit-logs",
-    icon: (
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <polyline points="14 2 14 8 20 8" />
-        <line x1="16" y1="13" x2="8" y2="13" />
-        <line x1="16" y1="17" x2="8" y2="17" />
-        <polyline points="10 9 9 9 8 9" />
-      </svg>
-    ),
+    icon: <Shield size={16} />,
   },
 ];
 
@@ -278,30 +179,14 @@ export default function AppShell({ children, noPadding = false }) {
             borderBottom: "1px solid #E5E7EB",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                background: "#2563EB",
-                borderRadius: 6,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-              }}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="white"
-                strokeWidth="2.5"
-              >
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-              </svg>
-            </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+            <img
+              src="/spider-logo.png"
+              alt="AEP logo"
+              width={62}
+              height={40}
+              style={{ flexShrink: 0, objectFit: "contain" }}
+            />
             <div>
               <p
                 style={{

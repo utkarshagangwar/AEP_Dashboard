@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Index, String, Text, func, text
+from sqlalchemy import ARRAY, Boolean, DateTime, Enum as SAEnum, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,7 +41,17 @@ class Project(Base):
     name: Mapped[str] = mapped_column(
         String(255), nullable=False,
     )
+    # Immutable automation-folder key used by suite discovery to re-identify this
+    # project on rescans. Never updated by the rename UI — `name` is cosmetic only.
+    folder_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True,
+    )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    environments: Mapped[Optional[list[str]]] = mapped_column(
+        ARRAY(String),
+        nullable=True,
+        default=lambda: ["dev", "staging", "production"],
+    )
     product: Mapped[Optional[Product]] = mapped_column(
         SAEnum(Product, name="product_enum", native_enum=True),
         nullable=True,

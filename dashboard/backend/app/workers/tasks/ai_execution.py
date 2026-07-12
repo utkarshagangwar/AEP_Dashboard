@@ -198,9 +198,8 @@ def _resolve_hands_llm_override(
 
 
 def _goal_hash(goal: str) -> str:
-    import hashlib
-    normalized = " ".join(goal.lower().split())
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    from app.services.skill_store import compute_goal_hash
+    return compute_goal_hash(goal)
 
 
 def _maybe_save_skill(db, run, history_json: str | None) -> None:
@@ -249,6 +248,21 @@ def _maybe_save_skill(db, run, history_json: str | None) -> None:
     except Exception:
         logger.exception("Skill capture failed for run %s (run persisted normally)", run.id)
         db.rollback()
+
+
+def _maybe_bump_skill_stats(db, run, status: str) -> None:
+    """Update replay bookkeeping on the originating skill, if any. Shared by
+    a deterministic replay and by a fresh AI-planned run started by clicking
+    Replay/Run on a prompt-only skill — both set run.skill_id."""
+    if not run.skill_id:
+        return
+    from app.models.ai_runs import AISkill
+
+    skill = db.get(AISkill, run.skill_id)
+    if skill is not None:
+        skill.times_replayed = (skill.times_replayed or 0) + 1
+        skill.last_replay_status = status
+        skill.last_replayed_at = datetime.now(timezone.utc)
 
 
 @celery_app.task(
@@ -316,6 +330,12 @@ def run_ai_test_task(self, run_id: str) -> None:
         # Auto-save a replayable skill from passed AI-planned runs.
         if result["status"] == "passed":
             _maybe_save_skill(db, run, result.get("history_json"))
+
+        # If this run started from clicking Replay/Run on a skill (prompt
+        # skill with no recording yet), keep its replay bookkeeping current.
+        if run.skill_id:
+            _maybe_bump_skill_stats(db, run, result["status"])
+            db.commit()
 
     except Exception as exc:
         logger.exception("AI run %s raised an unhandled exception: %s", run_id, exc)
@@ -402,13 +422,7 @@ def replay_skill_task(self, run_id: str, skill_id: str, allow_ai_fallback: bool 
             return
 
         _persist_result(db, run, run_id, result)
-
-        skill = db.get(AISkill, skill_id)
-        if skill is not None:
-            skill.times_replayed = (skill.times_replayed or 0) + 1
-            skill.last_replay_status = result["status"]
-            skill.last_replayed_at = datetime.now(timezone.utc)
-
+        _maybe_bump_skill_stats(db, run, result["status"])
         db.commit()
         logger.info("Skill replay %s completed with status: %s", run_id, result["status"])
 

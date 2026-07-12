@@ -147,11 +147,18 @@ export const config = {
   matcher: [
     /*
      * Match all request paths except:
+     * - api (routes handle their own auth — see API_PREFIX check above;
+     *   critically, matching /api/* here also subjects it to the Edge
+     *   Middleware runtime's default 10MB request-body cap, which silently
+     *   truncated multipart file uploads — e.g. a walkthrough video over
+     *   10MB — before the route handler ever saw the full body, surfacing
+     *   as a confusing "Field required" from FastAPI's multipart parser.
+     *   Excluding /api/* avoids that body-buffering entirely.)
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - public files (images, etc.)
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

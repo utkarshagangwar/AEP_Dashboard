@@ -11,6 +11,19 @@ Endpoints (all under /api/v1/visual-audits):
   GET    /{run_id}                   run detail incl. findings
   POST   /{run_id}/cancel            cancel a pending run
   GET    /{run_id}/images/{kind}     stream reference|screenshot|diff image
+  POST   /sow                        upload a SOW document (txt/md/pdf)
+  GET    /sow                        list uploaded SOW documents
+  GET    /sow/{artifact_id}          SOW detail incl. checkpoints + parts
+  POST   /sow/{artifact_id}/parts/{part_number}/analyze
+                                      analyze one part of a chunked SOW
+  DELETE /sow/{artifact_id}          delete a SOW document + its checkpoints
+  DELETE /video/{artifact_id}        delete a walkthrough video + its checkpoints
+
+Functional checkpoints extracted here are detailed prompt instructions
+("skills") saved directly to the ai_skills table (see app.services.skill_store)
+as soon as parsing finishes — no live browser run is needed to produce them.
+They show up in the Vibe Testing "Skills" tab alongside recorded replay
+skills, and can be run on demand from there.
 """
 import hashlib
 import os
@@ -29,6 +42,7 @@ from app.models.visual_qa import (
     DesignArtifact,
     DesignRule,
     ParseStatus,
+    SowPart,
     VisualFinding,
     VisualRun,
     VisualRunStatus,
@@ -150,23 +164,53 @@ class SowOut(BaseModel):
     parse_status: str
     parse_error: str | None
     checkpoint_count: int
+    total_parts: int = 1
+    # True only immediately after an upload that matched an already-fully-
+    # analyzed document (sha256 Memory Bank hit) — lets the UI show that no
+    # AI credits were spent for this upload.
+    reused: bool = False
+    # User-declared product this video walks through (video uploads only —
+    # mandatory there; always null for sow/figma_png).
+    platform_name: str | None = None
     created_at: str
 
 
 class CheckpointOut(BaseModel):
     type: str
     title: str
+    # Rendered Role/Objective/Context/Instructions/Notes markdown for
+    # functional checkpoints (what actually becomes the AI agent's goal
+    # text); a short appearance claim for visual ones.
     description: str
+    # Structured fields behind the rendered description — functional only,
+    # empty/null for visual — so the UI can show real sections instead of a
+    # flat paragraph.
+    role: str | None = None
+    objective: str | None = None
+    context: str | None = None
+    instructions: list[str] = []
+    notes: list[str] = []
     page: str | None
     expected: str | None
+
+
+class PartOut(BaseModel):
+    part_number: int
+    total_parts: int
+    status: str
+    error: str | None
+    checkpoint_count: int
+    char_count: int
+    preview: str
 
 
 class SowDetailOut(SowOut):
     parsed_by_model: str | None = None
     checkpoints: list[CheckpointOut] = []
+    parts: list[PartOut] = []
 
 
-def _sow_out(db: Session, artifact: DesignArtifact) -> SowOut:
+def _sow_out(db: Session, artifact: DesignArtifact, reused: bool = False) -> SowOut:
     count = (
         db.query(DesignRule).filter(DesignRule.artifact_id == artifact.id).count()
     )
@@ -185,8 +229,73 @@ def _sow_out(db: Session, artifact: DesignArtifact) -> SowOut:
         else str(artifact.parse_status),
         parse_error=artifact.parse_error,
         checkpoint_count=checkpoint_count,
+        total_parts=artifact.total_parts or 1,
+        reused=reused,
+        platform_name=artifact.platform_name,
         created_at=artifact.created_at.isoformat() if artifact.created_at else "",
     )
+
+
+def _checkpoint_out(c: dict) -> CheckpointOut:
+    return CheckpointOut(
+        type=str(c.get("type", "functional")),
+        title=str(c.get("title", ""))[:200],
+        description=str(c["description"]),
+        role=c.get("role"),
+        objective=c.get("objective"),
+        context=c.get("context"),
+        instructions=[str(s) for s in (c.get("instructions") or [])],
+        notes=[str(s) for s in (c.get("notes") or [])],
+        page=c.get("page"),
+        expected=c.get("expected"),
+    )
+
+
+def _parts_out(db: Session, artifact: DesignArtifact) -> list["PartOut"]:
+    """Per-part breakdown for the UI. Real SowPart rows for a chunked SOW;
+    otherwise (video, which never chunks, or a document analyzed before
+    per-part tracking existed) a single synthetic entry representing the
+    whole document, built from its merged DesignRule — so "run all
+    checkpoints as goals" has one uniform shape regardless of artifact type.
+    """
+    sow_parts = (
+        db.query(SowPart)
+        .filter(SowPart.artifact_id == artifact.id)
+        .order_by(SowPart.part_number)
+        .all()
+    )
+    if sow_parts:
+        return [
+            PartOut(
+                part_number=p.part_number,
+                total_parts=artifact.total_parts or 1,
+                status=p.status.value if hasattr(p.status, "value") else str(p.status),
+                error=p.error,
+                checkpoint_count=len(p.checkpoints or []),
+                char_count=p.char_count,
+                preview=(p.content or "").strip()[:160],
+            )
+            for p in sow_parts
+        ]
+
+    rule = db.query(DesignRule).filter(DesignRule.artifact_id == artifact.id).first()
+    status = (
+        artifact.parse_status.value
+        if hasattr(artifact.parse_status, "value")
+        else str(artifact.parse_status)
+    )
+    checkpoints = rule.checkpoints if rule else None
+    return [
+        PartOut(
+            part_number=1,
+            total_parts=1,
+            status=status,
+            error=artifact.parse_error,
+            checkpoint_count=len(checkpoints or []),
+            char_count=0,
+            preview="",
+        )
+    ]
 
 
 # ── Reference uploads ────────────────────────────────────────────────────────
@@ -412,7 +521,11 @@ async def upload_sow(
             from app.workers.tasks.sow_ingest import ingest_sow_task
 
             ingest_sow_task.delay(str(existing.id))
-        return _sow_out(db, existing)
+            return _sow_out(db, existing)
+        # Genuine Memory Bank hit: an identical document was already fully
+        # (or partially) analyzed — no new LLM call, and the UI can show that
+        # this upload reused a saved skill instead of spending AI credits.
+        return _sow_out(db, existing, reused=existing.parse_status == ParseStatus.done)
 
     sow_dir = os.path.join(_data_dir(), "sow")
     os.makedirs(sow_dir, exist_ok=True)
@@ -480,20 +593,117 @@ def get_sow(
     if rule:
         for c in rule.checkpoints or []:
             if isinstance(c, dict) and c.get("description"):
-                checkpoints.append(
-                    CheckpointOut(
-                        type=str(c.get("type", "functional")),
-                        title=str(c.get("title", ""))[:200],
-                        description=str(c["description"]),
-                        page=c.get("page"),
-                        expected=c.get("expected"),
-                    )
-                )
+                checkpoints.append(_checkpoint_out(c))
+
     return SowDetailOut(
         **base.model_dump(),
         parsed_by_model=rule.parsed_by_model if rule else None,
         checkpoints=checkpoints,
+        parts=_parts_out(db, artifact),
     )
+
+
+@router.post("/sow/{artifact_id}/parts/{part_number}/analyze", response_model=SowDetailOut, status_code=202)
+def analyze_sow_part(
+    artifact_id: uuid.UUID,
+    part_number: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("vibe_testing")),
+):
+    """Trigger analysis of one part of a chunked SOW. Only one part of a
+    given document may be analyzing at a time — enforced here (authoritative)
+    as well as client-side (disabled buttons)."""
+    _feature_enabled()
+    artifact = (
+        db.query(DesignArtifact)
+        .filter(
+            DesignArtifact.id == artifact_id,
+            DesignArtifact.artifact_type == ArtifactType.sow,
+        )
+        .one_or_none()
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="SOW not found")
+
+    part = (
+        db.query(SowPart)
+        .filter(SowPart.artifact_id == artifact.id, SowPart.part_number == part_number)
+        .one_or_none()
+    )
+    if part is None:
+        raise HTTPException(status_code=404, detail="Part not found")
+
+    if part.status not in (ParseStatus.pending, ParseStatus.error):
+        status_label = part.status.value if hasattr(part.status, "value") else part.status
+        raise HTTPException(
+            status_code=409, detail=f"Part {part_number} is already {status_label}"
+        )
+
+    other_active = (
+        db.query(SowPart)
+        .filter(
+            SowPart.artifact_id == artifact.id,
+            SowPart.part_number != part_number,
+            SowPart.status == ParseStatus.processing,
+        )
+        .first()
+    )
+    if other_active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Part {other_active.part_number} is currently being analyzed — "
+                "wait for it to finish"
+            ),
+        )
+
+    part.status = ParseStatus.processing
+    part.error = None
+    artifact.parse_status = ParseStatus.processing
+    db.commit()
+
+    # Enqueue AFTER commit so the worker can always load the rows
+    from app.workers.tasks.sow_ingest import analyze_sow_part_task
+
+    analyze_sow_part_task.delay(str(artifact.id), part_number)
+    logger.info(
+        "SOW %s part %d analysis triggered by %s", artifact.id, part_number, current_user.id
+    )
+
+    return get_sow(artifact_id, db=db, current_user=current_user)
+
+
+@router.delete("/sow/{artifact_id}", status_code=200)
+def delete_sow(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("vibe_testing")),
+):
+    """Delete a SOW document and its parsed checkpoints/parts (FK cascade)."""
+    _feature_enabled()
+    artifact = (
+        db.query(DesignArtifact)
+        .filter(
+            DesignArtifact.id == artifact_id,
+            DesignArtifact.artifact_type == ArtifactType.sow,
+        )
+        .one_or_none()
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="SOW not found")
+
+    storage_path = artifact.storage_path
+    db.delete(artifact)
+    db.commit()
+
+    if storage_path and os.path.exists(storage_path):
+        try:
+            os.remove(storage_path)
+        except OSError:
+            logger.warning("SOW delete: could not remove file %s", storage_path)
+
+    logger.info("SOW %s deleted by %s", artifact_id, current_user.id)
+    return {"message": "SOW deleted"}
 
 
 # ── Walkthrough videos (Phase 5) ─────────────────────────────────────────────
@@ -503,7 +713,7 @@ _WEBM_MAGIC = b"\x1a\x45\xdf\xa3"
 
 
 def _max_video_bytes() -> int:
-    return int(os.environ.get("VISUAL_VIDEO_MAX_MB", "100")) * 1024 * 1024
+    return int(os.environ.get("VISUAL_VIDEO_MAX_MB", "50")) * 1024 * 1024
 
 
 def _looks_like_video(content: bytes, ext: str) -> bool:
@@ -517,11 +727,26 @@ def _looks_like_video(content: bytes, ext: str) -> bool:
 @router.post("/video", response_model=SowOut, status_code=202)
 async def upload_video(
     file: UploadFile = File(...),
+    # Mandatory: without a declared platform, the model has no anchor and
+    # will fill the gap by inferring/assuming what product it's looking at
+    # (see video_ingest._build_video_prompt) — an observed incident had it
+    # extract checkpoints from unrelated on-screen text for exactly this
+    # reason. Required at the API layer, not just the DB (column is nullable
+    # for sow/figma_png rows).
+    platform_name: str = Form(...),
     project_id: uuid.UUID | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("vibe_testing")),
 ):
     _feature_enabled()
+
+    platform_name = platform_name.strip()[:300]
+    if not platform_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Platform/product name is required — tell the AI what "
+            "application this video walks through so it doesn't have to guess.",
+        )
 
     file_name = (file.filename or "walkthrough.mp4")[:500]
     ext = os.path.splitext(file_name.lower())[1]
@@ -554,6 +779,7 @@ async def upload_video(
         .first()
     )
     if existing:
+        existing.platform_name = platform_name
         if existing.parse_status == ParseStatus.error:
             existing.parse_status = ParseStatus.pending
             existing.parse_error = None
@@ -561,6 +787,8 @@ async def upload_video(
             from app.workers.tasks.video_ingest import ingest_video_task
 
             ingest_video_task.delay(str(existing.id))
+        else:
+            db.commit()
         return _sow_out(db, existing)
 
     video_dir = os.path.join(_data_dir(), "video")
@@ -575,6 +803,7 @@ async def upload_video(
         file_name=file_name,
         sha256=sha,
         storage_path=storage_path,
+        platform_name=platform_name,
         parse_status=ParseStatus.pending,
     )
     db.add(artifact)
@@ -629,20 +858,46 @@ def get_video(
     if rule:
         for c in rule.checkpoints or []:
             if isinstance(c, dict) and c.get("description"):
-                checkpoints.append(
-                    CheckpointOut(
-                        type=str(c.get("type", "functional")),
-                        title=str(c.get("title", ""))[:200],
-                        description=str(c["description"]),
-                        page=c.get("page"),
-                        expected=c.get("expected"),
-                    )
-                )
+                checkpoints.append(_checkpoint_out(c))
     return SowDetailOut(
         **base.model_dump(),
         parsed_by_model=rule.parsed_by_model if rule else None,
         checkpoints=checkpoints,
+        parts=_parts_out(db, artifact),
     )
+
+
+@router.delete("/video/{artifact_id}", status_code=200)
+def delete_video(
+    artifact_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("vibe_testing")),
+):
+    """Delete a walkthrough video and its parsed checkpoints (FK cascade)."""
+    _feature_enabled()
+    artifact = (
+        db.query(DesignArtifact)
+        .filter(
+            DesignArtifact.id == artifact_id,
+            DesignArtifact.artifact_type == ArtifactType.video,
+        )
+        .one_or_none()
+    )
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    storage_path = artifact.storage_path
+    db.delete(artifact)
+    db.commit()
+
+    if storage_path and os.path.exists(storage_path):
+        try:
+            os.remove(storage_path)
+        except OSError:
+            logger.warning("Video delete: could not remove file %s", storage_path)
+
+    logger.info("Video %s deleted by %s", artifact_id, current_user.id)
+    return {"message": "Video deleted"}
 
 
 # ── Runs ─────────────────────────────────────────────────────────────────────

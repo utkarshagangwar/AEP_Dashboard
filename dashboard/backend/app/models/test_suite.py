@@ -36,6 +36,9 @@ class TestSuite(Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Immutable automation-folder key used by suite discovery to re-identify this
+    # suite on rescans. Never updated by the rename UI — `name` is cosmetic only.
+    folder_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     suite_type: Mapped[Optional[SuiteType]] = mapped_column(
         SAEnum(SuiteType, name="suite_type_enum", native_enum=True),
         nullable=True,

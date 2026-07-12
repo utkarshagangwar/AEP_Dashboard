@@ -3,6 +3,8 @@
 Tables:
   design_artifacts — uploaded design sources (Figma PNG, SOW, video), deduped
                      by sha256 so heavy files are ingested once ("Memory Bank").
+  sow_parts        — chunks a large SOW is split into; each analyzed
+                     independently, merged into the artifact's design_rules row.
   design_rules     — parsed visual checkpoints produced by The Brain, one row
                      per artifact (JSONB payload).
   visual_runs      — one Visual Audit execution (The Judge) per row.
@@ -77,6 +79,10 @@ class DesignArtifact(Base):
     # Which live page/URL this artifact represents (e.g. "/checkout") so the
     # Judge knows what to compare it against. Nullable for SOW/video.
     target_page = mapped_column(String(1000), nullable=True)
+    # User-declared product/platform name this video is a walkthrough of —
+    # mandatory at the API layer for video uploads (never inferred/assumed
+    # by the model). Null for sow/figma_png rows.
+    platform_name = mapped_column(String(300), nullable=True)
     # SOW/video ingestion lifecycle (Phase 3+). figma_png rows stay 'not_required'.
     parse_status = mapped_column(
         Enum(ParseStatus, name="parse_status_enum", create_type=False),
@@ -85,7 +91,52 @@ class DesignArtifact(Base):
         server_default="not_required",
     )
     parse_error = mapped_column(Text, nullable=True)
+    # Number of chunks a large SOW was split into (see SowPart). Always 1 for
+    # figma_png/video artifacts and for SOWs small enough to need no chunking.
+    total_parts = mapped_column(Integer, nullable=False, default=1, server_default="1")
     created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    # Bumped on every write (parse_status transitions in particular) — used
+    # by visual_qa_reconcile to detect a row stuck 'processing' because the
+    # worker analyzing it died mid-flight.
+    updated_at = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class SowPart(Base):
+    """One chunk of a large SOW document, analyzed independently (Phase 3 chunking).
+
+    A SOW that fits in a single part still gets exactly one SowPart row, kept
+    in lock-step with DesignArtifact.total_parts. Checkpoints from every
+    'done' part are merged (concatenated by part_number) into the artifact's
+    single DesignRule row.
+    """
+
+    __tablename__ = "sow_parts"
+
+    id = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    artifact_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("design_artifacts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    part_number = mapped_column(Integer, nullable=False)  # 1-based
+    content = mapped_column(Text, nullable=False)
+    char_count = mapped_column(Integer, nullable=False)
+    status = mapped_column(
+        Enum(ParseStatus, name="parse_status_enum", create_type=False),
+        nullable=False,
+        default=ParseStatus.pending,
+        server_default="pending",
+    )
+    error = mapped_column(Text, nullable=True)
+    checkpoints = mapped_column(JSONB, nullable=True)
+    parsed_by_model = mapped_column(String(200), nullable=True)
+    created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class DesignRule(Base):

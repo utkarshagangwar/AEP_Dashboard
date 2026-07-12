@@ -133,9 +133,21 @@ class AISkillResponse(BaseModel):
     name: str
     goal: str
     source_run_id: Optional[UUID] = None
+    # "sow" | "video" | None (None = auto-saved from a passed goal-based run)
+    source_type: Optional[str] = None
+    source_artifact_id: Optional[UUID] = None
     project_id: Optional[UUID] = None
+    # Denormalized for display — resolved by the endpoint, not stored.
+    project_name: Optional[str] = None
     environment: Optional[str] = None
     credential_profile_id: Optional[UUID] = None
+    # False until this skill has actually been run once and passed — a
+    # prompt-only skill has no recorded actions to replay deterministically.
+    has_recording: bool = False
+    # True once a human has edited name/goal/project by hand — protects the
+    # edit from being overwritten the next time its source SOW/video part
+    # is re-analyzed.
+    manually_edited: bool = False
     step_count: int = 0
     times_replayed: int = 0
     last_replay_status: Optional[str] = None
@@ -153,6 +165,27 @@ class AISkillListResponse(BaseModel):
     limit: int
 
 
+class AISkillUpdate(BaseModel):
+    """Partial update for manual view/edit from the Skills tab. Only fields
+    present in the request body are applied (exclude_unset) — project_id may
+    be explicitly set to null to unassign a skill from any project."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    goal: Optional[str] = Field(default=None, min_length=1)
+    project_id: Optional[UUID] = None
+
+
 class SkillReplayRequest(BaseModel):
     credential_profile_id: Optional[UUID] = None
     allow_ai_fallback: bool = False
+
+
+class BulkSkillIds(BaseModel):
+    """Shared body shape for bulk skill operations — a plain list of target
+    IDs. Capped at 200 to keep a single request/transaction bounded; the
+    Skills tab only ever selects from one page (max 100) at a time."""
+    skill_ids: list[UUID] = Field(min_length=1, max_length=200)
+
+
+class BulkAssignProjectRequest(BulkSkillIds):
+    # None unassigns the selected skills from any project.
+    project_id: Optional[UUID] = None

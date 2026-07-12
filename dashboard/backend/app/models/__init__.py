@@ -18,6 +18,7 @@ from app.models.ai_runs import (
 from app.models.visual_qa import (
     DesignArtifact,
     DesignRule,
+    SowPart,
     VisualRun,
     VisualFinding,
     ArtifactType,
@@ -56,6 +57,7 @@ __all__ = [
     "AIStepType",
     "DesignArtifact",
     "DesignRule",
+    "SowPart",
     "VisualRun",
     "VisualFinding",
     "ArtifactType",
