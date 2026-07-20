@@ -3,6 +3,13 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
 import { apiGet } from "../../utils/apiClient";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 const STATUS_COLORS = {
   passed: "#16A34A",
@@ -91,27 +98,26 @@ export default function TestResultsPage() {
                 {label}
               </button>
             ))}
-            <select
-              value={runFilter}
-              onChange={(e) => setRunFilter(e.target.value)}
-              style={{
-                padding: "6px 12px",
-                fontSize: 12,
-                border: "1px solid #E5E7EB",
-                borderRadius: 999,
-                outline: "none",
-                color: "#6B7280",
-                background: "#fff",
-                cursor: "pointer",
-              }}
+            <Select
+              value={runFilter || "all"}
+              onValueChange={(v) => setRunFilter(v === "all" ? "" : v)}
+              items={[
+                { value: "all", label: "All Runs" },
+                ...runs.map((r) => ({ value: r.id, label: r.name })),
+              ]}
             >
-              <option value="">All Runs</option>
-              {runs.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-[29px] rounded-full text-xs text-gray-500">
+                <SelectValue placeholder="All Runs" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Runs</SelectItem>
+                {runs.map((r) => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {r.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {error && (

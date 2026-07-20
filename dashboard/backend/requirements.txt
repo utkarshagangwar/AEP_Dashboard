@@ -13,6 +13,11 @@ python-multipart==0.0.31
 celery==5.4.0
 redis==5.0.8
 slowapi==0.1.9
+# Used directly by app/workers/tasks/ai_execution.py::_resolve_bypass_profile
+# (the "bypass" credential-profile login-cookie call) -- was previously only
+# a transitive dependency of browser-use/google-api-core, pinning it
+# explicitly so a future browser-use bump can't silently drop or change it.
+requests==2.34.2
 # SECURITY (2026-07-09): fixes a URL-whitelist bypass (GHSA-x39x-9qw5-ghrf)
 # that undermined ai_runner.py's allowed_domains credential-leak gate. See
 # 2026-07-09 fix in ai_runner.py: allowed_domains is now actually threaded
@@ -56,3 +61,16 @@ Pillow==12.2.0
 pixelmatch==0.3.0
 # Visual QA (Phase 3): SOW PDF text extraction
 pypdf==6.14.2
+# Android Vibe Testing: Appium client for the Hands loop in android_runner.py.
+# Talks to a remote cloud device-farm Appium endpoint (BrowserStack) over
+# HTTP -- no local Appium server, no Android SDK, no emulator dependency.
+Appium-Python-Client==4.5.0
+# SOW Creation & Rewrite (Phase 6): .docx export, native OOXML generation
+# (app/services/sow_export.py). Pure Python, no system libs needed.
+python-docx==1.2.0
+# SOW Creation & Rewrite (Phase 6): .pdf export, renders the same HTML/CSS
+# the .docx/.md exporters' block converters produce. Needs system Pango/
+# Cairo/GDK-pixbuf libraries at runtime (added to docker/Dockerfile.backend
+# -- see that file's comment) or PDF rendering fails at write_pdf() time,
+# not at import time.
+weasyprint==69.0

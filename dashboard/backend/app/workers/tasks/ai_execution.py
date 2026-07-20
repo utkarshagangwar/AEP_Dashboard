@@ -1,4 +1,5 @@
 """Celery task — execute an AI test run and persist events to the database."""
+import os
 from datetime import datetime, timezone
 
 from app.core.logging import get_logger
@@ -82,25 +83,99 @@ def _make_live_event_sink(run_id: str):
     return _sink
 
 
-def _resolve_run_inputs(db, run) -> tuple[str, list | None, dict | None]:
-    """Resolve (environment_url, allowed_domains, sensitive_data) for a run.
+def _resolve_bypass_profile(profile) -> tuple[str, list[dict]]:
+    """Resolve a kind="bypass" credential profile into (target_url, cookies).
 
-    Shared by run_ai_test_task and replay_skill_task."""
+    Calls the target app's admin API-key login endpoint directly (plain HTTP
+    — mirrors the same simple POST-then-inject-cookie pattern the
+    ig_automation Robot Framework suite uses for its own tests, reimplemented
+    natively here; this module does not import or depend on that suite) and
+    turns the returned token into a Playwright-shaped cookie the AI runner
+    injects before navigating, so the agent starts already authenticated and
+    never has to fight a CAPTCHA-gated login form.
+
+    The X-API-Key header alone is sufficient — confirmed against the actual
+    endpoint behavior, it grants access directly from the key with no
+    email/otp identity required. (ig_automation's hopscotch_client.py also
+    sends email/otp in its POST body, but that's specific to its own flow —
+    not something this endpoint requires. Do not reintroduce it here.)
+
+    Raises on any failure (missing config, network error, non-2xx response,
+    missing auth_token) — deliberately not swallowed. The caller (inside
+    run_ai_test_task/replay_skill_task, before the DB session is closed) lets
+    this propagate to the existing outer exception handler, which marks the
+    run inconclusive with the exception message. This keeps a doomed run from
+    ever launching Chromium.
+    """
+    import requests
+
+    from app.services.credential_service import decrypt_credentials
+
+    if not profile.credentials_json:
+        raise ValueError(f"Bypass profile '{profile.name}' has no stored credentials")
+    creds = decrypt_credentials(profile.credentials_json)
+
+    api_base_url = (creds.get("api_base_url") or "").rstrip("/")
+    bypass_endpoint = creds.get("bypass_endpoint") or "/admin-login-by-api-key"
+    api_key = creds.get("api_key")
+    cookie_name = creds.get("cookie_name") or "authToken"
+    cookie_domain = creds.get("cookie_domain")
+
+    if not api_base_url or not api_key or not cookie_domain:
+        raise ValueError(
+            f"Bypass profile '{profile.name}' is missing api_base_url/api_key/cookie_domain"
+        )
+    if not profile.target_url:
+        raise ValueError(f"Bypass profile '{profile.name}' has no target_url")
+
+    resp = requests.post(
+        f"{api_base_url}{bypass_endpoint}",
+        headers={"X-API-Key": api_key},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    auth_token = resp.json().get("auth_token")
+    if not auth_token:
+        raise ValueError(
+            f"Bypass login for '{profile.name}' returned no auth_token"
+        )
+
+    cookies = [
+        {"name": cookie_name, "value": auth_token, "domain": cookie_domain, "path": "/"}
+    ]
+    return profile.target_url, cookies
+
+
+def _resolve_run_inputs(
+    db, run
+) -> tuple[str, list | None, dict | None, list[dict] | None]:
+    """Resolve (environment_url, allowed_domains, sensitive_data, cookies) for a run.
+
+    Shared by run_ai_test_task and replay_skill_task.
+
+    Three mutually-exclusive sources, in priority order:
+    1. A saved credential_profile_id — kind="bypass" resolves to (target_url,
+       cookies) via _resolve_bypass_profile(); any other kind (including
+       null/"standard") decrypts credentials into sensitive_data as before.
+    2. An ad-hoc target_url/login on the run itself (the one-off "Website
+       without/with login" path — never a saved profile).
+    3. Neither — environment_url stays "about:blank", the AI agent navigates
+       from the goal text, exactly as today.
+    """
     from app.models.ai_runs import AICredentialProfile
 
     environment_url = "about:blank"
-    if run.project_id:
-        from app.models.project import Project  # noqa: F401
-        # Project model has no base_url — environment_url stays as placeholder.
-        # The AI agent navigates to the correct URL from the goal text.
-
     allowed_domains: list[str] | None = None
     sensitive_data: dict | None = None
+    cookies: list[dict] | None = None
+
     if run.credential_profile_id:
         profile = db.get(AICredentialProfile, run.credential_profile_id)
         if profile:
             allowed_domains = profile.allowed_domains or []
-            if profile.credentials_json:
+            if (profile.kind or "standard") == "bypass":
+                environment_url, cookies = _resolve_bypass_profile(profile)
+            elif profile.credentials_json:
                 try:
                     from app.services.credential_service import decrypt_credentials
                     sensitive_data = decrypt_credentials(profile.credentials_json)
@@ -110,7 +185,53 @@ def _resolve_run_inputs(db, run) -> tuple[str, list | None, dict | None]:
                         run.credential_profile_id,
                         exc,
                     )
-    return environment_url, allowed_domains, sensitive_data
+    elif getattr(run, "adhoc_target_url", None):
+        environment_url = run.adhoc_target_url
+        if getattr(run, "adhoc_credentials_json", None):
+            from app.services.credential_service import decrypt_credentials
+            from urllib.parse import urlparse
+
+            try:
+                sensitive_data = decrypt_credentials(run.adhoc_credentials_json)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decrypt ad-hoc credentials for run %s: %s", run.id, exc
+                )
+            host = urlparse(run.adhoc_target_url).hostname
+            allowed_domains = [host] if host else []
+
+    return environment_url, allowed_domains, sensitive_data, cookies
+
+
+def _resolve_android_credential(db, run) -> dict | None:
+    """Resolve run.credential_profile_id for an Android run into a plain
+    {field: value} dict android_runner.py can substitute into <cred:...>
+    placeholders.
+
+    Raises if the profile is kind="bypass" — that mechanism injects a
+    Playwright browser cookie (see _resolve_bypass_profile) and has no
+    Android counterpart yet. The exception propagates to run_ai_test_task's
+    outer except Exception handler, which already marks the run
+    inconclusive with the message — the same "raise on any failure, let the
+    outer handler catch it" convention _resolve_bypass_profile itself uses.
+    """
+    from app.models.ai_runs import AICredentialProfile
+
+    if not run.credential_profile_id:
+        return None
+    profile = db.get(AICredentialProfile, run.credential_profile_id)
+    if profile is None:
+        return None
+    if (profile.kind or "standard") == "bypass":
+        raise ValueError(
+            f"Credential profile '{profile.name}' is a bypass profile — "
+            "bypass login is not supported for Android runs yet."
+        )
+    if not profile.credentials_json:
+        return None
+    from app.services.credential_service import decrypt_credentials
+
+    return decrypt_credentials(profile.credentials_json)
 
 
 def _persist_result(db, run, run_id: str, result: dict) -> None:
@@ -155,6 +276,10 @@ def _persist_result(db, run, run_id: str, result: dict) -> None:
     run.step_count = len(result.get("events", []))
     run.summary = narrative or raw_summary
     run.raw_summary = raw_summary
+    # Android-only: {farm_vendor, farm_session_id, dashboard_url, video_url}.
+    # Always absent from a web result dict, so this is a no-op for web runs.
+    if "platform_metadata" in result:
+        run.platform_metadata = result.get("platform_metadata")
     if failing:
         run.failing_step_index = failing.get("sequence")
         run.failing_step_description = failing.get("description")
@@ -292,25 +417,61 @@ def run_ai_test_task(self, run_id: str) -> None:
         run.started_at = datetime.now(timezone.utc)
         db.commit()
 
-        environment_url, allowed_domains, sensitive_data = _resolve_run_inputs(db, run)
-        llm_override = _resolve_hands_llm_override(run.goal, environment_url, sensitive_data)
+        if (run.platform or "web") == "android":
+            from app.models.ai_runs import AndroidAppBuild
 
-        event_sink = _make_live_event_sink(run_id)
+            build = (
+                db.get(AndroidAppBuild, run.android_app_build_id)
+                if run.android_app_build_id
+                else None
+            )
+            if build is None:
+                run.status = AIRunStatus.inconclusive
+                run.summary = "Android app build not found."
+                run.completed_at = datetime.now(timezone.utc)
+                db.commit()
+                return
 
-        db.close()
-        db = None
+            sensitive_data = _resolve_android_credential(db, run)
+            event_sink = _make_live_event_sink(run_id)
+            farm_app_id = build.farm_app_id
+            device_profile = run.device_profile
 
-        # Run execution engine (synchronous wrapper around async playwright/browser-use)
-        from app.services.ai_runner import run_ai_test_sync
+            db.close()
+            db = None
 
-        result = run_ai_test_sync(
-            goal=run.goal,
-            environment_url=environment_url,
-            allowed_domains=allowed_domains,
-            sensitive_data=sensitive_data,
-            on_event=event_sink,
-            llm_override=llm_override,
-        )
+            from app.services.android_runner import run_android_test_sync
+
+            result = run_android_test_sync(
+                goal=run.goal,
+                farm_app_id=farm_app_id,
+                device_profile=device_profile,
+                sensitive_data=sensitive_data,
+                on_event=event_sink,
+                max_steps=int(os.environ.get("ANDROID_MAX_STEPS", "25")),
+                max_duration_s=int(os.environ.get("ANDROID_MAX_DURATION_S", "480")),
+            )
+        else:
+            environment_url, allowed_domains, sensitive_data, cookies = _resolve_run_inputs(db, run)
+            llm_override = _resolve_hands_llm_override(run.goal, environment_url, sensitive_data)
+
+            event_sink = _make_live_event_sink(run_id)
+
+            db.close()
+            db = None
+
+            # Run execution engine (synchronous wrapper around async playwright/browser-use)
+            from app.services.ai_runner import run_ai_test_sync
+
+            result = run_ai_test_sync(
+                goal=run.goal,
+                environment_url=environment_url,
+                allowed_domains=allowed_domains,
+                sensitive_data=sensitive_data,
+                cookies=cookies,
+                on_event=event_sink,
+                llm_override=llm_override,
+            )
 
         # Re-open DB to persist results
         db = SessionLocal()
@@ -393,7 +554,7 @@ def replay_skill_task(self, run_id: str, skill_id: str, allow_ai_fallback: bool 
         run.started_at = datetime.now(timezone.utc)
         db.commit()
 
-        environment_url, allowed_domains, sensitive_data = _resolve_run_inputs(db, run)
+        environment_url, allowed_domains, sensitive_data, cookies = _resolve_run_inputs(db, run)
         history_json = skill.history_json
         goal = run.goal
         event_sink = _make_live_event_sink(run_id)
@@ -409,6 +570,7 @@ def replay_skill_task(self, run_id: str, skill_id: str, allow_ai_fallback: bool 
             environment_url=environment_url,
             allowed_domains=allowed_domains,
             sensitive_data=sensitive_data,
+            cookies=cookies,
             on_event=event_sink,
             allow_ai_fallback=allow_ai_fallback,
         )

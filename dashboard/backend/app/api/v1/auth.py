@@ -7,7 +7,6 @@ from app.core.dependencies import get_current_user, get_db
 from app.core.logging import get_logger
 from app.models.user import User
 from app.schemas.auth import (
-    AccessTokenResponse,
     LoginRequest,
     LogoutRequest,
     MeResponse,
@@ -71,10 +70,19 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
         ) from exc
 
 
-@router.post("/refresh", response_model=AccessTokenResponse)
+@router.post("/refresh", response_model=TokenResponse)
 @limiter.limit("10/minute")
 def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
-    """Validate a refresh token and issue a new access token (with rotation)."""
+    """Validate a refresh token and issue a new access+refresh pair (rotation).
+
+    The new refresh token MUST be returned here — rotation revokes the old
+    one server-side, so if the caller never learns the new value (this used
+    to discard it into `_new_refresh` and return only the access token),
+    every refresh after the very first one presents an already-revoked
+    token and fails. The frontend proxy (/api/auth/refresh/route.js) is what
+    actually turns this into the rotated httpOnly cookie — it can only do
+    that if this response carries the new value.
+    """
     try:
         user, token_row = auth_service.validate_refresh_token(
             db, payload.refresh_token
@@ -85,11 +93,15 @@ def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get
                 detail="Invalid or expired refresh token",
             )
 
-        access_token, _new_refresh = auth_service.rotate_refresh_token(
+        access_token, new_refresh_token = auth_service.rotate_refresh_token(
             db, user, token_row
         )
         logger.info("Access token refreshed: %s", user.id)
-        return AccessTokenResponse(access_token=access_token, token_type="bearer")
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            refresh_token=new_refresh_token,
+        )
     except HTTPException:
         raise
     except SQLAlchemyError as exc:

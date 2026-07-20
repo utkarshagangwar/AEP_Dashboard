@@ -69,7 +69,7 @@ git clone <repo-url>
 cd AEP_Dashboard
 
 # 2. Set up your environment file
-cp dashboard/.env.example dashboard/.env
+cp dashboard/.env.sample dashboard/.env
 # Open dashboard/.env and fill in your values (see Environment Variables below)
 
 # 3. Start everything
@@ -121,7 +121,7 @@ Backend at http://localhost:8000, frontend at http://localhost:3000.
 
 ## Environment Variables
 
-Copy `dashboard/.env.example` to `dashboard/.env` and fill these in:
+Copy `dashboard/.env.sample` to `dashboard/.env` and fill these in:
 
 | Variable | What it does | Example |
 |----------|-------------|---------|

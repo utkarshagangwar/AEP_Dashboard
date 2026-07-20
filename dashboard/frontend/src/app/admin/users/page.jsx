@@ -5,6 +5,13 @@ import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../components/ui/select";
 
 const ROLES = [
   "admin",
@@ -45,7 +52,6 @@ const PERMISSIONS = [
   { key: "test_suites", label: "Test Suites" },
   { key: "execute", label: "Execute" },
   { key: "defects", label: "Defects" },
-  { key: "reports", label: "Reports" },
   { key: "vibe_testing", label: "Vibe Testing" },
 ];
 
@@ -177,27 +183,26 @@ export default function UsersPage() {
             onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
             onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
           />
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
-            style={{
-              padding: "8px 12px",
-              fontSize: 13,
-              border: "1px solid #E5E7EB",
-              borderRadius: 8,
-              outline: "none",
-              color: "#111827",
-              background: "#fff",
-              cursor: "pointer",
-            }}
+          <Select
+            value={roleFilter || "all"}
+            onValueChange={(v) => setRoleFilter(v === "all" ? "" : v)}
+            items={[
+              { value: "all", label: "All Roles" },
+              ...ROLES.map((r) => ({ value: r, label: r.replace("_", " ") })),
+            ]}
           >
-            <option value="">All Roles</option>
-            {ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r.replace("_", " ")}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="h-[35px] text-[13px]">
+              <SelectValue placeholder="All Roles" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Roles</SelectItem>
+              {ROLES.map((r) => (
+                <SelectItem key={r} value={r}>
+                  {r.replace("_", " ")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {error && (

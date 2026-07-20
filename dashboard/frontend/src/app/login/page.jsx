@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
+import { setAccessToken } from "../../lib/api";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -32,12 +33,15 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Login failed");
-      localStorage.setItem("aep_access_token", data.access_token);
-      if (data.refresh_token) {
-        localStorage.setItem("aep_refresh_token", data.refresh_token);
-      }
-      // Set cookie for middleware auth
-      document.cookie = `aep_token=${data.access_token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
+      // Access token lives in memory only (never localStorage — XSS
+      // protection). The refresh token never reaches client JS at all: the
+      // /api/auth/login proxy strips it and sets it as an httpOnly cookie.
+      setAccessToken(data.access_token);
+      // Set a separate, short-lived, non-httpOnly cookie purely so Edge
+      // middleware can gate route access without a network round trip. Its
+      // lifetime matches the 24h session, not the (short) access token TTL —
+      // apiClient's refresh flow re-syncs it on every silent refresh.
+      document.cookie = `aep_token=${data.access_token}; path=/; max-age=${24 * 60 * 60}; SameSite=Lax`;
 
       // Fetch full user profile from /me endpoint
       const meRes = await fetch("/api/auth/me", {

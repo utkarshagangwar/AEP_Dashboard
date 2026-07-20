@@ -623,6 +623,7 @@ async def _execute_steps(
     max_duration_s: int = 600,
     on_event: Optional[Callable[[dict], None]] = None,
     llm_override: Optional[object] = None,
+    cookies: Optional[list[dict]] = None,
 ) -> dict:
     """Run the goal against the already-open CDP session.
 
@@ -638,6 +639,13 @@ async def _execute_steps(
     stream can surface them live instead of only after the whole run ends.
     Exceptions from on_event are caught and logged; they must never abort
     the underlying browser automation.
+
+    cookies, if provided (from a kind="bypass" credential profile — see
+    app/workers/tasks/ai_execution.py::_resolve_bypass_profile), is injected
+    into the browser context as its own visible, failure-handled step, right
+    after the context/page are established and before navigation — so the
+    agent starts already authenticated and never sees the target app's login
+    form (and whatever CAPTCHA may be guarding it) at all.
     """
     try:
         from playwright.async_api import async_playwright
@@ -718,6 +726,25 @@ async def _execute_steps(
             await page.set_viewport_size(_VIEWPORT)
         except Exception:
             logger.warning("Failed to set viewport size to %s", _VIEWPORT, exc_info=True)
+
+        # ── Step: inject bypass auth cookie (kind="bypass" profiles only) ──
+        if cookies:
+            cookie_event = _emit("deterministic", "Inject authenticated session cookie")
+            try:
+                await context.add_cookies(cookies)
+                _update(cookie_event, status="passed", elapsed_ms=elapsed_ms())
+            except Exception as exc:
+                logger.exception("Failed to inject bypass auth cookie(s): %s", exc)
+                _update(
+                    cookie_event, status="failed", elapsed_ms=elapsed_ms(), is_failing_step=True
+                )
+                await browser.close()
+                return {
+                    "status": "failed",
+                    "summary": f"Step {cookie_event['sequence']} failed: {exc}",
+                    "events": events,
+                    "failing_step": cookie_event,
+                }
 
         # ── Step: deterministic navigation ──────────────────────────────
         nav_event = _emit("deterministic", "Launch browser and navigate to application")
@@ -930,6 +957,7 @@ def run_ai_test_sync(
     max_duration_s: int = 600,
     on_event: Optional[Callable[[dict], None]] = None,
     llm_override: Optional[object] = None,
+    cookies: Optional[list[dict]] = None,
 ) -> dict:
     """
     Synchronous entry point for the Celery task.
@@ -950,6 +978,10 @@ def run_ai_test_sync(
     llm_override: passed straight through to resolve_with_ai() — see its
     docstring. None (the default) preserves today's fixed provider
     precedence for every existing caller.
+
+    cookies: passed straight through to _execute_steps() — see its
+    docstring. None (the default) preserves today's behavior for every
+    existing caller.
     """
 
     def _runner(cdp_url: str):
@@ -963,6 +995,7 @@ def run_ai_test_sync(
             max_duration_s=max_duration_s,
             on_event=on_event,
             llm_override=llm_override,
+            cookies=cookies,
         )
 
     return _run_with_chromium(_runner)
@@ -1165,10 +1198,19 @@ async def _execute_replay_steps(
     max_duration_s: int,
     on_event: Optional[Callable[[dict], None]],
     allow_ai_fallback: bool,
+    cookies: Optional[list[dict]] = None,
 ) -> dict:
     """Replay flow mirroring _execute_steps: deterministic nav step, stored
     history replay, deterministic final capture. Emits the same event shape
-    so live persistence / SSE / result views work unchanged."""
+    so live persistence / SSE / result views work unchanged.
+
+    cookies: see _execute_steps' docstring. Required for replaying a skill
+    that was originally recorded from a kind="bypass" credential-profile run
+    — that recorded history has no login-form steps in it (the agent started
+    already authenticated), so replaying without re-injecting the cookie
+    means it opens on a real login page it has no recorded actions for and
+    fails immediately.
+    """
     from playwright.async_api import async_playwright
 
     events: list[dict] = []
@@ -1223,6 +1265,26 @@ async def _execute_replay_steps(
                 return "data:image/png;base64," + base64.b64encode(shot).decode()
             except Exception:
                 return None
+
+        # ── Step: inject bypass auth cookie (kind="bypass" profiles only) ──
+        if cookies:
+            cookie_event = _emit("deterministic", "Inject authenticated session cookie")
+            try:
+                await context.add_cookies(cookies)
+                _update(cookie_event, status="passed", elapsed_ms=elapsed_ms())
+            except Exception as exc:
+                logger.exception("Failed to inject bypass auth cookie(s) during replay: %s", exc)
+                _update(
+                    cookie_event, status="failed", elapsed_ms=elapsed_ms(), is_failing_step=True
+                )
+                await browser.close()
+                return {
+                    "status": "failed",
+                    "summary": f"Step {cookie_event['sequence']} failed: {exc}",
+                    "events": events,
+                    "failing_step": cookie_event,
+                    "history_json": None,
+                }
 
         # ── Step: deterministic navigation ──────────────────────────────
         nav_event = _emit("deterministic", "Launch browser and navigate to application")
@@ -1329,6 +1391,7 @@ def run_skill_replay_sync(
     max_duration_s: int = 600,
     on_event: Optional[Callable[[dict], None]] = None,
     allow_ai_fallback: bool = False,
+    cookies: Optional[list[dict]] = None,
 ) -> dict:
     """Synchronous entry point for the skill replay Celery task.
 
@@ -1336,6 +1399,9 @@ def run_skill_replay_sync(
     {status, summary, events, failing_step, history_json}. A failed replay
     marks the run failed; there is no silent fallback to AI planning unless
     allow_ai_fallback=True is explicitly passed.
+
+    cookies: see _execute_replay_steps' docstring — required to replay a
+    skill recorded from a kind="bypass" credential-profile run.
     """
     try:
         import browser_use  # noqa: F401
@@ -1359,6 +1425,7 @@ def run_skill_replay_sync(
             max_duration_s=max_duration_s,
             on_event=on_event,
             allow_ai_fallback=allow_ai_fallback,
+            cookies=cookies,
         )
 
     return _run_with_chromium(_runner)

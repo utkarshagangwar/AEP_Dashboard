@@ -5,9 +5,25 @@ WORKDIR /app
 # System deps for psycopg2, Node.js (needed by robotframework-browser/Playwright),
 # ffmpeg (video_ingest.py extracts still frames from walkthrough videos for
 # precise on-screen text/branding reads — Gemini's native video understanding
-# under-attends small persistent UI chrome like a header logo, see README Changelog)
+# under-attends small persistent UI chrome like a header logo, see README Changelog),
+# and weasyprint's runtime libs (SOW Creation & Rewrite Phase 6 -- .pdf export,
+# app/services/sow_export.py::render_document_pdf). weasyprint imports fine
+# without these but fails at write_pdf() time -- same category of "needs a
+# system package, not just a pip install" as the ffmpeg addition above.
+# fonts-liberation gives the PDF output real glyphs instead of falling back
+# to whatever (possibly missing) default font the base image has.
+#
+# libgdk-pixbuf-2.0-0 (NOT libgdk-pixbuf2.0-0): python:3.11-slim now
+# resolves to Debian 13 "trixie", which renamed this package with a hyphen
+# before the version number -- the old libgdk-pixbuf2.0-0 name was a
+# transitional package in trixie and has since been dropped entirely,
+# so installing it 404s with "Package ... has no installation candidate".
+# Caught when the image was actually rebuilt (this wasn't testable in the
+# sandbox this Dockerfile change was authored in, which had no Docker).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev curl gnupg ffmpeg && \
+    build-essential libpq-dev curl gnupg ffmpeg \
+    libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 libffi-dev \
+    shared-mime-info fonts-liberation && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*

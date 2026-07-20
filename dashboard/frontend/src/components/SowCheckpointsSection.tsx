@@ -321,7 +321,7 @@ export default function SowCheckpointsSection({
   if (!enabled) return null;
 
   return (
-    <Card className="shadow-sm mt-6">
+    <Card className="shadow-sm">
       <CardHeader className="pb-4">
         <div className="flex items-center justify-between">
           <div>

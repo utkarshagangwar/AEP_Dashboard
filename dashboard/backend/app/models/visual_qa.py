@@ -27,6 +27,11 @@ class ArtifactType(str, PyEnum):
     figma_png = "figma_png"      # exported Figma frame (image upload or Figma API)
     sow = "sow"                  # SOW / requirements document
     video = "video"              # design walkthrough video
+    # Added for SOW Creation & Rewrite (see app/models/sow.py) -- meeting
+    # inputs feeding SOW generation, reusing this table's existing sha256
+    # Memory Bank dedupe rather than a parallel storage mechanism.
+    meeting_transcript = "meeting_transcript"  # pasted/uploaded text transcript
+    meeting_recording = "meeting_recording"    # raw audio/video recording
 
 
 class ParseStatus(str, PyEnum):

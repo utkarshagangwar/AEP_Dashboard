@@ -35,6 +35,9 @@ celery_app.conf.update(
         "app.workers.tasks.video_ingest",
         "app.workers.tasks.orchestrator",
         "app.workers.tasks.visual_qa_reconcile",
+        "app.workers.tasks.sow_ledger",
+        "app.workers.tasks.sow_reconcile",
+        "app.workers.tasks.sow_generation",
     ],
 )
 
@@ -49,6 +52,10 @@ celery_app.conf.beat_schedule = {
     },
     "reconcile-stale-visual-qa": {
         "task": "visual_qa_reconcile.reconcile_stale_visual_qa",
+        "schedule": 300.0,  # every 5 minutes
+    },
+    "reconcile-stale-sow-sources": {
+        "task": "sow_reconcile.reconcile_stale_sow_sources",
         "schedule": 300.0,  # every 5 minutes
     },
 }

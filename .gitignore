@@ -10,6 +10,14 @@
 .env.*
 !.env.example
 
+# dashboard/.env.example previously had a real (non-placeholder) database
+# credential committed into it (found 2026-07-15) and is apparently used
+# locally as a real, filled-in env file rather than a template — force it
+# back under the .env.* ignore rule above so it's never committed again.
+# The onboarding template lives at dashboard/.env.sample instead (tracked,
+# placeholder values only).
+dashboard/.env.example
+
 # Private keys and certificates
 *.pem
 *.key

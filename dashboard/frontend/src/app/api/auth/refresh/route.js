@@ -12,6 +12,16 @@ const REFRESH_TOKEN_EXPIRE_DAYS = parseInt(
   10,
 );
 
+// See the matching comment in ../login/route.js — NODE_ENV isn't a proxy
+// for "this request arrived over HTTPS," and using it to gate Secure broke
+// session refresh entirely when accessed directly on :3000 instead of
+// through nginx's :443.
+function isHttpsRequest(request) {
+  const proto = request.headers.get("x-forwarded-proto");
+  if (proto) return proto.split(",")[0].trim() === "https";
+  return new URL(request.url).protocol === "https:";
+}
+
 export async function POST(request) {
   // Extract refresh token from httpOnly cookie
   const cookieHeader = request.headers.get("cookie") || "";
@@ -52,7 +62,7 @@ export async function POST(request) {
       `Max-Age=${REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60}`,
       "Path=/api/auth",
     ];
-    if (process.env.NODE_ENV === "production") cookieParts.push("Secure");
+    if (isHttpsRequest(request)) cookieParts.push("Secure");
     response.headers.set("Set-Cookie", cookieParts.join("; "));
   }
 

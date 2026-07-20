@@ -1,10 +1,15 @@
 "use client";
 import { useEffect } from "react";
+import { getStoredUser } from "../utils/authStore";
 
 export default function RootPage() {
   useEffect(() => {
-    const token = localStorage.getItem("aep_access_token");
-    window.location.href = token ? "/dashboard" : "/login";
+    // The access token itself now lives in memory only, so it's already
+    // gone by the time this runs on a fresh load — the cached user profile
+    // (still in localStorage) is the signal here instead. Middleware is the
+    // real gate; this is just picking an initial redirect target.
+    const user = getStoredUser();
+    window.location.href = user ? "/dashboard" : "/login";
   }, []);
 
   return (

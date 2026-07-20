@@ -21,7 +21,7 @@ from app.models.ai_runs import (
 )
 from app.models.orchestrator import OrchestratorRun, OrchestratorRunStatus, OrchestratorStepDecision
 from app.models.visual_qa import VisualFinding, VisualRun
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.ai_runs import (
     AIRunCreate,
     AIRunEventResponse,
@@ -82,7 +82,20 @@ def create_credential_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("vibe_testing")),
 ):
-    """Create a new credential profile with optional encrypted credentials."""
+    """Create a new credential profile with optional encrypted credentials.
+
+    kind="bypass" profiles store an admin API-key login secret capable of
+    impersonating any user on the target app, so they require the admin
+    role on top of the vibe_testing permission every other profile needs —
+    checked here (not via a second route-level Depends) since it depends on
+    the parsed request body, and stacking a role-Depends on the route would
+    require admin for every profile, including plain ones.
+    """
+    if payload.kind == "bypass" and current_user.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Creating a bypass credential profile requires an admin role",
+        )
     try:
         credentials_json = None
         if payload.credentials:
@@ -92,6 +105,8 @@ def create_credential_profile(
         profile = AICredentialProfile(
             name=payload.name,
             project_id=payload.project_id,
+            kind=payload.kind,
+            target_url=payload.target_url,
             allowed_domains=payload.allowed_domains,
             credentials_json=credentials_json,
         )
@@ -183,6 +198,26 @@ def submit_run(
                     detail="Credential profile not found",
                 )
             profile_name = profile.name
+            # Defense-in-depth alongside AIRunCreate's schema validator,
+            # which can't reach the DB to check kind: bypass injects a
+            # Playwright browser cookie and has no Android counterpart yet.
+            if payload.platform == "android" and (profile.kind or "standard") == "bypass":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Bypass credential profiles are not supported for Android runs",
+                )
+
+        android_app_build_name = None
+        if payload.platform == "android":
+            from app.models.ai_runs import AndroidAppBuild
+
+            build = db.get(AndroidAppBuild, payload.android_app_build_id)
+            if build is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Android app build not found",
+                )
+            android_app_build_name = build.name
 
         environment = payload.environment
         if not environment and payload.project_id:
@@ -191,12 +226,29 @@ def submit_run(
             if proj:
                 environment = proj.name
 
+        # One-off "Website without/with login" path — mutually exclusive
+        # with credential_profile_id (enforced by AIRunCreate's validator).
+        # Never persisted as a reusable profile; the password is still
+        # encrypted at rest here even though it's one-off.
+        adhoc_credentials_json = None
+        if payload.login_identifier and payload.login_password:
+            from app.services.credential_service import encrypt_credentials
+            adhoc_credentials_json = encrypt_credentials(
+                {"username": payload.login_identifier, "password": payload.login_password}
+            )
+
         run = AITestRun(
             goal=payload.goal,
             environment=environment,
             project_id=payload.project_id,
             credential_profile_id=payload.credential_profile_id,
             credential_profile_name=profile_name,
+            adhoc_target_url=payload.target_url,
+            adhoc_credentials_json=adhoc_credentials_json,
+            platform=payload.platform,
+            android_app_build_id=payload.android_app_build_id,
+            android_app_build_name=android_app_build_name,
+            device_profile=payload.device_profile,
             status=AIRunStatus.pending,
             created_by=current_user.id,
         )
@@ -253,11 +305,11 @@ def list_runs(
             text(
                 "SELECT id, goal, environment, credential_profile_name, status,"
                 "  started_at, completed_at, duration_ms, step_count, run_type,"
-                "  created_at"
+                "  platform, created_at"
                 " FROM ("
                 "   SELECT id, goal, environment, credential_profile_name,"
                 "     status::text AS status, started_at, completed_at,"
-                "     duration_ms, step_count, run_type, created_at"
+                "     duration_ms, step_count, run_type, platform, created_at"
                 "   FROM ai_test_runs"
                 "   UNION ALL"
                 "   SELECT r.id,"
@@ -267,7 +319,7 @@ def list_runs(
                 "     r.duration_ms,"
                 "     (SELECT COUNT(*) FROM orchestrator_step_decisions d"
                 "        WHERE d.run_id = r.id AND d.invoked = true) AS step_count,"
-                "     'autonomous_qa' AS run_type, r.created_at"
+                "     'autonomous_qa' AS run_type, 'web' AS platform, r.created_at"
                 "   FROM orchestrator_runs r"
                 "   LEFT JOIN ai_credential_profiles cp ON cp.id = r.credential_profile_id"
                 " ) combined_runs"
@@ -289,6 +341,7 @@ def list_runs(
                 duration_ms=r.duration_ms,
                 step_count=r.step_count or 0,
                 run_type=r.run_type or "ai",
+                platform=r.platform or "web",
                 created_at=r.created_at,
             )
             for r in rows
@@ -423,6 +476,11 @@ def get_run(
             created_by=run.created_by,
             created_at=run.created_at,
             updated_at=run.updated_at,
+            platform=run.platform or "web",
+            android_app_build_id=run.android_app_build_id,
+            android_app_build_name=run.android_app_build_name,
+            device_profile=run.device_profile,
+            platform_metadata=run.platform_metadata,
             events=[
                 AIRunEventResponse(
                     id=e.id,

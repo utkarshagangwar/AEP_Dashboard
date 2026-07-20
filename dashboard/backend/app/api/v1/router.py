@@ -2,8 +2,8 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
-    ai_runs, audit, auth, dashboard, defects, executions, orchestrator, projects,
-    reports, test_results, test_suites, test_suites_list, users,
+    ai_runs, android, audit, auth, dashboard, defects, executions, orchestrator,
+    projects, reports, sow, test_results, test_suites, test_suites_list, users,
     visual_audit,
 )
 
@@ -20,5 +20,7 @@ api_router.include_router(executions.router)
 api_router.include_router(reports.router)
 api_router.include_router(defects.router)
 api_router.include_router(ai_runs.router)
+api_router.include_router(android.router)
 api_router.include_router(visual_audit.router)
 api_router.include_router(orchestrator.router)
+api_router.include_router(sow.router)

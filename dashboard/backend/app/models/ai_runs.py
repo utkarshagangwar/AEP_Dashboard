@@ -43,6 +43,19 @@ class AICredentialProfile(Base):
     )
     allowed_domains = mapped_column(JSONB, nullable=True)
     credentials_json = mapped_column(Text, nullable=True)
+    # null/"standard" = plain username+password via sensitive_data (today's
+    # only kind). "bypass" = inject an auth cookie obtained via an admin
+    # API-key login call instead of typing into a login form — routes around
+    # CAPTCHA-gated forms the AI agent cannot and should not try to solve.
+    # For "bypass", credentials_json holds {api_base_url, bypass_endpoint,
+    # api_key, cookie_name, cookie_domain} instead of {username, password}.
+    # The API key alone grants access — no separate user identity needed.
+    kind = mapped_column(String(20), nullable=True)
+    # Only meaningful for kind="bypass" — where to navigate after the auth
+    # cookie is injected. Should be the actual logged-in destination (e.g.
+    # .../dashboard), not the public marketing homepage — the homepage
+    # typically renders the same nav regardless of auth state.
+    target_url = mapped_column(Text, nullable=True)
     created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
@@ -135,6 +148,53 @@ class AISkill(Base):
         return self.history_json is not None
 
 
+class AndroidAppBuild(Base):
+    """An uploaded Android debug APK, pushed to a cloud device farm
+    (BrowserStack App Automate today — see app.services.device_farm) and
+    referenced by farm_app_id (e.g. "bs://<hash>") for Android Vibe Testing
+    runs. Reusable across runs, like a credential profile — not a
+    QA-cycle-scoped artifact — hence project_id is ondelete=SET NULL rather
+    than CASCADE.
+
+    The original APK bytes are kept on the shared visual_qa_data-style
+    volume (storage_path) even after upload, because BrowserStack expires an
+    uploaded app after ~30 days of inactivity — keeping the file lets a
+    stale farm_app_id be refreshed by re-upload instead of asking the QA
+    engineer to re-locate the APK.
+    """
+
+    __tablename__ = "android_app_builds"
+
+    id = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = mapped_column(String(300), nullable=False)
+    project_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    apk_filename = mapped_column(String(500), nullable=False)
+    sha256 = mapped_column(String(64), nullable=False, index=True)
+    storage_path = mapped_column(Text, nullable=True)
+    file_size = mapped_column(Integer, nullable=True)
+    # Only "browserstack" is implemented today — kept as a column (rather
+    # than assumed) so a second vendor is an additive change, not a migration.
+    farm_vendor = mapped_column(String(20), nullable=False, server_default="browserstack")
+    farm_app_id = mapped_column(Text, nullable=False)  # e.g. "bs://<hash>"
+    # Informational only — captured live from driver.current_package on the
+    # build's first run rather than requiring APK parsing at upload time.
+    package_name = mapped_column(String(300), nullable=True)
+    created_by = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AITestRun(Base):
     __tablename__ = "ai_test_runs"
 
@@ -153,6 +213,36 @@ class AITestRun(Base):
         nullable=True,
     )
     credential_profile_name = mapped_column(String(200), nullable=True)
+    # One-off "Website without/with login" path — used only when no saved
+    # credential_profile_id is set. Never persisted as a reusable profile.
+    adhoc_target_url = mapped_column(Text, nullable=True)
+    # Fernet-encrypted {"username": ..., "password": ...}, same
+    # credential_service helpers as AICredentialProfile.credentials_json —
+    # never store the ad-hoc password in plaintext, even though it's one-off.
+    adhoc_credentials_json = mapped_column(Text, nullable=True)
+    # "web" (default) | "android" — which Hands implementation executes this
+    # run (app.services.ai_runner vs app.services.android_runner).
+    # Deliberately orthogonal to run_type below (execution-origin: "ai" vs
+    # "skill_replay") — same separation the frontend already keeps between
+    # testType (web/android) and testMode (quick/visual/sow/video). Plain
+    # string discriminator, not a native enum, matching AISkill.source_type's
+    # existing convention for a small, still-growing set of values.
+    platform = mapped_column(String(20), nullable=False, server_default="web")
+    android_app_build_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("android_app_builds.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Denormalized display fallback, same pattern as credential_profile_name.
+    android_app_build_name = mapped_column(String(300), nullable=True)
+    # Key into app.services.device_farm.DEVICE_PROFILES — not a live farm
+    # catalog fetch for MVP.
+    device_profile = mapped_column(String(100), nullable=True)
+    # Android-only structured metadata: {farm_vendor, farm_session_id,
+    # dashboard_url, video_url}. Always null for web runs. Structured data an
+    # API/UI needs to read directly — same shape decision already made for
+    # AIRunEvent.highlighted_element, rather than scraping it out of prose.
+    platform_metadata = mapped_column(JSONB, nullable=True)
     status = mapped_column(
         Enum(AIRunStatus, name="ai_run_status_enum"),
         nullable=False,

@@ -50,7 +50,27 @@ services:
       VISUAL_VIDEO_MODEL: ${VISUAL_VIDEO_MODEL:-gemini-3.5-flash}
       VISUAL_VIDEO_FALLBACK: ${VISUAL_VIDEO_FALLBACK:-gemini-2.5-flash}
       VISUAL_VIDEO_MAX_MB: ${VISUAL_VIDEO_MAX_MB:-100}
+      # SOW Creation & Rewrite (see SOW_FEATURE_PLAN.md) — master switch, same
+      # convention as VISUAL_AUDIT_ENABLED above. This entry is the fix for
+      # the 2026-07-20 bug where SOW_ENABLED=true in .env had no effect: this
+      # file's per-service `environment:` block is an explicit allowlist, not
+      # a blanket .env passthrough — a var only reaches the container if it's
+      # listed here too, regardless of what .env sets.
+      SOW_ENABLED: ${SOW_ENABLED:-false}
+      SOW_MAX_RECORDING_MB: ${SOW_MAX_RECORDING_MB:-300}
+      SOW_MAX_RECORDING_MINUTES: ${SOW_MAX_RECORDING_MINUTES:-60}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      # Must be identical to celery_worker's value below — both
+      # encrypt/decrypt the same ai_credential_profiles rows in separate
+      # processes. Unset in either = an ephemeral, process-local key that
+      # can't decrypt what the other container encrypted.
+      AI_CREDENTIAL_KEY: ${AI_CREDENTIAL_KEY:-}
+      # Android Vibe Testing — cloud device farm (BrowserStack App Automate).
+      # Backend needs these for APK upload; celery_worker needs them for
+      # session start/session-details (see app/services/device_farm.py).
+      BROWSERSTACK_USERNAME: ${BROWSERSTACK_USERNAME:-}
+      BROWSERSTACK_ACCESS_KEY: ${BROWSERSTACK_ACCESS_KEY:-}
+      ANDROID_MAX_APK_MB: ${ANDROID_MAX_APK_MB:-200}
     depends_on:
       redis:
         condition: service_healthy
@@ -103,6 +123,22 @@ services:
       VISUAL_VIDEO_MODEL: ${VISUAL_VIDEO_MODEL:-gemini-3.5-flash}
       VISUAL_VIDEO_FALLBACK: ${VISUAL_VIDEO_FALLBACK:-gemini-2.5-flash}
       VISUAL_VIDEO_MAX_MB: ${VISUAL_VIDEO_MAX_MB:-100}
+      # SOW Creation & Rewrite — must match backend's block above (this is
+      # the worker; sow_ledger.py's Celery tasks run here). See backend's
+      # comment above for why this entry exists at all.
+      SOW_ENABLED: ${SOW_ENABLED:-false}
+      SOW_MAX_RECORDING_MB: ${SOW_MAX_RECORDING_MB:-300}
+      SOW_MAX_RECORDING_MINUTES: ${SOW_MAX_RECORDING_MINUTES:-60}
+      # Must match backend's value above — see its comment.
+      AI_CREDENTIAL_KEY: ${AI_CREDENTIAL_KEY:-}
+      # Android Vibe Testing — see backend's block above for why both
+      # containers need the BrowserStack credentials. The per-run ceilings
+      # below only matter where execution actually happens (here).
+      BROWSERSTACK_USERNAME: ${BROWSERSTACK_USERNAME:-}
+      BROWSERSTACK_ACCESS_KEY: ${BROWSERSTACK_ACCESS_KEY:-}
+      ANDROID_MAX_DURATION_S: ${ANDROID_MAX_DURATION_S:-480}
+      ANDROID_MAX_STEPS: ${ANDROID_MAX_STEPS:-25}
+      ANDROID_NEW_COMMAND_TIMEOUT_S: ${ANDROID_NEW_COMMAND_TIMEOUT_S:-120}
     depends_on:
       redis:
         condition: service_healthy

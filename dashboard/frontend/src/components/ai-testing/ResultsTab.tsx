@@ -21,6 +21,7 @@ interface RunListItem {
   duration_ms?: number | null;
   step_count: number;
   run_type: string;
+  platform?: string;
   created_at: string;
 }
 
@@ -212,22 +213,29 @@ export default function ResultsTab() {
                   <RunStatusBadge status={run.status} />
                 </td>
                 <td className="px-4 py-3">
-                  <Badge
-                    variant="outline"
-                    className={`text-xs ${
-                      run.run_type === "skill_replay"
-                        ? "border-indigo-200 text-indigo-600"
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Badge
+                      variant="outline"
+                      className={`text-xs ${
+                        run.run_type === "skill_replay"
+                          ? "border-indigo-200 text-indigo-600"
+                          : run.run_type === "autonomous_qa"
+                            ? "border-teal-200 text-teal-600"
+                            : "border-purple-200 text-purple-600"
+                      }`}
+                    >
+                      {run.run_type === "skill_replay"
+                        ? "Replay"
                         : run.run_type === "autonomous_qa"
-                          ? "border-teal-200 text-teal-600"
-                          : "border-purple-200 text-purple-600"
-                    }`}
-                  >
-                    {run.run_type === "skill_replay"
-                      ? "Replay"
-                      : run.run_type === "autonomous_qa"
-                        ? "Autonomous QA"
-                        : "AI"}
-                  </Badge>
+                          ? "Autonomous QA"
+                          : "AI"}
+                    </Badge>
+                    {run.platform === "android" && (
+                      <Badge variant="outline" className="text-xs border-emerald-200 text-emerald-600">
+                        Android
+                      </Badge>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-gray-500">
                   {run.environment || "Custom"}

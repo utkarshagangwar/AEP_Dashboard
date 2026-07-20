@@ -1,4 +1,5 @@
 """FastAPI application entrypoint for the Automation Execution Platform."""
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
@@ -21,6 +22,14 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """Run startup tasks: configure logging and seed the initial admin."""
     logger.info("Starting Automation Execution Platform API")
+    if not os.environ.get("AI_CREDENTIAL_KEY"):
+        logger.warning(
+            "AI_CREDENTIAL_KEY is not set — AI credential profiles (Vibe Testing saved "
+            "logins) will be encrypted with a key generated fresh on every restart and "
+            "become permanently undecryptable the moment this process restarts. Set "
+            "AI_CREDENTIAL_KEY to a stable value before anyone saves a credential profile "
+            "in production. See .env.example for how to generate one."
+        )
     seed_initial_admin()
     yield
     logger.info("Shutting down Automation Execution Platform API")

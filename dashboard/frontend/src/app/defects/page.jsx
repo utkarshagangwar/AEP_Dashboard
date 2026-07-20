@@ -5,6 +5,13 @@ import AppShell from "../../components/AppShell";
 import PageContainer from "../../components/PageContainer";
 import { apiGet, apiPost, apiPatch } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 const SEV_COLORS = {
   critical: "#DC2626",
@@ -189,47 +196,48 @@ export default function DefectsPage() {
               </button>
             ))}
           </div>
-          <select
-            value={sevFilter}
-            onChange={(e) => setSevFilter(e.target.value)}
-            style={{
-              padding: "6px 12px",
-              fontSize: 12,
-              border: "1px solid #E5E7EB",
-              borderRadius: 999,
-              outline: "none",
-              color: "#6B7280",
-              background: "#fff",
-              cursor: "pointer",
-            }}
+          <Select
+            value={sevFilter || "all"}
+            onValueChange={(v) => setSevFilter(v === "all" ? "" : v)}
+            items={[
+              { value: "all", label: "All Severities" },
+              { value: "critical", label: "Critical" },
+              { value: "high", label: "High" },
+              { value: "medium", label: "Medium" },
+              { value: "low", label: "Low" },
+            ]}
           >
-            <option value="">All Severities</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-          <select
-            value={projectFilter}
-            onChange={(e) => setProjectFilter(e.target.value)}
-            style={{
-              padding: "6px 12px",
-              fontSize: 12,
-              border: "1px solid #E5E7EB",
-              borderRadius: 999,
-              outline: "none",
-              color: "#6B7280",
-              background: "#fff",
-              cursor: "pointer",
-            }}
+            <SelectTrigger className="h-[29px] rounded-full text-xs text-gray-500">
+              <SelectValue placeholder="All Severities" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Severities</SelectItem>
+              <SelectItem value="critical">Critical</SelectItem>
+              <SelectItem value="high">High</SelectItem>
+              <SelectItem value="medium">Medium</SelectItem>
+              <SelectItem value="low">Low</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={projectFilter || "all"}
+            onValueChange={(v) => setProjectFilter(v === "all" ? "" : v)}
+            items={[
+              { value: "all", label: "All Projects" },
+              ...projects.map((p) => ({ value: p.id, label: p.name })),
+            ]}
           >
-            <option value="">All Projects</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="h-[29px] rounded-full text-xs text-gray-500">
+              <SelectValue placeholder="All Projects" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Projects</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {error && (
@@ -584,28 +592,24 @@ export default function DefectsPage() {
                   >
                     Project *
                   </label>
-                  <select
+                  <Select
                     value={form.project_id}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, project_id: e.target.value }))
+                    onValueChange={(v) =>
+                      setForm((f) => ({ ...f, project_id: v ?? "" }))
                     }
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      fontSize: 13,
-                      border: "1px solid #E5E7EB",
-                      borderRadius: 8,
-                      outline: "none",
-                      background: "#fff",
-                    }}
+                    items={projects.map((p) => ({ value: p.id, label: p.name }))}
                   >
-                    <option value="">Select…</option>
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="h-[36px] w-full text-[13px]">
+                      <SelectValue placeholder="Select…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <label
@@ -619,26 +623,28 @@ export default function DefectsPage() {
                   >
                     Severity
                   </label>
-                  <select
+                  <Select
                     value={form.severity}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, severity: e.target.value }))
+                    onValueChange={(v) =>
+                      setForm((f) => ({ ...f, severity: v ?? "medium" }))
                     }
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      fontSize: 13,
-                      border: "1px solid #E5E7EB",
-                      borderRadius: 8,
-                      outline: "none",
-                      background: "#fff",
-                    }}
+                    items={[
+                      { value: "critical", label: "Critical" },
+                      { value: "high", label: "High" },
+                      { value: "medium", label: "Medium" },
+                      { value: "low", label: "Low" },
+                    ]}
                   >
-                    <option value="critical">Critical</option>
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
-                  </select>
+                    <SelectTrigger className="h-[36px] w-full text-[13px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="critical">Critical</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="low">Low</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               {formError && (
@@ -814,32 +820,43 @@ export default function DefectsPage() {
                 >
                   Assigned To
                 </label>
-                <select
-                  value={editDefect.assigned_to || ""}
-                  onChange={(e) =>
-                    setEditDefect((d) => ({ ...d, assigned_to: e.target.value }))
+                <Select
+                  value={editDefect.assigned_to || "unassigned"}
+                  onValueChange={(v) =>
+                    setEditDefect((d) => ({
+                      ...d,
+                      assigned_to: v === "unassigned" ? "" : v,
+                    }))
                   }
-                  style={{
-                    width: "100%",
-                    padding: "8px 12px",
-                    fontSize: 13,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    outline: "none",
-                    background: "#fff",
-                  }}
+                  items={[
+                    {
+                      value: "unassigned",
+                      label: editDefect.assigned_to_name
+                        ? `Currently: ${editDefect.assigned_to_name}`
+                        : "Unassigned",
+                    },
+                    ...assignableUsers.map((u) => ({
+                      value: u.id,
+                      label: `${u.full_name} (${u.role.replace("_", " ")})`,
+                    })),
+                  ]}
                 >
-                  <option value="">
-                    {editDefect.assigned_to_name
-                      ? `Currently: ${editDefect.assigned_to_name}`
-                      : "Unassigned"}
-                  </option>
-                  {assignableUsers.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.full_name} ({u.role.replace("_", " ")})
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-[36px] w-full text-[13px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unassigned">
+                      {editDefect.assigned_to_name
+                        ? `Currently: ${editDefect.assigned_to_name}`
+                        : "Unassigned"}
+                    </SelectItem>
+                    {assignableUsers.map((u) => (
+                      <SelectItem key={u.id} value={u.id}>
+                        {u.full_name} ({u.role.replace("_", " ")})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               {editError && (
                 <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>

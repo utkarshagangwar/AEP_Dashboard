@@ -13,9 +13,12 @@ access-control mechanism itself, and stay permanently admin-only.
 PERMISSION_KEYS = [
     "projects",
     "test_suites",
-    "test_runs",
     "execute",
     "defects",
-    "reports",
     "vibe_testing",
+    # SOW Creation & Rewrite (see app/models/sow.py, app/api/v1/sow.py) --
+    # kept distinct from vibe_testing on purpose (SOW_FEATURE_PLAN.md §11.1)
+    # so authoring SOWs and running the AI test agent can be granted
+    # independently.
+    "sow",
 ]

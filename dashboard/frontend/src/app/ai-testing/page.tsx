@@ -2,16 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { apiGet, apiFetch, apiPost } from "@/utils/apiClient";
+import { apiGet, apiFetch, apiPost, refreshAccessToken } from "@/utils/apiClient";
+import { getAccessToken } from "@/lib/api";
 import AppShell from "@/components/AppShell";
 import PageContainer from "@/components/PageContainer";
 import AutonomousQASection from "@/components/AutonomousQASection";
-import VisualAuditSection from "@/components/VisualAuditSection";
 import SowCheckpointsSection from "@/components/SowCheckpointsSection";
-import FigmaImportSection from "@/components/FigmaImportSection";
 import ResultsTab from "@/components/ai-testing/ResultsTab";
 import SkillsTab from "@/components/ai-testing/SkillsTab";
+import ModeSelector, { TestMode } from "@/components/ai-testing/ModeSelector";
+import CreateBypassProfileDialog from "@/components/ai-testing/CreateBypassProfileDialog";
 import {
+  CredentialProfile,
+  EXAMPLE_GOALS,
   RunEvent,
   RunResult,
   StepIcon,
@@ -19,7 +22,9 @@ import {
   StepRow,
   formatDuration,
   formatElapsed,
+  isGoalValid,
 } from "@/components/ai-testing/shared";
+import AndroidNewTestPanel from "@/components/ai-testing/AndroidNewTestPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,30 +47,29 @@ interface Environment {
   name: string;
 }
 
-interface CredentialProfile {
-  id: string;
-  name: string;
-}
+// The Credential Profile control branches by this exact environment name
+// (case-insensitive) — see BYPASS_ENVIRONMENT_NAME's usage below for why a
+// hardcoded name match was chosen over dynamic detection.
+const BYPASS_ENVIRONMENT_NAME = "ig automation";
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const EXAMPLE_GOALS = [
-  "Verify checkout flow as guest user",
-  "Check admin can deactivate an account",
-  "Confirm report export generates a CSV",
-];
-
-const ACTION_WORDS = [
-  "log", "verify", "check", "confirm", "test", "navigate", "click",
-  "fill", "submit", "open", "close", "create", "delete", "login",
-  "sign", "search", "filter", "export", "upload", "download",
-];
+// Synthetic entry prepended to the Environment dropdown — not a real
+// environment id from the backend, never sent as project_id. Lets a user
+// explicitly opt out of every saved environment and drive the ad-hoc
+// URL/Email/Password fields directly (e.g. testing a site that has no
+// pre-configured environment entry at all). Picking it still counts as
+// "an Environment was chosen" for gating purposes below.
+const NO_ENVIRONMENT_VALUE = "__no_environment__";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function isGoalValid(goal: string): boolean {
-  const g = goal.trim().toLowerCase();
-  return g.length >= 10 && ACTION_WORDS.some((w) => g.includes(w));
+// Prepends https:// when the user typed a bare host/path (e.g.
+// "interviewgod.com/login") — without this, urlparse().hostname on the
+// backend comes back None for a schemeless URL, which trips the
+// allowed_domains validation with a confusing error.
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
 // ── Top-level tab bar (New Test | Results | Skills) ─────────────────────────
@@ -110,6 +114,14 @@ export default function AITestingPage() {
   const [goal, setGoal] = useState("");
   const [projectId, setProjectId] = useState<string>("");
   const [profileId, setProfileId] = useState<string>("");
+  // One-off "Website without/with login" path — only used when the selected
+  // Environment isn't the bypass-capable one (see BYPASS_ENVIRONMENT_NAME).
+  // Never saved as a reusable profile; sent directly with the run.
+  const [loginMode, setLoginMode] = useState<"none" | "without_login" | "with_login">("none");
+  const [adhocUrl, setAdhocUrl] = useState("");
+  const [adhocLoginId, setAdhocLoginId] = useState("");
+  const [adhocPassword, setAdhocPassword] = useState("");
+  const [bypassDialogOpen, setBypassDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -123,6 +135,13 @@ export default function AITestingPage() {
   const [defectDescription, setDefectDescription] = useState("");
   const [defectLogged, setDefectLogged] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // New-test mode picker (UI-only grouping — each mode maps to an existing,
+  // independently-functioning section; switching modes never unmounts a
+  // section, it only toggles visibility, so an in-flight upload/poll/run in
+  // a non-active mode keeps running untouched. "android" is a placeholder
+  // surface with no backend behind it yet.
+  const [testMode, setTestMode] = useState<TestMode>("quick");
+  const [testType, setTestType] = useState<"web" | "android">("web");
 
   const logRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -141,14 +160,83 @@ export default function AITestingPage() {
     staleTime: 60_000,
   });
 
-  const { data: profiles = [], isLoading: profilesLoading } = useQuery<CredentialProfile[]>({
-    queryKey: ["ai-credential-profiles", projectId],
+  // NO_ENVIRONMENT_VALUE is a frontend-only sentinel, not a real project
+  // id — the backend's project_id filter expects a UUID, so passing the
+  // sentinel through would 422. Treat it the same as "no filter."
+  const profileFilterProjectId = projectId && projectId !== NO_ENVIRONMENT_VALUE ? projectId : "";
+  const { data: profiles = [], isLoading: profilesLoading, refetch: refetchProfiles } = useQuery<CredentialProfile[]>({
+    queryKey: ["ai-credential-profiles", profileFilterProjectId],
     queryFn: () =>
       apiGet(
-        `/api/ai-testing/credential-profiles${projectId ? `?project_id=${projectId}` : ""}`
+        `/api/ai-testing/credential-profiles${profileFilterProjectId ? `?project_id=${profileFilterProjectId}` : ""}`
       ),
     staleTime: 60_000,
   });
+
+  // ── Environment-dependent Credential Profile branching ──────────────────
+  // Environment is a mandatory gate: nothing chosen yet → neither the
+  // Credential Profile picker nor the ad-hoc URL/login fields are shown at
+  // all (previously the Credential Profile picker rendered by default with
+  // no Environment picked, which let it be filled in out of order). Once
+  // something is chosen — a real environment, or the explicit "No
+  // Environment" entry — the bypass-capable environment shows the
+  // saved-profile picker; everything else (including "No Environment")
+  // shows the one-off "Website without/with login" pills, since most
+  // environments (and by definition "No Environment") have no saved
+  // credential profile at all.
+  const selectedEnv = environments.find((e) => e.id === projectId);
+  const isIgAutomation =
+    !!selectedEnv && selectedEnv.name.trim().toLowerCase() === BYPASS_ENVIRONMENT_NAME;
+  const hasEnvironmentChoice = projectId !== "";
+  const adhocValid =
+    !hasEnvironmentChoice
+      ? false
+      : isIgAutomation
+      ? true
+      : (loginMode === "without_login" && adhocUrl.trim().length > 0) ||
+        (loginMode === "with_login" &&
+          adhocUrl.trim().length > 0 &&
+          adhocLoginId.trim().length > 0 &&
+          adhocPassword.length > 0);
+
+  // Switching environments invalidates whatever was picked/typed for the
+  // previous one — without this, a stale profileId from a different
+  // environment would silently stay in handleSubmit's body (e.g. picking
+  // "IG Login bypass" under IG Automation, then switching to another
+  // environment, would otherwise still submit that bypass profile id
+  // against the wrong app).
+  useEffect(() => {
+    setProfileId("");
+    setLoginMode("none");
+    setAdhocUrl("");
+    setAdhocLoginId("");
+    setAdhocPassword("");
+  }, [projectId]);
+
+  // Shared by handleSubmit and handleRerun so the two never diverge on how
+  // a run body is built. Takes projId explicitly (rather than always
+  // reading the projectId state) because handleRerun may submit against a
+  // different project than whatever's currently selected in the dropdown.
+  function buildRunBody(goalText: string, projId: string): Record<string, unknown> {
+    const body: Record<string, unknown> = { goal: goalText };
+    // NO_ENVIRONMENT_VALUE is a frontend-only sentinel, never a real
+    // project id — must never be sent to the backend as project_id.
+    if (projId && projId !== NO_ENVIRONMENT_VALUE) body.project_id = projId;
+
+    const env = environments.find((e) => e.id === projId);
+    const igAuto = !!env && env.name.trim().toLowerCase() === BYPASS_ENVIRONMENT_NAME;
+
+    if (igAuto && profileId) {
+      body.credential_profile_id = profileId;
+    } else if (!igAuto && loginMode !== "none" && adhocUrl.trim()) {
+      body.target_url = normalizeUrl(adhocUrl);
+      if (loginMode === "with_login" && adhocLoginId.trim() && adhocPassword) {
+        body.login_identifier = adhocLoginId.trim();
+        body.login_password = adhocPassword;
+      }
+    }
+    return body;
+  }
 
   // ── Auto-scroll log ───────────────────────────────────────────────────────
 
@@ -211,61 +299,87 @@ export default function AITestingPage() {
   useEffect(() => {
     if (uiState !== "running" || !runId) return;
 
-    const token =
-      typeof window !== "undefined"
-        ? localStorage.getItem("aep_access_token") || ""
-        : "";
-    const es = new EventSource(
-      `/api/ai-testing/runs/${runId}/stream?token=${encodeURIComponent(token)}`
-    );
+    let cancelled = false;
+    let es: EventSource | null = null;
 
-    const TERMINAL = new Set(["passed", "failed", "inconclusive", "cancelled"]);
-
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data.error) {
-          es.close();
-          return;
-        }
-
-        if (Array.isArray(data.new_events) && data.new_events.length > 0) {
-          // Upsert by sequence: a step is first sent as "running" and later
-          // re-sent as "passed"/"failed" on the *same* sequence once it
-          // resolves, so incoming events must overwrite existing entries,
-          // not just be appended when the sequence hasn't been seen before
-          // (otherwise a step's completion update would be silently dropped
-          // and it would look stuck in "running" forever).
-          setEvents((prev) => {
-            const bySeq = new Map(prev.map((e) => [e.sequence, e]));
-            for (const e of data.new_events as RunEvent[]) {
-              bySeq.set(e.sequence, e);
-              if (e.status === "running" && !stepStartRef.current.has(e.sequence)) {
-                stepStartRef.current.set(e.sequence, Date.now());
-              }
-            }
-            return Array.from(bySeq.values()).sort((a, b) => a.sequence - b.sequence);
-          });
-          const withShot = [...data.new_events]
-            .reverse()
-            .find((e: RunEvent) => e.screenshot_url);
-          if (withShot) {
-            setLiveScreenshot(withShot.screenshot_url ?? null);
-            setLiveHighlight(withShot.highlighted_element ?? null);
-          }
-        }
-
-        if (TERMINAL.has(data.run_status)) {
-          es.close();
-          fetchRunResult(runId);
-        }
-      } catch {
-        // ignore malformed SSE frames
+    // The access token is in-memory only (see lib/api.ts) — it is never
+    // written to localStorage. Reading it from localStorage here (the old
+    // code) always produced an empty string, so the stream opened with
+    // token="" → the Next.js proxy forwarded no Authorization header →
+    // FastAPI's get_current_user 401'd → EventSource's spec-mandated
+    // behavior for a non-200 response is to fire onerror without ever
+    // invoking onmessage, and that handler just closed the connection. Net
+    // effect: the run silently never received a single event and the UI
+    // sat on "Initialising…" / "Waiting for first screenshot…" forever,
+    // even though the run itself was actually executing server-side. Pull
+    // the real in-memory token instead, and if it's momentarily unset
+    // (e.g. this fires in the same tick as a token refresh), await one
+    // refresh before opening the connection rather than opening it
+    // guaranteed-broken.
+    (async () => {
+      let token = getAccessToken();
+      if (!token) {
+        await refreshAccessToken();
+        token = getAccessToken();
       }
-    };
+      if (cancelled) return;
 
-    es.onerror = () => es.close();
-    return () => es.close();
+      es = new EventSource(
+        `/api/ai-testing/runs/${runId}/stream?token=${encodeURIComponent(token || "")}`
+      );
+
+      const TERMINAL = new Set(["passed", "failed", "inconclusive", "cancelled"]);
+
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (data.error) {
+            es?.close();
+            return;
+          }
+
+          if (Array.isArray(data.new_events) && data.new_events.length > 0) {
+            // Upsert by sequence: a step is first sent as "running" and later
+            // re-sent as "passed"/"failed" on the *same* sequence once it
+            // resolves, so incoming events must overwrite existing entries,
+            // not just be appended when the sequence hasn't been seen before
+            // (otherwise a step's completion update would be silently dropped
+            // and it would look stuck in "running" forever).
+            setEvents((prev) => {
+              const bySeq = new Map(prev.map((e) => [e.sequence, e]));
+              for (const e of data.new_events as RunEvent[]) {
+                bySeq.set(e.sequence, e);
+                if (e.status === "running" && !stepStartRef.current.has(e.sequence)) {
+                  stepStartRef.current.set(e.sequence, Date.now());
+                }
+              }
+              return Array.from(bySeq.values()).sort((a, b) => a.sequence - b.sequence);
+            });
+            const withShot = [...data.new_events]
+              .reverse()
+              .find((e: RunEvent) => e.screenshot_url);
+            if (withShot) {
+              setLiveScreenshot(withShot.screenshot_url ?? null);
+              setLiveHighlight(withShot.highlighted_element ?? null);
+            }
+          }
+
+          if (TERMINAL.has(data.run_status)) {
+            es?.close();
+            fetchRunResult(runId);
+          }
+        } catch {
+          // ignore malformed SSE frames
+        }
+      };
+
+      es.onerror = () => es?.close();
+    })();
+
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
   }, [uiState, runId, fetchRunResult]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -283,9 +397,7 @@ export default function AITestingPage() {
     stepStartRef.current.clear();
 
     try {
-      const body: Record<string, unknown> = { goal: goal.trim() };
-      if (projectId) body.project_id = projectId;
-      if (profileId) body.credential_profile_id = profileId;
+      const body = buildRunBody(goal.trim(), projectId);
 
       const resp = await apiFetch("/api/ai-testing/runs", {
         method: "POST",
@@ -334,9 +446,7 @@ export default function AITestingPage() {
     setSubmitError(null);
 
     try {
-      const body: Record<string, unknown> = { goal: savedGoal };
-      if (savedProjectId) body.project_id = savedProjectId;
-      if (profileId) body.credential_profile_id = profileId;
+      const body = buildRunBody(savedGoal, savedProjectId);
 
       const resp = await apiFetch("/api/ai-testing/runs", {
         method: "POST",
@@ -369,6 +479,10 @@ export default function AITestingPage() {
     setGoal("");
     setProjectId("");
     setProfileId("");
+    setLoginMode("none");
+    setAdhocUrl("");
+    setAdhocLoginId("");
+    setAdhocPassword("");
     setRunResult(null);
     setEvents([]);
     setDefectLogged(false);
@@ -385,6 +499,10 @@ export default function AITestingPage() {
     setRunResult(null);
     setDefectLogged(false);
     setSubmitError(null);
+    setLoginMode("none");
+    setAdhocUrl("");
+    setAdhocLoginId("");
+    setAdhocPassword("");
     stepStartRef.current.clear();
     setGoal(skillGoal);
     setRunId(newRunId);
@@ -466,23 +584,50 @@ export default function AITestingPage() {
       <AppShell noPadding>
         <div className="min-h-full bg-gray-50">
           <PageContainer>
-            <div className="mb-8">
-              <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
-              <p className="text-gray-500 mt-1">
-                Autonomous visual QA — upload design files and let the AI audit
-                your live site.
-              </p>
+            <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
+                <p className="text-gray-500 mt-1">
+                  Describe a goal, or bring a design — the AI drives the
+                  browser or app.
+                </p>
+              </div>
+              <div className="flex flex-shrink-0 overflow-hidden rounded-md border border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => setTestType("web")}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${
+                    testType === "web"
+                      ? "bg-gray-900 text-white"
+                      : "bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  Web app testing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTestType("android")}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${
+                    testType === "android"
+                      ? "bg-gray-900 text-white"
+                      : "bg-white text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  Android app testing
+                </button>
+              </div>
             </div>
 
             <PageTabBar active={pageTab} onChange={setPageTab} />
 
-            {/* Autonomous Visual QA hero (design Revision 2) — renders only
-                when the backend feature flag VISUAL_AUDIT_ENABLED is on. */}
-            <div className="mb-6">
-              <AutonomousQASection />
-            </div>
+            {testType === "android" ? (
+              <AndroidNewTestPanel onRunStarted={handleReplayStarted} />
+            ) : (
+              <>
+                <ModeSelector mode={testMode} onModeChange={setTestMode} />
 
-            <Card className="shadow-sm">
+                <div className={testMode === "quick" ? "" : "hidden"}>
+                  <Card className="shadow-sm">
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -517,7 +662,14 @@ export default function AITestingPage() {
                   {envLoading ? (
                     <Skeleton className="h-9 w-36 rounded-md" />
                   ) : (
-                    <Select value={projectId} onValueChange={(v) => setProjectId(v ?? "")}>
+                    <Select
+                      value={projectId}
+                      onValueChange={(v) => setProjectId(v ?? "")}
+                      items={[
+                        { value: NO_ENVIRONMENT_VALUE, label: "No Environment" },
+                        ...environments.map((env) => ({ value: env.id, label: env.name })),
+                      ]}
+                    >
                       <SelectTrigger className="w-auto min-w-[150px] h-9 text-sm">
                         <svg
                           className="w-4 h-4 text-gray-400 mr-1.5"
@@ -541,6 +693,9 @@ export default function AITestingPage() {
                         <SelectValue placeholder="Environment" />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value={NO_ENVIRONMENT_VALUE}>
+                          No Environment
+                        </SelectItem>
                         {environments.map((env) => (
                           <SelectItem key={env.id} value={env.id}>
                             {env.name}
@@ -550,40 +705,115 @@ export default function AITestingPage() {
                     </Select>
                   )}
 
-                  {profilesLoading ? (
-                    <Skeleton className="h-9 w-36 rounded-md" />
-                  ) : (
-                    <Select value={profileId} onValueChange={(v) => setProfileId(v ?? "")}>
-                      <SelectTrigger className="w-auto min-w-[150px] h-9 text-sm">
-                        <svg
-                          className="w-4 h-4 text-gray-400 mr-1.5"
-                          viewBox="0 0 16 16"
-                          fill="none"
+                  {!hasEnvironmentChoice ? (
+                    <div className="flex items-center h-9 px-3 rounded-md border border-dashed border-gray-200 text-xs text-gray-400">
+                      Select an Environment first
+                    </div>
+                  ) : isIgAutomation ? (
+                    profilesLoading ? (
+                      <Skeleton className="h-9 w-36 rounded-md" />
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <Select
+                          value={profileId}
+                          onValueChange={(v) => setProfileId(v ?? "")}
+                          items={profiles.map((p) => ({ value: p.id, label: p.name }))}
                         >
-                          <circle
-                            cx="8"
-                            cy="5.5"
-                            r="2.5"
-                            stroke="currentColor"
-                            strokeWidth="1.25"
+                          <SelectTrigger className="w-auto min-w-[150px] h-9 text-sm">
+                            <svg
+                              className="w-4 h-4 text-gray-400 mr-1.5"
+                              viewBox="0 0 16 16"
+                              fill="none"
+                            >
+                              <circle
+                                cx="8"
+                                cy="5.5"
+                                r="2.5"
+                                stroke="currentColor"
+                                strokeWidth="1.25"
+                              />
+                              <path
+                                d="M2.5 13c0-2.485 2.462-4.5 5.5-4.5s5.5 2.015 5.5 4.5"
+                                stroke="currentColor"
+                                strokeWidth="1.25"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                            <SelectValue placeholder="Credential Profile" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {profiles.map((p) => (
+                              <SelectItem key={p.id} value={p.id}>
+                                {p.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {isIgAutomation && (
+                          <button
+                            type="button"
+                            onClick={() => setBypassDialogOpen(true)}
+                            className="text-xs text-blue-600 hover:underline whitespace-nowrap"
+                          >
+                            + Create bypass profile
+                          </button>
+                        )}
+                      </div>
+                    )
+                  ) : (
+                    <div className="flex flex-col gap-2 w-full">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setLoginMode("without_login")}
+                          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                            loginMode === "without_login"
+                              ? "border-gray-900 bg-gray-900 text-white"
+                              : "border-gray-200 text-gray-600 hover:bg-gray-100"
+                          }`}
+                        >
+                          Website without login
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLoginMode("with_login")}
+                          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                            loginMode === "with_login"
+                              ? "border-gray-900 bg-gray-900 text-white"
+                              : "border-gray-200 text-gray-600 hover:bg-gray-100"
+                          }`}
+                        >
+                          Website with login
+                        </button>
+                      </div>
+                      {loginMode !== "none" && (
+                        <div className="flex flex-col gap-2 max-w-sm">
+                          <input
+                            value={adhocUrl}
+                            onChange={(e) => setAdhocUrl(e.target.value)}
+                            placeholder="URL, e.g. https://example.com"
+                            className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
                           />
-                          <path
-                            d="M2.5 13c0-2.485 2.462-4.5 5.5-4.5s5.5 2.015 5.5 4.5"
-                            stroke="currentColor"
-                            strokeWidth="1.25"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                        <SelectValue placeholder="Credential Profile" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {profiles.map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                          {loginMode === "with_login" && (
+                            <>
+                              <input
+                                value={adhocLoginId}
+                                onChange={(e) => setAdhocLoginId(e.target.value)}
+                                placeholder="Email or phone"
+                                className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                              />
+                              <input
+                                type="password"
+                                value={adhocPassword}
+                                onChange={(e) => setAdhocPassword(e.target.value)}
+                                placeholder="Password"
+                                className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                              />
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -614,7 +844,7 @@ export default function AITestingPage() {
                 <div className="pt-1">
                   <Button
                     onClick={handleSubmit}
-                    disabled={!isGoalValid(goal) || submitting}
+                    disabled={!isGoalValid(goal) || !adhocValid || submitting}
                     className="w-full h-11 text-base font-medium"
                   >
                     <svg
@@ -638,34 +868,56 @@ export default function AITestingPage() {
                     <p className="text-xs text-gray-400 text-center mt-2">
                       Enter a goal to enable
                     </p>
+                  ) : !hasEnvironmentChoice ? (
+                    <p className="text-xs text-gray-400 text-center mt-2">
+                      Select an Environment (or “No Environment”) to enable
+                    </p>
+                  ) : !adhocValid ? (
+                    <p className="text-xs text-gray-400 text-center mt-2">
+                      {loginMode === "none"
+                        ? "Choose “Website without login” or “Website with login” to enable"
+                        : "Fill in the required fields above to enable"}
+                    </p>
                   ) : null}
                 </div>
               </CardContent>
             </Card>
 
-            {/* Visual QA (Phases 2–3) — these render only when the backend
-                feature flag VISUAL_AUDIT_ENABLED is on; otherwise null. */}
-            <SowCheckpointsSection
-              onUseGoal={(g) => {
-                setGoal(g);
-                setSubmitError(null);
-                if (typeof window !== "undefined") {
-                  window.scrollTo({ top: 0, behavior: "smooth" });
-                }
-              }}
-            />
-            <SowCheckpointsSection
-              variant="video"
-              onUseGoal={(g) => {
-                setGoal(g);
-                setSubmitError(null);
-                if (typeof window !== "undefined") {
-                  window.scrollTo({ top: 0, behavior: "smooth" });
-                }
-              }}
-            />
-            <VisualAuditSection />
-            <FigmaImportSection />
+                </div>
+
+                {/* AutonomousQASection and SowCheckpointsSection are each
+                    feature-detected server-side and render null on their own
+                    when the backend flag is off — unchanged from before. */}
+                <div className={testMode === "visual" ? "" : "hidden"}>
+                  <AutonomousQASection />
+                </div>
+
+                <div className={testMode === "sow" ? "" : "hidden"}>
+                  <SowCheckpointsSection
+                    onUseGoal={(g) => {
+                      setGoal(g);
+                      setSubmitError(null);
+                      if (typeof window !== "undefined") {
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }
+                    }}
+                  />
+                </div>
+
+                <div className={testMode === "video" ? "" : "hidden"}>
+                  <SowCheckpointsSection
+                    variant="video"
+                    onUseGoal={(g) => {
+                      setGoal(g);
+                      setSubmitError(null);
+                      if (typeof window !== "undefined") {
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }
+                    }}
+                  />
+                </div>
+              </>
+            )}
           </PageContainer>
 
           <div className="sticky bottom-0 left-0 right-0 border-t border-gray-100 bg-white px-6 py-3 flex items-center justify-between text-xs text-gray-400">
@@ -690,6 +942,17 @@ export default function AITestingPage() {
             </div>
           </div>
         </div>
+
+        {bypassDialogOpen && (
+          <CreateBypassProfileDialog
+            projectId={projectId}
+            onClose={() => setBypassDialogOpen(false)}
+            onCreated={(profile) => {
+              refetchProfiles();
+              setProfileId(profile.id);
+            }}
+          />
+        )}
       </AppShell>
     );
   }
@@ -856,7 +1119,11 @@ export default function AITestingPage() {
                         strokeWidth="1"
                       />
                     </svg>
-                    {selectedEnv ? selectedEnv.name : "Application under test"}
+                    {selectedEnv
+                      ? selectedEnv.name
+                      : projectId === NO_ENVIRONMENT_VALUE
+                      ? "No Environment"
+                      : "Application under test"}
                   </div>
                 </div>
 

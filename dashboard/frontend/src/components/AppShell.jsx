@@ -7,11 +7,12 @@ import {
   PlayCircle,
   FileBarChart,
   Bot,
+  FileText,
   Users,
   Shield,
 } from "lucide-react";
 import { getStoredUser, clearStoredUser } from "../utils/authStore";
-import { apiFetch } from "../utils/apiClient";
+import { apiFetch, clearTokens } from "../utils/apiClient";
 
 // Icons match the ones from the second (now-removed) sidebar shell, kept
 // consistent as this became the one universal nav for every page.
@@ -43,7 +44,12 @@ const NAV = [
   {
     label: "Reports",
     href: "/reports",
-    permission: "reports",
+    // No permission key — the backend never actually gated /api/v1/reports/*
+    // behind a "reports" permission (it only required being logged in), and
+    // "reports" was a grantable-but-never-enforced key; removed 2026-07-15
+    // along with the equally dead "test_runs" key. Keeping a UI-only gate on
+    // a permission nobody can be granted anymore would just hide this link
+    // from every non-admin user, so this now matches actual backend access.
     icon: <FileBarChart size={16} />,
   },
   {
@@ -51,6 +57,13 @@ const NAV = [
     href: "/ai-testing",
     permission: "vibe_testing",
     icon: <Bot size={16} />,
+  },
+  {
+    label: "SOW",
+    href: "/sow",
+    // Distinct from vibe_testing on purpose — see SOW_FEATURE_PLAN.md §11.1.
+    permission: "sow",
+    icon: <FileText size={16} />,
   },
 ];
 
@@ -126,12 +139,11 @@ export default function AppShell({ children, noPadding = false }) {
 
   async function handleLogout() {
     try {
-      const refresh = localStorage.getItem("aep_refresh_token");
-      await apiFetch("/api/auth/logout", {
-        method: "POST",
-        body: JSON.stringify({ refresh_token: refresh }),
-      });
+      // /api/auth/logout reads the refresh token from its own httpOnly
+      // cookie server-side — nothing to pass from here.
+      await apiFetch("/api/auth/logout", { method: "POST" });
     } catch {}
+    clearTokens();
     clearStoredUser();
     // Clear middleware auth cookie
     document.cookie = "aep_token=; path=/; max-age=0";

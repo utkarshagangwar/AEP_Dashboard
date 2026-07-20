@@ -3,6 +3,25 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 
+// ── Shared goal-validation constants (Web Quick mode + Android New Test) ────
+
+export const EXAMPLE_GOALS = [
+  "Verify checkout flow as guest user",
+  "Check admin can deactivate an account",
+  "Confirm report export generates a CSV",
+];
+
+export const ACTION_WORDS = [
+  "log", "verify", "check", "confirm", "test", "navigate", "click",
+  "fill", "submit", "open", "close", "create", "delete", "login",
+  "sign", "search", "filter", "export", "upload", "download",
+];
+
+export function isGoalValid(goal: string): boolean {
+  const g = goal.trim().toLowerCase();
+  return g.length >= 10 && ACTION_WORDS.some((w) => g.includes(w));
+}
+
 // ── Shared types for Vibe Testing (AI test runs) ─────────────────────────────
 
 export interface RunEvent {
@@ -20,6 +39,18 @@ export interface RunEvent {
     label: string;
   } | null;
   is_failing_step: boolean;
+}
+
+export interface CredentialProfile {
+  id: string;
+  name: string;
+  // null/"standard" = plain username+password (today's only kind). "bypass"
+  // = injects an auth cookie via an admin API-key login call instead of
+  // typing into a login form — used to route around CAPTCHA-gated logins.
+  kind?: "standard" | "bypass" | null;
+  target_url?: string | null;
+  project_id?: string | null;
+  allowed_domains?: string[] | null;
 }
 
 export interface Skill {

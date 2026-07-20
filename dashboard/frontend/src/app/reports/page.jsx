@@ -5,6 +5,13 @@ import AppShell from "../../components/AppShell";
 import PageContainer from "../../components/PageContainer";
 import { apiGet, apiDelete } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 const STATUS_COLORS = {
   passed: "#16A34A",
@@ -252,54 +259,52 @@ export default function ReportsPage() {
               </button>
             ))}
           </div>
-          <select
-            value={projectFilter}
-            onChange={(e) => {
-              setProjectFilter(e.target.value);
+          <Select
+            value={projectFilter || "all"}
+            onValueChange={(v) => {
+              setProjectFilter(v === "all" ? "" : v);
               setPage(1);
             }}
-            style={{
-              padding: "6px 12px",
-              fontSize: 12,
-              border: "1px solid #E5E7EB",
-              borderRadius: 999,
-              outline: "none",
-              color: "#6B7280",
-              background: "#fff",
-              cursor: "pointer",
-            }}
+            items={[
+              { value: "all", label: "All Projects" },
+              ...projects.map((p) => ({ value: p.id, label: p.name })),
+            ]}
           >
-            <option value="">All Projects</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={suiteFilter}
-            onChange={(e) => {
-              setSuiteFilter(e.target.value);
+            <SelectTrigger className="h-[29px] rounded-full text-xs text-gray-500">
+              <SelectValue placeholder="All Projects" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Projects</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={suiteFilter || "all"}
+            onValueChange={(v) => {
+              setSuiteFilter(v === "all" ? "" : v);
               setPage(1);
             }}
-            style={{
-              padding: "6px 12px",
-              fontSize: 12,
-              border: "1px solid #E5E7EB",
-              borderRadius: 999,
-              outline: "none",
-              color: "#6B7280",
-              background: "#fff",
-              cursor: "pointer",
-            }}
+            items={[
+              { value: "all", label: "All Suites" },
+              ...suites.map((s) => ({ value: s.id, label: s.name })),
+            ]}
           >
-            <option value="">All Suites</option>
-            {suites.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="h-[29px] rounded-full text-xs text-gray-500">
+              <SelectValue placeholder="All Suites" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Suites</SelectItem>
+              {suites.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <input
             type="date"
             value={fromDate}

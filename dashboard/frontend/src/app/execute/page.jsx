@@ -3,7 +3,15 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
 import PageContainer from "../../components/PageContainer";
-import { apiGet, apiPost, apiDelete } from "../../utils/apiClient";
+import { apiGet, apiPost, apiDelete, refreshAccessToken } from "../../utils/apiClient";
+import { getAccessToken } from "../../lib/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 const STORAGE_KEY = "aep_execute_run_state";
 
@@ -129,10 +137,19 @@ export default function ExecutePage() {
   const filteredSuites = suites;
 
   /* ── SSE connection ─────────────────────────────────────────────────── */
-  const connectSSE = useCallback((id) => {
+  const connectSSE = useCallback(async (id) => {
     if (eventSourceRef.current) eventSourceRef.current.close();
 
-    const token = typeof window !== "undefined" ? localStorage.getItem("aep_access_token") : "";
+    // The access token lives in memory only (see lib/api.js) — it is never
+    // written to localStorage, so reading it from there always produced an
+    // empty string and this stream connected unauthenticated (401) with no
+    // visible error. Pull the real in-memory token, refreshing once first
+    // if it isn't set yet.
+    let token = getAccessToken();
+    if (!token) {
+      await refreshAccessToken();
+      token = getAccessToken();
+    }
     const es = new EventSource(`/api/execute/${id}/stream?token=${encodeURIComponent(token || "")}`);
     eventSourceRef.current = es;
 
@@ -376,34 +393,28 @@ export default function ExecutePage() {
               >
                 Project
               </label>
-              <select
+              <Select
                 value={selectedProject}
-                onChange={(e) => {
-                  setSelectedProject(e.target.value);
+                onValueChange={(v) => {
+                  setSelectedProject(v ?? "");
                   setSelectedSuite("");
                 }}
                 disabled={projectsLoading}
-                style={{
-                  width: "100%",
-                  padding: "9px 12px",
-                  fontSize: 13,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  outline: "none",
-                  background: "#fff",
-                  color: "#111827",
-                  cursor: "pointer",
-                }}
+                items={projects.map((p) => ({ value: p.id, label: p.name }))}
               >
-                <option value="">
-                  {projectsLoading ? "Loading…" : "Select a project…"}
-                </option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-[38px] w-full text-[13px]">
+                  <SelectValue
+                    placeholder={projectsLoading ? "Loading…" : "Select a project…"}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Suite */}
@@ -421,36 +432,35 @@ export default function ExecutePage() {
               >
                 Test Suite
               </label>
-              <select
+              <Select
                 value={selectedSuite}
-                onChange={(e) => setSelectedSuite(e.target.value)}
+                onValueChange={(v) => setSelectedSuite(v ?? "")}
                 disabled={!selectedProject || suitesLoading}
-                style={{
-                  width: "100%",
-                  padding: "9px 12px",
-                  fontSize: 13,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  outline: "none",
-                  background: "#fff",
-                  color: "#111827",
-                  cursor: "pointer",
-                }}
+                items={filteredSuites.map((s) => ({
+                  value: s.id,
+                  label: s.suite_type ? `${s.name} (${s.suite_type})` : s.name,
+                }))}
               >
-                <option value="">
-                  {!selectedProject
-                    ? "Select a project first…"
-                    : suitesLoading
-                      ? "Loading…"
-                      : "Select a suite…"}
-                </option>
-                {filteredSuites.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                    {s.suite_type ? ` (${s.suite_type})` : ""}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-[38px] w-full text-[13px]">
+                  <SelectValue
+                    placeholder={
+                      !selectedProject
+                        ? "Select a project first…"
+                        : suitesLoading
+                          ? "Loading…"
+                          : "Select a suite…"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredSuites.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.name}
+                      {s.suite_type ? ` (${s.suite_type})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Run Button */}

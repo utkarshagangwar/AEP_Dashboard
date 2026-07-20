@@ -28,8 +28,9 @@ export function clearStoredUser() {
 }
 
 export function isAuthenticated() {
-  if (typeof window === "undefined") return false;
-  return !!localStorage.getItem("aep_access_token");
+  // The access token is in-memory only now (see ../lib/api), so it's never
+  // present here on a fresh page load — the cached profile is the signal.
+  return !!getStoredUser();
 }
 
 // RBAC helper — mirrors backend rules

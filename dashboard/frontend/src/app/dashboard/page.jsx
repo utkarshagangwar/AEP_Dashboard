@@ -4,6 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
 import PageContainer from "../../components/PageContainer";
 import { apiGet } from "../../utils/apiClient";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 
 const STATUS_COLORS = {
   passed: "#16A34A",
@@ -208,32 +215,26 @@ export default function DashboardPage() {
               {selectedProjectName || "all products"}
             </p>
           </div>
-          <select
-            value={selectedProject}
-            onChange={(e) => setSelectedProject(e.target.value)}
-            style={{
-              padding: "7px 28px 7px 12px",
-              borderRadius: 8,
-              border: "1px solid #D1D5DB",
-              fontSize: 13,
-              color: "#374151",
-              background: "#fff",
-              outline: "none",
-              cursor: "pointer",
-              appearance: "none",
-              backgroundImage:
-                'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%2712%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M3 4.5l3 3 3-3%27 fill=%27none%27 stroke=%27%236B7280%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E")',
-              backgroundRepeat: "no-repeat",
-              backgroundPosition: "right 8px center",
-            }}
+          <Select
+            value={selectedProject || "all"}
+            onValueChange={(v) => setSelectedProject(v === "all" ? "" : v)}
+            items={[
+              { value: "all", label: "All Projects" },
+              ...projects.map((p) => ({ value: p.id, label: p.name })),
+            ]}
           >
-            <option value="">All Projects</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="h-[33px] text-[13px]">
+              <SelectValue placeholder="All Projects" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Projects</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {error && (
