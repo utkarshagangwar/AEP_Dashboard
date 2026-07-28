@@ -7,7 +7,21 @@ environment or a local .env file (see .env.example).
 """
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Settings' own env_file=(".env", "../.env") below only populates fields
+# declared on this class -- it never touches the real process environment.
+# Several modules (llm_router.py, design_ingest.py) read provider keys like
+# AXON_API_KEY straight from os.environ instead of through Settings, so
+# without this call those keys silently stay invisible to them even though
+# they're correctly set in dashboard/.env. load_dotenv() fixes that by
+# actually exporting the file into os.environ. This module is imported by
+# both the FastAPI process (app.main) and the Celery worker (transitively,
+# via app.core.logging), so this is the one place that reaches both.
+# override=False (the default) means real env vars injected by the host
+# (e.g. Render) always win over anything in the file.
+load_dotenv()
 
 
 class Settings(BaseSettings):

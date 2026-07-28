@@ -8,21 +8,25 @@ import AppShell from "@/components/AppShell";
 import PageContainer from "@/components/PageContainer";
 import AutonomousQASection from "@/components/AutonomousQASection";
 import SowCheckpointsSection from "@/components/SowCheckpointsSection";
+import VisualAuditSection from "@/components/VisualAuditSection";
+import CoverageTab from "@/components/ai-testing/CoverageTab";
 import ResultsTab from "@/components/ai-testing/ResultsTab";
 import SkillsTab from "@/components/ai-testing/SkillsTab";
 import ModeSelector, { TestMode } from "@/components/ai-testing/ModeSelector";
 import CreateBypassProfileDialog from "@/components/ai-testing/CreateBypassProfileDialog";
+import FunctionalTestFields, {
+  FunctionalTestPayload,
+} from "@/components/ai-testing/FunctionalTestFields";
 import {
   CredentialProfile,
-  EXAMPLE_GOALS,
   RunEvent,
   RunResult,
   StepIcon,
-  ScreenshotPane,
+  LiveBrowserView,
+  VideoPane,
   StepRow,
   formatDuration,
   formatElapsed,
-  isGoalValid,
 } from "@/components/ai-testing/shared";
 import AndroidNewTestPanel from "@/components/ai-testing/AndroidNewTestPanel";
 import { Badge } from "@/components/ui/badge";
@@ -40,7 +44,7 @@ import {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type UIState = "idle" | "running" | "complete";
-type PageTab = "new" | "results" | "skills";
+type PageTab = "new" | "results" | "coverage" | "skills";
 
 interface Environment {
   id: string;
@@ -72,11 +76,28 @@ function normalizeUrl(raw: string): string {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
+// Client-side-only preview of the compiled Functional Test goal, shown in
+// the live-run header before the run's real (server-compiled) goal text
+// comes back from GET /api/ai-testing/runs/:id. The backend's
+// _compile_functional_goal() in app/api/v1/ai_runs.py is the source of
+// truth — this only needs to be close enough for a transient header, not
+// byte-identical, and is never sent to the API.
+function previewFunctionalGoal(payload: FunctionalTestPayload): string {
+  const lines: string[] = [];
+  if (payload.test_type !== "happy") {
+    lines.push(`Test type: ${payload.test_type === "negative" ? "NEGATIVE" : "EDGE CASE"}`);
+  }
+  if (payload.preconditions) lines.push(`Preconditions: ${payload.preconditions}`);
+  payload.steps.forEach((s, i) => lines.push(`${i + 1}. ${s.text}`));
+  return lines.join(" — ") || "Functional test";
+}
+
 // ── Top-level tab bar (New Test | Results | Skills) ─────────────────────────
 
 const PAGE_TABS: { id: PageTab; label: string }[] = [
   { id: "new", label: "New Test" },
   { id: "results", label: "Results" },
+  { id: "coverage", label: "Coverage" },
   { id: "skills", label: "Skills" },
 ];
 
@@ -125,11 +146,9 @@ export default function AITestingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
-  const [liveScreenshot, setLiveScreenshot] = useState<string | null>(null);
-  const [liveHighlight, setLiveHighlight] = useState<RunEvent["highlighted_element"] | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
-  const [activeTab, setActiveTab] = useState<"summary" | "steps" | "screenshots">("summary");
+  const [activeTab, setActiveTab] = useState<"summary" | "steps" | "video">("summary");
   const [loggingDefect, setLoggingDefect] = useState(false);
   const [defectTitle, setDefectTitle] = useState("");
   const [defectDescription, setDefectDescription] = useState("");
@@ -140,8 +159,17 @@ export default function AITestingPage() {
   // section, it only toggles visibility, so an in-flight upload/poll/run in
   // a non-active mode keeps running untouched. "android" is a placeholder
   // surface with no backend behind it yet.
-  const [testMode, setTestMode] = useState<TestMode>("quick");
+  const [testMode, setTestMode] = useState<TestMode>("functional");
   const [testType, setTestType] = useState<"web" | "android">("web");
+  // Structured Functional Test authoring state (New Vibe Test Phase 1) —
+  // reported live by FunctionalTestFields on every edit. null until that
+  // component has mounted and reported its first value.
+  const [functionalPayload, setFunctionalPayload] = useState<FunctionalTestPayload | null>(
+    null
+  );
+  // Bumped to force FunctionalTestFields to remount (clearing its internal
+  // state) on "Run Another Test" — mirrors the old quick-mode's setGoal("").
+  const [functionalFormKey, setFunctionalFormKey] = useState(0);
 
   const logRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -283,6 +311,10 @@ export default function AITestingPage() {
         failing_step_index: run.failing_step_index,
         failing_step_description: run.failing_step_description,
         failing_step_screenshot_url: run.failing_step_screenshot_url,
+        video_available: run.video_available,
+        test_category: run.test_category,
+        test_type: run.test_type,
+        linked_requirement: run.linked_requirement,
         events: run.events || [],
         created_at: run.created_at,
       });
@@ -328,7 +360,12 @@ export default function AITestingPage() {
         `/api/ai-testing/runs/${runId}/stream?token=${encodeURIComponent(token || "")}`
       );
 
-      const TERMINAL = new Set(["passed", "failed", "inconclusive", "cancelled"]);
+      // "needs_review" included (New Vibe Test Phase 4) — a run can now
+      // finish in this status instead of "passed" once GEval has weighed
+      // in; it's just as terminal as any other outcome, and omitting it
+      // would leave this stream open (and the UI stuck showing "running")
+      // for any run that gets flagged.
+      const TERMINAL = new Set(["passed", "failed", "inconclusive", "cancelled", "needs_review"]);
 
       es.onmessage = (ev) => {
         try {
@@ -355,13 +392,6 @@ export default function AITestingPage() {
               }
               return Array.from(bySeq.values()).sort((a, b) => a.sequence - b.sequence);
             });
-            const withShot = [...data.new_events]
-              .reverse()
-              .find((e: RunEvent) => e.screenshot_url);
-            if (withShot) {
-              setLiveScreenshot(withShot.screenshot_url ?? null);
-              setLiveHighlight(withShot.highlighted_element ?? null);
-            }
           }
 
           if (TERMINAL.has(data.run_status)) {
@@ -385,19 +415,29 @@ export default function AITestingPage() {
   // ── Actions ───────────────────────────────────────────────────────────────
 
   const handleSubmit = async () => {
-    if (!isGoalValid(goal) || submitting) return;
+    if (!functionalPayload?.isValid || submitting) return;
     setSubmitting(true);
     setSubmitError(null);
     setEvents([]);
-    setLiveScreenshot(null);
-    setLiveHighlight(null);
     setElapsedMs(0);
     setRunResult(null);
     setDefectLogged(false);
     stepStartRef.current.clear();
 
     try {
-      const body = buildRunBody(goal.trim(), projectId);
+      const previewGoal = previewFunctionalGoal(functionalPayload);
+      setGoal(previewGoal);
+      const body = {
+        ...buildRunBody(previewGoal, projectId),
+        test_category: "functional",
+        preconditions: functionalPayload.preconditions || undefined,
+        steps: functionalPayload.steps,
+        expected_results: functionalPayload.expected_results,
+        test_data: functionalPayload.test_data.length ? functionalPayload.test_data : undefined,
+        test_type: functionalPayload.test_type,
+        linked_requirement: functionalPayload.linked_requirement || undefined,
+        viewport_preset: functionalPayload.viewport_preset,
+      };
 
       const resp = await apiFetch("/api/ai-testing/runs", {
         method: "POST",
@@ -436,8 +476,6 @@ export default function AITestingPage() {
     const savedGoal = runResult.goal;
     const savedProjectId = runResult.project_id || "";
     setEvents([]);
-    setLiveScreenshot(null);
-    setLiveHighlight(null);
     setElapsedMs(0);
     setRunResult(null);
     setDefectLogged(false);
@@ -487,14 +525,14 @@ export default function AITestingPage() {
     setEvents([]);
     setDefectLogged(false);
     setSubmitError(null);
+    setFunctionalPayload(null);
+    setFunctionalFormKey((k) => k + 1);
   };
 
   // A skill replay started from the Skills tab hands off into the existing
   // live-run view — same run_id/SSE flow as a goal-based run.
   const handleReplayStarted = (newRunId: string, skillGoal: string) => {
     setEvents([]);
-    setLiveScreenshot(null);
-    setLiveHighlight(null);
     setElapsedMs(0);
     setRunResult(null);
     setDefectLogged(false);
@@ -512,8 +550,15 @@ export default function AITestingPage() {
 
   const handleOpenLogDefect = () => {
     if (!runResult) return;
+    // Prefix follows the actual verdict (2026-07-28): this card is now also
+    // reachable from a needs_review run, where "AI Test Failed" would be
+    // factually wrong on the defect title.
     setDefectTitle(
-      `AI Test Failed: ${
+      `${
+        runResult.status === "needs_review"
+          ? "AI Test Needs Review"
+          : "AI Test Failed"
+      }: ${
         runResult.failing_step_description?.slice(0, 90) ||
         runResult.goal.slice(0, 90)
       }`
@@ -561,13 +606,17 @@ export default function AITestingPage() {
               <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
               <p className="text-gray-500 mt-1">
                 {pageTab === "results"
-                  ? "Every goal-based test run is saved here — open one to review its summary, steps, and screenshots."
+                  ? "Every goal-based test run is saved here — open one to review its summary, steps, and video."
+                  : pageTab === "coverage"
+                  ? "Requirements linked from UI and Functional Tests, with latest status and pass-rate history — see what's actually tested."
                   : "Recurring tests saved as replayable skills — rerun them without burning AI planning tokens."}
               </p>
             </div>
             <PageTabBar active={pageTab} onChange={setPageTab} />
             {pageTab === "results" ? (
               <ResultsTab />
+            ) : pageTab === "coverage" ? (
+              <CoverageTab />
             ) : (
               <SkillsTab onReplayStarted={handleReplayStarted} />
             )}
@@ -626,15 +675,24 @@ export default function AITestingPage() {
               <>
                 <ModeSelector mode={testMode} onModeChange={setTestMode} />
 
-                <div className={testMode === "quick" ? "" : "hidden"}>
+                {/* UI Test — VisualAuditSection is self-contained (its own
+                    reference upload/Figma-imported picker, target URL, run,
+                    poll, and findings display) and doesn't participate in
+                    the goal/runId/SSE state machine below at all — same
+                    pattern as AutonomousQASection/SowCheckpointsSection. */}
+                <div className={testMode === "ui" ? "" : "hidden"}>
+                  <VisualAuditSection />
+                </div>
+
+                <div className={testMode === "functional" ? "" : "hidden"}>
                   <Card className="shadow-sm">
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle className="text-lg">New Vibe UI Test</CardTitle>
+                    <CardTitle className="text-lg">Functional Test</CardTitle>
                     <p className="text-sm text-gray-500 mt-1">
-                      Describe a goal in plain language and let the AI drive the
-                      browser.
+                      Author preconditions, ordered steps, and expected
+                      results — the AI drives the browser and checks each one.
                     </p>
                   </div>
                   <Badge
@@ -647,18 +705,38 @@ export default function AITestingPage() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <textarea
-                  value={goal}
-                  onChange={(e) => {
-                    setGoal(e.target.value);
-                    setSubmitError(null);
-                  }}
-                  placeholder='Describe what to test, e.g. "Log in as a sales user and verify the pipeline dashboard loads with at least one row."'
-                  rows={4}
-                  className="w-full resize-none rounded-md border border-gray-200 px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                />
+                <FunctionalTestFields key={functionalFormKey} onChange={setFunctionalPayload} />
 
-                <div className="flex gap-3 flex-wrap">
+                <div className="flex gap-3 flex-wrap items-start">
+                  {/* Website without/with login toggle now leads the row,
+                      ahead of the Environment picker. */}
+                  {hasEnvironmentChoice && !isIgAutomation && (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setLoginMode("without_login")}
+                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                          loginMode === "without_login"
+                            ? "border-gray-900 bg-gray-900 text-white"
+                            : "border-gray-200 text-gray-600 hover:bg-gray-100"
+                        }`}
+                      >
+                        Website without login
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLoginMode("with_login")}
+                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                          loginMode === "with_login"
+                            ? "border-gray-900 bg-gray-900 text-white"
+                            : "border-gray-200 text-gray-600 hover:bg-gray-100"
+                        }`}
+                      >
+                        Website with login
+                      </button>
+                    </div>
+                  )}
+
                   {envLoading ? (
                     <Skeleton className="h-9 w-36 rounded-md" />
                   ) : (
@@ -760,80 +838,36 @@ export default function AITestingPage() {
                         )}
                       </div>
                     )
-                  ) : (
-                    <div className="flex flex-col gap-2 w-full">
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setLoginMode("without_login")}
-                          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                            loginMode === "without_login"
-                              ? "border-gray-900 bg-gray-900 text-white"
-                              : "border-gray-200 text-gray-600 hover:bg-gray-100"
-                          }`}
-                        >
-                          Website without login
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setLoginMode("with_login")}
-                          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                            loginMode === "with_login"
-                              ? "border-gray-900 bg-gray-900 text-white"
-                              : "border-gray-200 text-gray-600 hover:bg-gray-100"
-                          }`}
-                        >
-                          Website with login
-                        </button>
-                      </div>
-                      {loginMode !== "none" && (
-                        <div className="flex flex-col gap-2 max-w-sm">
-                          <input
-                            value={adhocUrl}
-                            onChange={(e) => setAdhocUrl(e.target.value)}
-                            placeholder="URL, e.g. https://example.com"
-                            className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-                          />
-                          {loginMode === "with_login" && (
-                            <>
-                              <input
-                                value={adhocLoginId}
-                                onChange={(e) => setAdhocLoginId(e.target.value)}
-                                placeholder="Email or phone"
-                                className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-                              />
-                              <input
-                                type="password"
-                                value={adhocPassword}
-                                onChange={(e) => setAdhocPassword(e.target.value)}
-                                placeholder="Password"
-                                className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-                              />
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  ) : null}
                 </div>
 
-                <div className="flex flex-wrap gap-2 items-center">
-                  <span className="text-xs text-gray-400 uppercase tracking-wide">
-                    TRY
-                  </span>
-                  {EXAMPLE_GOALS.map((eg) => (
-                    <button
-                      key={eg}
-                      onClick={() => {
-                        setGoal(eg);
-                        setSubmitError(null);
-                      }}
-                      className="text-xs px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-100 transition-colors"
-                    >
-                      {eg}
-                    </button>
-                  ))}
-                </div>
+                {hasEnvironmentChoice && !isIgAutomation && loginMode !== "none" && (
+                  <div className="flex gap-2 flex-wrap sm:flex-nowrap">
+                    <input
+                      value={adhocUrl}
+                      onChange={(e) => setAdhocUrl(e.target.value)}
+                      placeholder="URL, e.g. https://example.com"
+                      className="flex-1 min-w-[200px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                    />
+                    {loginMode === "with_login" && (
+                      <>
+                        <input
+                          value={adhocLoginId}
+                          onChange={(e) => setAdhocLoginId(e.target.value)}
+                          placeholder="Email or phone"
+                          className="flex-1 min-w-[160px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                        />
+                        <input
+                          type="password"
+                          value={adhocPassword}
+                          onChange={(e) => setAdhocPassword(e.target.value)}
+                          placeholder="Password"
+                          className="flex-1 min-w-[160px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {submitError && (
                   <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
@@ -844,7 +878,7 @@ export default function AITestingPage() {
                 <div className="pt-1">
                   <Button
                     onClick={handleSubmit}
-                    disabled={!isGoalValid(goal) || !adhocValid || submitting}
+                    disabled={!functionalPayload?.isValid || !adhocValid || submitting}
                     className="w-full h-11 text-base font-medium"
                   >
                     <svg
@@ -860,13 +894,9 @@ export default function AITestingPage() {
                     </svg>
                     {submitting ? "Starting…" : "Run Test"}
                   </Button>
-                  {goal.length > 0 && !isGoalValid(goal) ? (
+                  {!functionalPayload?.isValid ? (
                     <p className="text-xs text-gray-400 text-center mt-2">
-                      Enter a goal with an action verb (log, verify, check…)
-                    </p>
-                  ) : goal.length === 0 ? (
-                    <p className="text-xs text-gray-400 text-center mt-2">
-                      Enter a goal to enable
+                      Add at least one step and one expected result to enable
                     </p>
                   ) : !hasEnvironmentChoice ? (
                     <p className="text-xs text-gray-400 text-center mt-2">
@@ -960,18 +990,6 @@ export default function AITestingPage() {
   // ── State 2: Live Run ─────────────────────────────────────────────────────
 
   if (uiState === "running") {
-    const latestScreenshot =
-      liveScreenshot ||
-      [...events].reverse().find((e) => e.screenshot_url)?.screenshot_url ||
-      null;
-    const latestHighlight =
-      liveHighlight ||
-      [...events]
-        .reverse()
-        .find((e) => e.screenshot_url && e.highlighted_element)
-        ?.highlighted_element ||
-      null;
-
     const selectedEnv = environments.find((e) => e.id === projectId);
 
     return (
@@ -1127,16 +1145,13 @@ export default function AITestingPage() {
                   </div>
                 </div>
 
-                {/* Screenshot area */}
+                {/* Live browser view */}
                 <div className="flex-1 overflow-auto bg-gray-100 flex items-start justify-center p-2">
-                  {latestScreenshot ? (
-                    <ScreenshotPane
-                      screenshotUrl={latestScreenshot}
-                      highlight={latestHighlight}
-                    />
+                  {runId ? (
+                    <LiveBrowserView runId={runId} />
                   ) : (
                     <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-                      Waiting for first screenshot…
+                      Connecting to live browser…
                     </div>
                   )}
                 </div>
@@ -1166,8 +1181,12 @@ export default function AITestingPage() {
   const isFailed = result.status === "failed";
   const isInconclusive =
     result.status === "inconclusive" || result.status === "cancelled";
-
-  const screenshotEvents = result.events.filter((e) => e.screenshot_url);
+  // New Vibe Test Phase 4 (D.15) — the agent self-reported "passed" but the
+  // independent GEval score came back below threshold. Distinct from all
+  // three states above: not a pass (disputed), not a failure (the agent did
+  // complete something), not the existing "stopped/timed out before a
+  // definitive outcome" inconclusive banner either — a human needs to look.
+  const isNeedsReview = result.status === "needs_review";
 
   return (
     <AppShell noPadding>
@@ -1191,6 +1210,8 @@ export default function AITestingPage() {
                 ? "bg-green-600"
                 : isFailed
                 ? "bg-red-600"
+                : isNeedsReview
+                ? "bg-purple-600"
                 : "bg-amber-500"
             }`}
           >
@@ -1253,9 +1274,38 @@ export default function AITestingPage() {
                     />
                   </svg>
                 )}
+                {isNeedsReview && (
+                  <svg
+                    className="w-7 h-7 text-white"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="9"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    />
+                    <path
+                      d="M9.5 9a2.5 2.5 0 013.9-2.1c.9.6 1.3 1.8.7 2.9-.5 1-1.6 1.2-2.1 2.2v.5"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <circle cx="12" cy="16.5" r="1" fill="currentColor" />
+                  </svg>
+                )}
               </div>
               <span className="text-3xl font-bold tracking-wide text-white">
-                {isPassed ? "PASSED" : isFailed ? "FAILED" : "INCONCLUSIVE"}
+                {isPassed
+                  ? "PASSED"
+                  : isFailed
+                  ? "FAILED"
+                  : isNeedsReview
+                  ? "NEEDS REVIEW"
+                  : "INCONCLUSIVE"}
               </span>
             </div>
             <div className="text-right space-y-1">
@@ -1272,23 +1322,49 @@ export default function AITestingPage() {
             </div>
           </div>
 
-          {/* Failing step card (Failed only) */}
-          {isFailed && result.failing_step_description && (
-            <Card className="border-red-200 bg-red-50">
+          {/* Failing step card. Shown for Failed runs and (2026-07-28) for
+              needs_review runs that carry failing-step evidence — an
+              application error detected mid-run populates the same fields
+              (see ai_execution._persist_result's app-error gate), and that
+              evidence plus the Log Defect action is the whole point of
+              catching it. Colour follows the run status so a needs_review
+              run never renders as if it had hard-failed. */}
+          {(isFailed || isNeedsReview) && result.failing_step_description && (
+            <Card
+              className={
+                isFailed
+                  ? "border-red-200 bg-red-50"
+                  : "border-purple-200 bg-purple-50"
+              }
+            >
               <CardContent className="pt-5 pb-4 flex items-start gap-4">
-                <div className="flex-shrink-0 w-9 h-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold text-sm">
+                <div
+                  className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm ${
+                    isFailed
+                      ? "bg-red-100 text-red-600"
+                      : "bg-purple-100 text-purple-600"
+                  }`}
+                >
                   {result.failing_step_index ?? "!"}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-semibold text-red-500 uppercase tracking-wide mb-1">
-                    FAILING STEP
+                  <div
+                    className={`text-xs font-semibold uppercase tracking-wide mb-1 ${
+                      isFailed ? "text-red-500" : "text-purple-500"
+                    }`}
+                  >
+                    {isFailed ? "FAILING STEP" : "PROBLEM DETECTED"}
                   </div>
                   <p className="text-gray-800 font-medium">
                     {result.failing_step_description}
                   </p>
                 </div>
                 {result.failing_step_screenshot_url && (
-                  <div className="flex-shrink-0 w-28 h-20 rounded border border-red-200 overflow-hidden">
+                  <div
+                    className={`flex-shrink-0 w-28 h-20 rounded border overflow-hidden ${
+                      isFailed ? "border-red-200" : "border-purple-200"
+                    }`}
+                  >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={result.failing_step_screenshot_url}
@@ -1301,7 +1377,11 @@ export default function AITestingPage() {
                   onClick={handleOpenLogDefect}
                   disabled={defectLogged}
                   variant="outline"
-                  className="flex-shrink-0 border-red-300 text-red-700 hover:bg-red-100 gap-2"
+                  className={`flex-shrink-0 gap-2 ${
+                    isFailed
+                      ? "border-red-300 text-red-700 hover:bg-red-100"
+                      : "border-purple-300 text-purple-700 hover:bg-purple-100"
+                  }`}
                 >
                   <svg
                     className="w-4 h-4"
@@ -1318,6 +1398,45 @@ export default function AITestingPage() {
                   </svg>
                   {defectLogged ? "Defect Logged ✓" : "Log Defect"}
                 </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Needs-review notice (New Vibe Test Phase 4, D.15) — the agent
+              self-reported "passed" but the independent GEval score came
+              back below threshold. Surfaces the score/reason right here so
+              it's not just a banner with no explanation. */}
+          {isNeedsReview && (
+            <Card className="border-purple-200 bg-purple-50">
+              <CardContent className="pt-5 pb-4 flex items-start gap-3">
+                <svg
+                  className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <div>
+                  {/* Copy is cause-neutral (2026-07-28): needs_review is now
+                      reached by two independent gates — a low GEval score, OR
+                      an application error observed on the page during the run
+                      — so this heading can no longer assume the quality score
+                      was the trigger. eval_reason carries the concrete cause
+                      either way. */}
+                  <p className="text-sm font-medium text-purple-800">
+                    Agent reported success, but this run needs human review
+                    {result.eval_score != null &&
+                      ` (quality score: ${Math.round(result.eval_score * 100)}%)`}
+                  </p>
+                  <p className="text-sm text-purple-700 mt-0.5">
+                    {result.eval_reason ||
+                      "An independent check disputed this run's result. Review the steps and video before trusting this as a pass."}
+                  </p>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -1353,7 +1472,7 @@ export default function AITestingPage() {
           {/* Tabs */}
           <div>
             <div className="flex border-b border-gray-200 gap-6">
-              {(["summary", "steps", "screenshots"] as const).map((tab) => (
+              {(["summary", "steps", "video"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -1441,33 +1560,9 @@ export default function AITestingPage() {
                 </div>
               )}
 
-              {/* Screenshots */}
-              {activeTab === "screenshots" && (
-                <div className="grid grid-cols-2 gap-4">
-                  {screenshotEvents.length === 0 ? (
-                    <p className="col-span-2 text-sm text-gray-400 text-center py-10">
-                      No screenshots captured during this run.
-                    </p>
-                  ) : (
-                    screenshotEvents.map((event) => (
-                      <div
-                        key={event.sequence}
-                        className="rounded-lg border border-gray-200 overflow-hidden"
-                      >
-                        <ScreenshotPane
-                          screenshotUrl={event.screenshot_url}
-                          highlight={event.highlighted_element}
-                        />
-                        <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-100 bg-white">
-                          Step {event.sequence} —{" "}
-                          {event.description.length > 60
-                            ? event.description.slice(0, 60) + "…"
-                            : event.description}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+              {/* Video */}
+              {activeTab === "video" && (
+                <VideoPane runId={result.run_id} videoAvailable={result.video_available} />
               )}
             </div>
           </div>

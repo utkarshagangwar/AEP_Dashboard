@@ -1,0 +1,58 @@
+{
+  "_comment": "New Vibe Test Phase 7 (F.25) golden regression set. TEMPLATE FILE -- the cases below are illustrative placeholders, not validated real cases, because this sandbox has no knowledge of AEP_Dashboard's actual staging URLs/credentials/allowed domains. Before this is useful, replace target_url/environment_url/goal/reference_image_path with real values for a handful of representative, STABLE flows (login, a core CRUD action, a settings page) and capture real reference screenshots via the existing UI Test flow. See run_golden_set.py's module docstring for how and when to run this.",
+  "functional_cases": [
+    {
+      "id": "func-login-happy",
+      "kind": "functional",
+      "goal": "TEMPLATE: Log in with valid credentials and verify the dashboard home page loads",
+      "environment_url": "https://REPLACE-ME.example.com/login",
+      "allowed_domains": ["REPLACE-ME.example.com"],
+      "sensitive_data": {},
+      "expected_results": "TEMPLATE: User lands on the dashboard home page with their name visible in the top nav",
+      "expected_status": "passed",
+      "notes": "Happy-path smoke case. Should stay green run over run -- a regression here means the core login/nav flow, the agent's action-planning loop, or the GEval judge itself has drifted."
+    },
+    {
+      "id": "func-login-bad-password",
+      "kind": "functional",
+      "goal": "TEMPLATE: Attempt to log in with an incorrect password and verify an error message is shown",
+      "environment_url": "https://REPLACE-ME.example.com/login",
+      "allowed_domains": ["REPLACE-ME.example.com"],
+      "sensitive_data": {},
+      "expected_results": "TEMPLATE: An inline error message is shown and the user remains on the login page",
+      "expected_status": "passed",
+      "notes": "Negative-path case. Regressions here often mean the agent is mis-scoring an expected failure state as a real failure, or the judge prompt/threshold has drifted -- see ai_eval.py."
+    },
+    {
+      "id": "func-broken-flow-should-fail",
+      "kind": "functional",
+      "goal": "TEMPLATE: Navigate to a deliberately nonexistent page (e.g. /this-route-does-not-exist) and confirm a normal page loads",
+      "environment_url": "https://REPLACE-ME.example.com/this-route-does-not-exist",
+      "allowed_domains": ["REPLACE-ME.example.com"],
+      "sensitive_data": {},
+      "expected_results": "TEMPLATE: A normal application page (not a 404) is shown",
+      "expected_status": "failed",
+      "notes": "Canary case: this SHOULD fail every time. If it ever comes back passed/needs_review, the harness or the judge is broken, not the app -- treat any change here as a P0 signal about ai_runner.py/ai_eval.py itself, not about AEP_Dashboard."
+    }
+  ],
+  "ui_cases": [
+    {
+      "id": "ui-dashboard-home",
+      "kind": "ui",
+      "target_url": "https://REPLACE-ME.example.com/dashboard",
+      "reference_image_path": "golden_tests/references/REPLACE-ME-dashboard.png",
+      "expected_verdict_status": "passed",
+      "max_mismatch_pct": 2.0,
+      "notes": "Capture reference_image_path once from a known-good render (e.g. via the existing UI Test flow's reference upload) and commit it alongside this fixture. Regenerate deliberately when the page's design legitimately changes -- never to silence a real regression."
+    },
+    {
+      "id": "ui-settings-page",
+      "kind": "ui",
+      "target_url": "https://REPLACE-ME.example.com/settings",
+      "reference_image_path": "golden_tests/references/REPLACE-ME-settings.png",
+      "expected_verdict_status": "passed",
+      "max_mismatch_pct": 2.0,
+      "notes": "TEMPLATE placeholder -- replace with a real, low-churn page."
+    }
+  ]
+}

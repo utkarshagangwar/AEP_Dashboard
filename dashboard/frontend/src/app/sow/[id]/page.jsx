@@ -14,11 +14,16 @@ import { getStoredUser } from "../../../utils/authStore";
 // versions/sections. Phase 4: coverage badges + gap panels per section.
 // Phase 5: hand-edit a section's structured content in-place, and a
 // client-side diff between the two most recent versions. Phase 6: export
-// to md/docx/pdf and send-to-Vibe-Testing. Phase 7 (this addition):
+// to md/docx/pdf and send-to-Vibe-Testing. Phase 7:
 // rewrite/patch -- regenerate only selected sections instead of
 // everything. Editing, rewrite, export, and send-to-checkpoints all
 // always target the CURRENT version (matches each endpoint's own scope)
 // -- historical versions stay read-only.
+// Import SOW (this addition): a fourth "Existing SOW document" source type
+// alongside transcript/recording/design -- an uploaded pre-existing SOW
+// feeds the same ledger-extraction -> Generate -> editor/export/Send-to-
+// Vibe-Testing pipeline every other source already uses, so nothing below
+// this comment changes behavior for the three existing source types.
 
 // Mirrors backend/app/services/sow_patch.py::non_patchable_section_keys()
 // -- framing sections are drafted from the WHOLE document's facts, not
@@ -641,6 +646,7 @@ export default function SowDocumentPage() {
   const [recordingError, setRecordingError] = useState("");
   const [designLabel, setDesignLabel] = useState("");
   const [designError, setDesignError] = useState("");
+  const [existingSowError, setExistingSowError] = useState("");
   const [factFilter, setFactFilter] = useState("");
   const [generateError, setGenerateError] = useState("");
   const [selectedVersionId, setSelectedVersionId] = useState(null);
@@ -934,6 +940,32 @@ export default function SowDocumentPage() {
     onError: (e) => setDesignError(e.message),
   });
 
+  // Import SOW (SOW tab): attach a pre-existing SOW/requirements document
+  // as a fourth source type, same shape as transcript/recording/design --
+  // its facts land in the ledger below exactly like any other source, and
+  // from there Generate/editor/export/Send-to-Vibe-Testing are all the
+  // existing, unmodified flows.
+  const existingSowUploadMutation = useMutation({
+    mutationFn: async ({ file }) => {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await apiFetch(`/api/v1/sow/documents/${id}/sources/existing-sow`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail || `Upload failed (${res.status})`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setExistingSowError("");
+      invalidateAll();
+    },
+    onError: (e) => setExistingSowError(e.message),
+  });
+
   const deleteSourceMutation = useMutation({
     mutationFn: (sourceId) => apiDelete(`/api/v1/sow/documents/${id}/sources/${sourceId}`),
     onSuccess: () => invalidateAll(),
@@ -1007,7 +1039,7 @@ export default function SowDocumentPage() {
             title="Attach sources"
             description="Each source is extracted independently into the requirements ledger below. Attaching the same file again re-runs extraction (useful as a Retry after an error)."
           >
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
               {/* Transcript */}
               <div>
                 <p style={{ fontSize: 13, fontWeight: 600, color: "#111827", margin: "0 0 8px" }}>
@@ -1126,6 +1158,40 @@ export default function SowDocumentPage() {
                 {designError && (
                   <p style={{ fontSize: 11, color: "#DC2626", margin: "6px 0 0" }}>
                     {designError}
+                  </p>
+                )}
+              </div>
+
+              {/* Existing SOW document (Import) */}
+              <div>
+                <p style={{ fontSize: 13, fontWeight: 600, color: "#111827", margin: "0 0 8px" }}>
+                  Existing SOW document
+                </p>
+                <p style={{ fontSize: 11, color: "#6B7280", margin: "0 0 8px" }}>
+                  A pre-existing SOW/requirements document to use as a baseline.
+                </p>
+                <label style={labelStyle}>Upload .docx / .pdf / .txt / .md</label>
+                <input
+                  type="file"
+                  accept=".docx,.pdf,.txt,.md"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      existingSowUploadMutation.mutate({ file: f });
+                      e.target.value = "";
+                    }
+                  }}
+                  style={{ fontSize: 12, marginBottom: 10, display: "block" }}
+                  disabled={existingSowUploadMutation.isPending}
+                />
+                {existingSowUploadMutation.isPending && (
+                  <p style={{ fontSize: 12, color: "#2563EB", margin: "0 0 6px" }}>
+                    Uploading & extracting…
+                  </p>
+                )}
+                {existingSowError && (
+                  <p style={{ fontSize: 11, color: "#DC2626", margin: "6px 0 0" }}>
+                    {existingSowError}
                   </p>
                 )}
               </div>

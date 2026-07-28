@@ -1,11 +1,13 @@
 """AI test run routes — submit, stream, cancel, result, credential profiles, environments."""
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -20,7 +22,7 @@ from app.models.ai_runs import (
     AITestRun,
 )
 from app.models.orchestrator import OrchestratorRun, OrchestratorRunStatus, OrchestratorStepDecision
-from app.models.visual_qa import VisualFinding, VisualRun
+from app.models.visual_qa import VisualFinding, VisualRun, VisualRunStatus
 from app.models.user import User, UserRole
 from app.schemas.ai_runs import (
     AIRunCreate,
@@ -33,8 +35,12 @@ from app.schemas.ai_runs import (
     AISkillUpdate,
     BulkAssignProjectRequest,
     BulkSkillIds,
+    CoverageRequirementGroup,
+    CoverageResponse,
+    CoverageTestEntry,
     CredentialProfileCreate,
     CredentialProfileResponse,
+    FunctionalTestDataSet,
     OrchestratorDecisionResponse,
     SkillReplayRequest,
     VisualFindingResponse,
@@ -178,6 +184,46 @@ def list_environments(
 
 # ── AI Test Runs ─────────────────────────────────────────────────────────────
 
+def _compile_functional_goal(
+    payload: AIRunCreate, data_set: FunctionalTestDataSet | None = None
+) -> str:
+    """Turn a structured Functional Test (preconditions/steps/expected
+    results/test_type/one data set) into the plain-language goal text the
+    Hands browser agent already knows how to consume — no change needed to
+    ai_runner.py, ai_eval.py, or Skill auto-save, all of which only ever
+    read AITestRun.goal.
+    """
+    lines: list[str] = []
+    if payload.test_type and payload.test_type != "happy":
+        label = "NEGATIVE" if payload.test_type == "negative" else "EDGE CASE"
+        lines.append(
+            f"Test type: {label} — deliberately exercise invalid input, "
+            "boundary values, or an error path per the steps below, and "
+            "confirm the application handles it the way Expected Results "
+            "describes (not the happy path)."
+        )
+        lines.append("")
+    if payload.preconditions and payload.preconditions.strip():
+        lines.append("Preconditions (assume true before Step 1):")
+        lines.append(payload.preconditions.strip())
+        lines.append("")
+    lines.append("Steps:")
+    for i, step in enumerate(payload.steps or [], start=1):
+        lines.append(f"{i}. {step.text.strip()}")
+    lines.append("")
+    if data_set is not None and data_set.values:
+        lines.append(f'Test data for this run ("{data_set.name}"):')
+        for k, v in data_set.values.items():
+            lines.append(f"- {k}: {v}")
+        lines.append("(Use these exact values wherever a step references input data.)")
+        lines.append("")
+    lines.append("Expected results — the test only passes if ALL of these hold:")
+    for r in payload.expected_results or []:
+        if r.strip():
+            lines.append(f"- {r.strip()}")
+    return "\n".join(lines).strip()
+
+
 @router.post("/runs", status_code=status.HTTP_201_CREATED)
 def submit_run(
     payload: AIRunCreate,
@@ -187,7 +233,13 @@ def submit_run(
         require_permission("vibe_testing")
     ),
 ):
-    """Submit a new AI test goal. Returns run_id immediately; execution is async."""
+    """Submit a new AI test goal, or a structured Functional Test.
+
+    A structured Functional Test with N test_data sets creates N
+    ai_test_runs rows (data-driven execution) instead of one — the caller
+    gets back the first run's id (for the existing single-run live view)
+    plus the full run_ids list.
+    """
     try:
         profile_name = None
         if payload.credential_profile_id:
@@ -237,8 +289,7 @@ def submit_run(
                 {"username": payload.login_identifier, "password": payload.login_password}
             )
 
-        run = AITestRun(
-            goal=payload.goal,
+        common_kwargs = dict(
             environment=environment,
             project_id=payload.project_id,
             credential_profile_id=payload.credential_profile_id,
@@ -252,25 +303,58 @@ def submit_run(
             status=AIRunStatus.pending,
             created_by=current_user.id,
         )
-        db.add(run)
-        db.commit()
-        db.refresh(run)
 
         from app.workers.tasks.ai_execution import run_ai_test_task
-        run_ai_test_task.delay(str(run.id))
+
+        runs: list[AITestRun] = []
+        if payload.test_category == "functional":
+            data_sets = payload.test_data or [None]
+            structured_kwargs = dict(
+                test_category="functional",
+                preconditions=payload.preconditions,
+                steps=[s.model_dump() for s in (payload.steps or [])],
+                expected_results=payload.expected_results,
+                test_data=[d.model_dump() for d in (payload.test_data or [])] or None,
+                test_type=payload.test_type,
+                linked_requirement=payload.linked_requirement,
+                viewport_preset=payload.viewport_preset,
+            )
+            for data_set in data_sets:
+                compiled_goal = _compile_functional_goal(payload, data_set)
+                run = AITestRun(goal=compiled_goal, **structured_kwargs, **common_kwargs)
+                db.add(run)
+                runs.append(run)
+        else:
+            run = AITestRun(goal=payload.goal, **common_kwargs)
+            db.add(run)
+            runs.append(run)
+
+        db.commit()
+        for run in runs:
+            db.refresh(run)
+            run_ai_test_task.delay(str(run.id))
 
         write_audit_log(
             db,
             user_id=current_user.id,
             action="submit_ai_run",
             resource_type="ai_test_run",
-            resource_id=str(run.id),
-            details={"goal_preview": payload.goal[:200]},
+            resource_id=str(runs[0].id),
+            details={
+                "goal_preview": runs[0].goal[:200],
+                "run_count": len(runs),
+            },
             ip_address=_client_ip(request),
         )
 
-        logger.info("AI run %s submitted by %s", run.id, current_user.id)
-        return {"run_id": str(run.id), "status": "pending"}
+        logger.info(
+            "AI run(s) %s submitted by %s", [str(r.id) for r in runs], current_user.id
+        )
+        return {
+            "run_id": str(runs[0].id),
+            "status": "pending",
+            "run_ids": [str(r.id) for r in runs],
+        }
 
     except HTTPException:
         raise
@@ -289,7 +373,20 @@ def list_runs(
 ):
     """Return paginated list of AI test runs — plain "ai"/"skill_replay" runs
     from ai_test_runs, merged with "autonomous_qa" runs from orchestrator_runs
-    (the New Autonomous Visual QA Run flow) so both appear in one history."""
+    (the New Autonomous Visual QA Run flow) and "ui_test" runs from
+    visual_runs (the UI Test flow, New Vibe Test Phase 5, E.22) so all three
+    appear in one unified history — a UI Test is now tracked the same way a
+    Functional Test is, not left only reachable through the standalone
+    GET /api/v1/visual-audits list with no browsable history in this tab.
+    A visual_runs row has no `goal` column at all (it's a comparison, not an
+    instruction) — synthesized here as "UI Test: {target_url}" purely for
+    display in this shared list; the detail view (frontend) fetches the real
+    VisualRun record directly from /api/v1/visual-audits/{id} rather than
+    forcing it through AIRunResponse's shape, since findings/images have no
+    equivalent there. step_count here is repurposed as "number of findings"
+    for a ui_test row — same "reuse the STEPS column for whatever count is
+    meaningful to this run type" convention orchestrator_runs rows already
+    use (their step_count is "invoked routing decisions", not agent steps)."""
     try:
         offset = (page - 1) * limit
         total = int(
@@ -297,6 +394,7 @@ def list_runs(
                 text(
                     "SELECT (SELECT COUNT(*) FROM ai_test_runs)"
                     " + (SELECT COUNT(*) FROM orchestrator_runs)"
+                    " + (SELECT COUNT(*) FROM visual_runs)"
                 )
             ).scalar()
             or 0
@@ -305,11 +403,12 @@ def list_runs(
             text(
                 "SELECT id, goal, environment, credential_profile_name, status,"
                 "  started_at, completed_at, duration_ms, step_count, run_type,"
-                "  platform, created_at"
+                "  platform, test_category, test_type, linked_requirement, created_at"
                 " FROM ("
                 "   SELECT id, goal, environment, credential_profile_name,"
                 "     status::text AS status, started_at, completed_at,"
-                "     duration_ms, step_count, run_type, platform, created_at"
+                "     duration_ms, step_count, run_type, platform,"
+                "     test_category, test_type, linked_requirement, created_at"
                 "   FROM ai_test_runs"
                 "   UNION ALL"
                 "   SELECT r.id,"
@@ -319,9 +418,23 @@ def list_runs(
                 "     r.duration_ms,"
                 "     (SELECT COUNT(*) FROM orchestrator_step_decisions d"
                 "        WHERE d.run_id = r.id AND d.invoked = true) AS step_count,"
-                "     'autonomous_qa' AS run_type, 'web' AS platform, r.created_at"
+                "     'autonomous_qa' AS run_type, 'web' AS platform,"
+                "     NULL AS test_category, NULL AS test_type,"
+                "     NULL AS linked_requirement, r.created_at"
                 "   FROM orchestrator_runs r"
                 "   LEFT JOIN ai_credential_profiles cp ON cp.id = r.credential_profile_id"
+                "   UNION ALL"
+                "   SELECT vr.id,"
+                "     ('UI Test: ' || vr.target_url) AS goal,"
+                "     vr.environment, NULL AS credential_profile_name,"
+                "     vr.status::text AS status, vr.started_at, vr.completed_at,"
+                "     vr.duration_ms,"
+                "     (SELECT COUNT(*) FROM visual_findings vf"
+                "        WHERE vf.run_id = vr.id) AS step_count,"
+                "     'ui_test' AS run_type, 'web' AS platform,"
+                "     'ui' AS test_category, NULL AS test_type,"
+                "     vr.linked_requirement, vr.created_at"
+                "   FROM visual_runs vr"
                 " ) combined_runs"
                 " ORDER BY created_at DESC"
                 " LIMIT :lim OFFSET :off"
@@ -342,6 +455,9 @@ def list_runs(
                 step_count=r.step_count or 0,
                 run_type=r.run_type or "ai",
                 platform=r.platform or "web",
+                test_category=r.test_category,
+                test_type=r.test_type,
+                linked_requirement=r.linked_requirement,
                 created_at=r.created_at,
             )
             for r in rows
@@ -349,6 +465,188 @@ def list_runs(
         return AIRunListResponse(data=items, total=total, page=page, limit=limit)
     except SQLAlchemyError as exc:
         logger.error("List runs DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+def _compute_flakiness_rate(decided_statuses: list) -> Optional[float]:
+    """Fraction of consecutive pairs in a chronological, decided-only
+    ("passed"/"failed") status sequence that differ from their predecessor
+    (New Vibe Test Phase 7, F.26). 0.0 for an all-same sequence (however
+    long), approaching 1.0 for a sequence that alternates every run. None
+    if there are fewer than 2 decided runs to compare."""
+    if len(decided_statuses) < 2:
+        return None
+    transitions = sum(
+        1
+        for prev, cur in zip(decided_statuses, decided_statuses[1:])
+        if prev != cur
+    )
+    return round(transitions / (len(decided_statuses) - 1), 3)
+
+
+def _coverage_functional_entry(runs: list) -> CoverageTestEntry:
+    """Build one functional-test coverage row from every AITestRun sharing
+    the same (linked_requirement, goal_hash) group, oldest-first (see
+    get_coverage). The group's own identity isn't part of the entry itself
+    — the caller nests this under its CoverageRequirementGroup."""
+    latest = runs[-1]
+    pass_count = sum(1 for r in runs if r.status == AIRunStatus.passed)
+    fail_count = sum(1 for r in runs if r.status == AIRunStatus.failed)
+    needs_review_count = sum(1 for r in runs if r.status == AIRunStatus.needs_review)
+    decided = pass_count + fail_count  # needs_review/inconclusive/cancelled/pending/running excluded
+    # runs is already oldest-first (see get_coverage's order_by), so this
+    # preserves chronological order for the flakiness calculation.
+    decided_statuses = [
+        "passed" if r.status == AIRunStatus.passed else "failed"
+        for r in runs
+        if r.status in (AIRunStatus.passed, AIRunStatus.failed)
+    ]
+    label = " ".join((latest.goal or "").split())
+    if len(label) > 140:
+        label = label[:137] + "..."
+    return CoverageTestEntry(
+        kind="functional",
+        label=label,
+        test_type=latest.test_type,
+        latest_run_id=latest.id,
+        latest_status=latest.status.value if hasattr(latest.status, "value") else latest.status,
+        last_run_at=latest.created_at,
+        latest_eval_score=latest.eval_score,
+        latest_pixel_mismatch_pct=None,
+        total_runs=len(runs),
+        pass_count=pass_count,
+        fail_count=fail_count,
+        needs_review_count=needs_review_count,
+        pass_rate=round(pass_count / decided, 3) if decided else None,
+        flakiness_rate=_compute_flakiness_rate(decided_statuses),
+    )
+
+
+def _coverage_visual_entry(runs: list) -> CoverageTestEntry:
+    """Same as _coverage_functional_entry, for a group of VisualRun rows
+    sharing (linked_requirement, target_url, artifact_id)."""
+    latest = runs[-1]
+    latest_status = latest.status.value if hasattr(latest.status, "value") else latest.status
+    pass_count = sum(
+        1 for r in runs
+        if (r.status.value if hasattr(r.status, "value") else r.status) == "passed"
+    )
+    fail_count = sum(
+        1 for r in runs
+        if (r.status.value if hasattr(r.status, "value") else r.status) in ("failed", "error")
+    )
+    decided = pass_count + fail_count
+    # runs is oldest-first (see get_coverage); "error" folds into "failed"
+    # here too so a flip between the two isn't counted as a spurious
+    # transition — both mean "this run did not pass".
+    decided_statuses = []
+    for r in runs:
+        s = r.status.value if hasattr(r.status, "value") else r.status
+        if s == "passed":
+            decided_statuses.append("passed")
+        elif s in ("failed", "error"):
+            decided_statuses.append("failed")
+    return CoverageTestEntry(
+        kind="ui",
+        label=latest.target_url,
+        test_type=None,
+        latest_run_id=latest.id,
+        latest_status=latest_status,
+        last_run_at=latest.created_at,
+        latest_eval_score=None,
+        latest_pixel_mismatch_pct=latest.pixel_mismatch_pct,
+        total_runs=len(runs),
+        pass_count=pass_count,
+        fail_count=fail_count,
+        needs_review_count=0,
+        pass_rate=round(pass_count / decided, 3) if decided else None,
+        flakiness_rate=_compute_flakiness_rate(decided_statuses),
+    )
+
+
+@router.get("/coverage", response_model=CoverageResponse)
+def get_coverage(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Requirement -> linked test(s) -> latest status -> (functional) GEval
+    score -> last-run date (New Vibe Test Phase 6, A.4/D.15) — "is this
+    feature actually fully tested, visually and functionally" answerable at
+    a glance, and per-test pass-rate so a genuinely broken feature can be
+    told apart from a flaky test.
+
+    Grouping key (no schema change — computed here, not stored; see
+    schemas.ai_runs's CoverageRequirementGroup/CoverageTestEntry docstring
+    for the full rationale): a functional test is
+    (linked_requirement, goal_hash); a UI test is
+    (linked_requirement, target_url, artifact_id). Every run in a group
+    contributes to that one test's pass_count/fail_count/pass_rate; the
+    group's most recent run (by created_at) is what "latest status" means.
+    """
+    try:
+        from app.services.skill_store import compute_goal_hash
+
+        func_rows = (
+            db.query(AITestRun)
+            .filter(
+                AITestRun.test_category == "functional",
+                AITestRun.linked_requirement.isnot(None),
+                AITestRun.linked_requirement != "",
+            )
+            .order_by(AITestRun.created_at.asc())
+            .all()
+        )
+        func_groups: dict[tuple, list] = {}
+        for r in func_rows:
+            key = (r.linked_requirement, compute_goal_hash(r.goal or ""))
+            func_groups.setdefault(key, []).append(r)
+
+        visual_rows = (
+            db.query(VisualRun)
+            .filter(VisualRun.linked_requirement.isnot(None), VisualRun.linked_requirement != "")
+            .order_by(VisualRun.created_at.asc())
+            .all()
+        )
+        visual_groups: dict[tuple, list] = {}
+        for r in visual_rows:
+            key = (r.linked_requirement, r.target_url, str(r.artifact_id))
+            visual_groups.setdefault(key, []).append(r)
+
+        by_requirement: dict[str, CoverageRequirementGroup] = {}
+        for (req, _hash), runs in func_groups.items():
+            group = by_requirement.setdefault(req, CoverageRequirementGroup(linked_requirement=req))
+            group.functional_tests.append(_coverage_functional_entry(runs))
+        for (req, _url, _artifact), runs in visual_groups.items():
+            group = by_requirement.setdefault(req, CoverageRequirementGroup(linked_requirement=req))
+            group.ui_tests.append(_coverage_visual_entry(runs))
+
+        for group in by_requirement.values():
+            group.functional_tests.sort(key=lambda e: e.last_run_at, reverse=True)
+            group.ui_tests.sort(key=lambda e: e.last_run_at, reverse=True)
+
+        unlinked_functional_count = (
+            db.query(AITestRun)
+            .filter(
+                AITestRun.test_category == "functional",
+                (AITestRun.linked_requirement.is_(None)) | (AITestRun.linked_requirement == ""),
+            )
+            .count()
+        )
+        unlinked_ui_count = (
+            db.query(VisualRun)
+            .filter(
+                (VisualRun.linked_requirement.is_(None)) | (VisualRun.linked_requirement == "")
+            )
+            .count()
+        )
+
+        return CoverageResponse(
+            requirements=sorted(by_requirement.values(), key=lambda g: g.linked_requirement),
+            unlinked_functional_count=unlinked_functional_count,
+            unlinked_ui_count=unlinked_ui_count,
+        )
+    except SQLAlchemyError as exc:
+        logger.error("Coverage report DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
@@ -473,6 +771,21 @@ def get_run(
             failing_step_index=run.failing_step_index,
             failing_step_description=run.failing_step_description,
             failing_step_screenshot_url=run.failing_step_screenshot_url,
+            video_available=bool(run.video_path and os.path.isfile(run.video_path)),
+            eval_score=run.eval_score,
+            eval_reason=run.eval_reason,
+            eval_status=run.eval_status,
+            visual_eval_score=run.visual_eval_score,
+            visual_eval_reason=run.visual_eval_reason,
+            visual_eval_status=run.visual_eval_status,
+            test_category=run.test_category,
+            preconditions=run.preconditions,
+            steps=run.steps,
+            expected_results=run.expected_results,
+            test_data=run.test_data,
+            test_type=run.test_type,
+            linked_requirement=run.linked_requirement,
+            viewport_preset=run.viewport_preset,
             created_by=run.created_by,
             created_at=run.created_at,
             updated_at=run.updated_at,
@@ -522,7 +835,14 @@ def cancel_run(
     try:
         run = db.get(AITestRun, run_id)
         if run is None:
-            return _cancel_orchestrator_run(run_id, db, current_user, request)
+            orchestrator_run = db.get(OrchestratorRun, run_id)
+            if orchestrator_run is not None:
+                return _cancel_orchestrator_run(run_id, db, current_user, request)
+            # Phase 5 (E.22): a UI Test run (visual_runs) now appears in this
+            # same unified list/history — its delete button hits this same
+            # endpoint, so it needs its own fallback, same pattern as
+            # orchestrator runs above.
+            return _cancel_visual_run(run_id, db, current_user, request)
 
         if run.status in (AIRunStatus.pending, AIRunStatus.running):
             run.status = AIRunStatus.cancelled
@@ -537,6 +857,16 @@ def cancel_run(
                 ip_address=_client_ip(request),
             )
             return {"message": "Run cancelled"}
+
+        # Free the recording (if any) before the row goes away — nothing
+        # else references it once history is deleted. Best-effort: a
+        # missing/already-gone file must never block deleting the run row.
+        if run.video_path:
+            try:
+                if os.path.isfile(run.video_path):
+                    os.remove(run.video_path)
+            except OSError:
+                logger.warning("Failed to remove video file for run %s", run_id, exc_info=True)
 
         db.delete(run)
         db.commit()
@@ -594,6 +924,65 @@ def _cancel_orchestrator_run(
         user_id=current_user.id,
         action="delete_ai_run",
         resource_type="orchestrator_run",
+        resource_id=str(run_id),
+        ip_address=_client_ip(request),
+    )
+    return {"message": "Run deleted"}
+
+
+def _cancel_visual_run(
+    run_id: UUID, db: Session, current_user: User, request: Request
+) -> dict:
+    """Same cancel-or-delete behavior as cancel_run, for a UI Test run
+    (visual_runs) — Phase 5 (E.22): now reachable from the same unified
+    Results list/delete button as Functional Test runs, not just the
+    standalone Visual Audit surface. VisualRun has no "running" concept of
+    its own that a client can meaningfully interrupt mid-flight the way an
+    AITestRun/OrchestratorRun task can (the visual_audit Celery task is
+    short — pixel-diff + one vision call — and doesn't poll for a cancel
+    flag) — so, matching visual_audit.py's own cancel_run endpoint, only a
+    still-pending run can be marked cancelled; anything else (including
+    "running") is deleted outright, same as a terminal AITestRun/
+    OrchestratorRun above."""
+    run = db.get(VisualRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.status == VisualRunStatus.pending:
+        run.status = VisualRunStatus.cancelled
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="cancel_ai_run",
+            resource_type="visual_run",
+            resource_id=str(run_id),
+            ip_address=_client_ip(request),
+        )
+        return {"message": "Run cancelled"}
+
+    # Free the screenshot/diff images (if any) before the row goes away —
+    # same best-effort convention as cancel_run's video_path cleanup above;
+    # a missing/already-gone file must never block deleting the run row.
+    # The reference design image itself is NOT removed — it's a reusable
+    # Memory Bank artifact (design_artifacts), independent of any one run.
+    for path in (run.screenshot_path, run.diff_image_path):
+        if not path:
+            continue
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            logger.warning("Failed to remove image file for visual run %s", run_id, exc_info=True)
+
+    db.delete(run)  # findings cascade via VisualFinding's FK (ondelete=CASCADE)
+    db.commit()
+    write_audit_log(
+        db,
+        user_id=current_user.id,
+        action="delete_ai_run",
+        resource_type="visual_run",
         resource_id=str(run_id),
         ip_address=_client_ip(request),
     )
@@ -994,7 +1383,12 @@ async def stream_run(
     event list — the frontend already upserts by sequence, so this is
     idempotent and always reflects the true DB state.
     """
-    TERMINAL = frozenset({"passed", "failed", "inconclusive", "cancelled"})
+    # "needs_review" included (New Vibe Test Phase 4, D.15): _persist_result
+    # can now set this instead of "passed" once GEval has weighed in, and it
+    # is just as terminal as any other outcome here — a stream that didn't
+    # know about it would poll/idle forever waiting for a status this run
+    # will never reach.
+    TERMINAL = frozenset({"passed", "failed", "inconclusive", "cancelled", "needs_review"})
 
     async def event_generator():
         from app.core.database import SessionLocal
@@ -1066,3 +1460,105 @@ async def stream_run(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── Live browser view + recorded video (New Vibe Test / Skill Replay) ───────
+
+@router.get("/runs/{run_id}/live-frames")
+async def stream_live_frames(
+    run_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """Server-Sent Events relay of a run's live CDP screencast frames.
+
+    app/services/ai_run_capture.py (running in the Celery worker container)
+    publishes each frame on Redis channel ai_run_frames:{run_id} as the AI
+    agent drives the browser. This endpoint just relays them to the browser
+    over SSE — it never touches Chromium/CDP itself, mirroring how /stream
+    above relays step events out of the DB instead of the live run.
+
+    A run that never enabled live capture (Autonomous QA's Hands step,
+    Android runs) or whose capture failed to start simply never publishes
+    anything — the stream idles (same shape as /stream's "no new_events")
+    until the run reaches a terminal status, at which point it closes.
+    """
+    import redis.asyncio as redis_asyncio
+
+    from app.core.config import settings
+    from app.models.ai_runs import AITestRun as _AITestRun
+
+    # "needs_review" included (New Vibe Test Phase 4, D.15): _persist_result
+    # can now set this instead of "passed" once GEval has weighed in, and it
+    # is just as terminal as any other outcome here — a stream that didn't
+    # know about it would poll/idle forever waiting for a status this run
+    # will never reach.
+    TERMINAL = frozenset({"passed", "failed", "inconclusive", "cancelled", "needs_review"})
+    channel = f"ai_run_frames:{run_id}"
+
+    async def event_generator():
+        from app.core.database import SessionLocal
+
+        redis_client = redis_asyncio.from_url(settings.CELERY_BROKER_URL)
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe(channel)
+        try:
+            while True:
+                session: Session = SessionLocal()
+                try:
+                    run = session.get(_AITestRun, run_id)
+                    if run is None:
+                        yield f"data: {json.dumps({'error': 'Run not found'})}\n\n"
+                        return
+                    status_val = (
+                        run.status.value if hasattr(run.status, "value") else run.status
+                    )
+                finally:
+                    session.close()
+
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message.get("type") == "message":
+                    data = message["data"]
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8", errors="ignore")
+                    yield f"data: {data}\n\n"
+
+                if status_val in TERMINAL:
+                    return
+        finally:
+            try:
+                await pubsub.unsubscribe(channel)
+            except Exception:
+                pass
+            try:
+                await redis_client.aclose()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/runs/{run_id}/video")
+def get_run_video(
+    run_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Serve a run's full-session recording for inline playback or
+    download. Path comes from OUR database row (server-generated, never
+    client input) — no path traversal risk, same guarantee
+    visual_audit.py::get_run_image relies on for its images. Range requests
+    (for seeking) work for free via Starlette's FileResponse."""
+    run = db.get(AITestRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not run.video_path or not os.path.isfile(run.video_path):
+        raise HTTPException(status_code=404, detail="No video available for this run")
+    return FileResponse(run.video_path, media_type="video/mp4")

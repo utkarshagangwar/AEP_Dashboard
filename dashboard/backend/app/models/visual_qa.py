@@ -32,6 +32,15 @@ class ArtifactType(str, PyEnum):
     # Memory Bank dedupe rather than a parallel storage mechanism.
     meeting_transcript = "meeting_transcript"  # pasted/uploaded text transcript
     meeting_recording = "meeting_recording"    # raw audio/video recording
+    # Import SOW (SOW tab): an uploaded pre-existing SOW/requirements
+    # document (.docx/.pdf/.txt/.md) used as a source to seed a
+    # sow_documents ledger baseline via app/services/sow_import.py +
+    # app/services/sow_ledger.py's extract_ledger_from_sow_document*.
+    # Deliberately distinct from `sow` (above), which belongs to the
+    # separate, unmodified SOW-Checkpoints/Vibe-Testing extraction pipeline
+    # (app/services/design_ingest.py) -- keeping the two apart avoids either
+    # pipeline accidentally picking up the other's artifacts.
+    sow_import = "sow_import"
 
 
 class ParseStatus(str, PyEnum):
@@ -186,6 +195,9 @@ class VisualRun(Base):
     screenshot_path = mapped_column(Text, nullable=True)   # captured live page
     diff_image_path = mapped_column(Text, nullable=True)   # pixel-diff overlay
     pixel_mismatch_pct = mapped_column(Integer, nullable=True)  # 0–100, rounded
+    # Free-text requirement/checkpoint reference (New Vibe Test Phase 1 —
+    # UI Test flow). Same column name/shape as AITestRun.linked_requirement.
+    linked_requirement = mapped_column(String(500), nullable=True)
     summary = mapped_column(Text, nullable=True)
     error_message = mapped_column(Text, nullable=True)
     started_at = mapped_column(DateTime, nullable=True)

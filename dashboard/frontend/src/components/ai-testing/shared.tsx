@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { getAccessToken } from "@/lib/api";
+import { apiFetch, refreshAccessToken } from "@/utils/apiClient";
 
 // ── Shared goal-validation constants (Web Quick mode + Android New Test) ────
 
@@ -106,6 +108,27 @@ export interface RunResult {
   failing_step_index?: number;
   failing_step_description?: string;
   failing_step_screenshot_url?: string;
+  // True once a full-session recording exists for this run (New Vibe Test
+  // / Skill Replay only — see VideoPane below).
+  video_available?: boolean;
+  // Post-run DeepEval quality score (New Vibe Test / Skill Replay, web
+  // platform only) — a second opinion on whether the agent's actions
+  // actually accomplished the goal, independent of its own self-report.
+  // Absent/null for every other run (Android, Autonomous QA, non-terminal
+  // status, or scoring itself was unavailable).
+  eval_score?: number | null;
+  eval_reason?: string | null;
+  eval_status?: string | null;
+  // Second, complementary judge pass (New Vibe Test Phase 4) — final-state
+  // screenshot vs. this run's own expected_results. Functional Test only.
+  visual_eval_score?: number | null;
+  visual_eval_reason?: string | null;
+  visual_eval_status?: string | null;
+  // Structured Functional Test fields (New Vibe Test Phase 1) — absent for
+  // every run created via any other flow.
+  test_category?: string | null;
+  test_type?: string | null;
+  linked_requirement?: string | null;
   events: RunEvent[];
   created_at?: string;
   // Autonomous QA (orchestrator) runs only:
@@ -277,6 +300,147 @@ export function ScreenshotPane({
   );
 }
 
+/**
+ * Live view of the actual browser during a New Vibe Test / Skill Replay
+ * run — an EventSource fed by the backend's CDP-screencast relay
+ * (GET /ai-testing/runs/:id/live-frames), rendered as a continuously
+ * updating <img> in the same visual slot ScreenshotPane used to occupy.
+ * Runs that never opted into live capture (Autonomous QA, Android) simply
+ * never publish frames — this component just never advances past
+ * "Connecting…", which is fine since it's never mounted for those flows.
+ */
+export function LiveBrowserView({ runId }: { runId: string }) {
+  const [frame, setFrame] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let es: EventSource | null = null;
+
+    (async () => {
+      let token = getAccessToken();
+      if (!token) {
+        await refreshAccessToken();
+        token = getAccessToken();
+      }
+      if (cancelled) return;
+
+      es = new EventSource(
+        `/api/ai-testing/runs/${runId}/live-frames?token=${encodeURIComponent(token || "")}`
+      );
+
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (data.jpg) setFrame(data.jpg);
+        } catch {
+          // ignore malformed frames
+        }
+      };
+      es.onerror = () => es?.close();
+    })();
+
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
+  }, [runId]);
+
+  if (!frame) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-100 text-gray-400 text-sm min-h-[200px] rounded-lg">
+        Connecting to live browser…
+      </div>
+    );
+  }
+  return (
+    <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-black">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`data:image/jpeg;base64,${frame}`}
+        alt="Live browser view"
+        className="w-full h-auto block"
+      />
+    </div>
+  );
+}
+
+/**
+ * Full-session recording for a completed New Vibe Test / Skill Replay run
+ * — an inline player plus a Download button. videoAvailable comes from the
+ * run's video_available flag; when false (legacy run, or capture failed)
+ * shows an empty state instead of a broken player.
+ */
+export function VideoPane({
+  runId,
+  videoAvailable,
+}: {
+  runId: string;
+  videoAvailable?: boolean;
+}) {
+  const [token, setToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!videoAvailable) return;
+    let cancelled = false;
+    (async () => {
+      let t = getAccessToken();
+      if (!t) {
+        await refreshAccessToken();
+        t = getAccessToken();
+      }
+      if (!cancelled) setToken(t);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, videoAvailable]);
+
+  if (!videoAvailable) {
+    return (
+      <div className="flex items-center justify-center bg-gray-100 text-gray-400 text-sm min-h-[200px] rounded-lg py-16">
+        No video recorded for this run.
+      </div>
+    );
+  }
+
+  if (!token) {
+    return (
+      <div className="flex items-center justify-center bg-gray-100 text-gray-400 text-sm min-h-[200px] rounded-lg py-16">
+        Loading video…
+      </div>
+    );
+  }
+
+  const videoUrl = `/api/ai-testing/runs/${runId}/video?token=${encodeURIComponent(token)}`;
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg overflow-hidden border border-gray-200 bg-black">
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+        <video controls src={videoUrl} className="w-full h-auto block max-h-[540px]" />
+      </div>
+      <div className="flex justify-end">
+        <a
+          href={videoUrl}
+          download={`ai-test-${runId}.mp4`}
+          className="inline-flex items-center gap-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-md px-3 py-1.5 hover:bg-gray-50 transition-colors"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10"
+              stroke="currentColor"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Download video
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export function StepRow({ event }: { event: RunEvent }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -351,13 +515,71 @@ export function RunStatusBadge({ status }: { status: string }) {
     partial: "border-amber-300 text-amber-700 bg-amber-50",
     error: "border-red-300 text-red-700 bg-red-50",
     planning: "border-blue-300 text-blue-700 bg-blue-50",
+    // New Vibe Test Phase 4 (D.15) — agent self-reported "passed" but the
+    // independent GEval score came back below threshold; distinct from
+    // both passed (green) and failed (red)/inconclusive (amber) since it's
+    // neither — a human hasn't decided yet.
+    needs_review: "border-purple-300 text-purple-700 bg-purple-50",
   };
   return (
     <Badge
       variant="outline"
       className={`text-xs capitalize ${styles[status] || styles.pending}`}
     >
-      {status}
+      {status.replace(/_/g, " ")}
     </Badge>
+  );
+}
+
+/** Fetches a Visual Audit / UI Test run image with the JWT (a plain <img
+ * src> can't send the Authorization header). Shared by VisualAuditSection
+ * (the live/just-submitted run) and VisualTestRunDetail (New Vibe Test
+ * Phase 5 — the same run viewed later from the Results tab history) so a
+ * UI Test's screenshots look identical whether viewed live or from
+ * history. Moved here (was duplicated only in VisualAuditSection before
+ * Phase 5) rather than kept as two copies. */
+export function AuthImage({
+  runId,
+  kind,
+}: {
+  runId: string;
+  kind: "reference" | "screenshot" | "diff";
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    setSrc(null);
+    setFailed(false);
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/v1/visual-audits/${runId}/images/${kind}`);
+        if (!res.ok) throw new Error("image unavailable");
+        const blob = await res.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setSrc(objectUrl);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [runId, kind]);
+
+  if (failed)
+    return <p className="text-xs text-gray-400">Image not available for this run.</p>;
+  if (!src)
+    return <div className="h-48 bg-gray-100 rounded-md animate-pulse" />;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={`${kind} image`}
+      className="w-full border border-gray-200 rounded-md"
+    />
   );
 }

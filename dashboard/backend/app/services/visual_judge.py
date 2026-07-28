@@ -47,14 +47,62 @@ _VISION_SYSTEM = (
     "NOT report exact colors, pixel spacing, or font-size guesses — a "
     "deterministic tool handles those. Respond with JSON only: "
     '{"findings": [{"element": str, "issue": str, "expected": str, '
-    '"actual": str, "severity": "critical"|"major"|"minor"|"info"}]} '
+    '"actual": str, "severity": "critical"|"major"|"minor"|"info", '
+    '"region": {"x_pct": num, "y_pct": num, "w_pct": num, "h_pct": num} | null}]} '
+    "region is your best-effort bounding box of where the finding is, as "
+    "percentages of the SECOND image's width/height (0-100) — use null if "
+    "you can't localize it to a specific area. "
     "Return {\"findings\": []} if there are no structural differences."
 )
 
-# Properties the deterministic pass owns; vision findings mentioning these
-# are dropped in the merge step.
+# Properties the deterministic pass owns. A vision finding whose text
+# mentions one of these AND whose model-estimated `region` (see prompt
+# above) geometrically overlaps an actual pixel-diff-flagged region is
+# dropped in the merge step (judge(), below) as a duplicate of what the
+# deterministic pass already reported more precisely. Phase 5 (E/D.24,
+# 2026-07-28): previously this alone — a bare substring match anywhere in
+# the issue text, with no check against what pixel-diff actually found —
+# was enough to drop a finding, which silently discarded genuinely
+# structural findings that happened to use a word like "padding" in prose
+# (e.g. "the button lacks padding around the icon, causing it to overlap
+# the label" is a structural/layout bug, not a spacing measurement). See
+# _regions_overlap and judge()'s merge step for the actual (now two-part)
+# check.
 _DETERMINISTIC_KEYWORDS = ("color", "colour", "hex", "spacing", "padding",
                            "margin", "px", "pixel")
+
+_DEFAULT_VISION_MAX_TOKENS = 4096  # matches today's router-wide default exactly
+
+
+def _valid_region(raw) -> Optional[dict]:
+    """Validate/clamp a model-supplied region dict, or None if unusable.
+
+    Never trusts the model's numbers blindly — out-of-range or non-numeric
+    values are treated the same as "didn't localize it" (None) rather than
+    silently corrupting the overlap check below with garbage coordinates.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        x, y, w, h = (float(raw[k]) for k in ("x_pct", "y_pct", "w_pct", "h_pct"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(0 <= v <= 100 for v in (x, y, w, h)):
+        return None
+    return {"x_pct": x, "y_pct": y, "w_pct": w, "h_pct": h}
+
+
+def _regions_overlap(a: dict, b: dict) -> bool:
+    """Axis-aligned bounding-box intersection test (percentages of the same
+    viewport) — True iff the two regions share any area at all. Used to
+    decide whether a vision finding is actually describing the same spot a
+    pixel-diff finding already flagged, rather than merely using similar
+    vocabulary (see _DETERMINISTIC_KEYWORDS above)."""
+    a_left, a_right = a["x_pct"], a["x_pct"] + a["w_pct"]
+    a_top, a_bottom = a["y_pct"], a["y_pct"] + a["h_pct"]
+    b_left, b_right = b["x_pct"], b["x_pct"] + b["w_pct"]
+    b_top, b_bottom = b["y_pct"], b["y_pct"] + b["h_pct"]
+    return a_left < b_right and b_left < a_right and a_top < b_bottom and b_top < a_bottom
 
 
 @dataclass
@@ -245,11 +293,30 @@ def run_vision_pass(
     model_override: passed straight through to llm_router.complete() — see
     its docstring. None (the default) preserves today's static-chain
     behavior; the orchestrator sets this to steer which model runs this pass.
+
+    Deterministic-keyword filtering (dropping a color/spacing-flavored vision
+    finding) is NOT done here any more (Phase 5, D.24) — this function
+    returns every schema-valid finding the model reported. The actual
+    cross-pass dedup (does this finding's region really overlap something
+    pixel-diff already flagged, not just share vocabulary) needs the
+    deterministic pass's regions, which only judge() has — see its merge
+    step below.
     """
     from app.services import llm_router
 
-    try:
-        result = llm_router.complete(
+    # Own, explicitly configurable budget (Phase 5, E.23) — previously this
+    # call left max_tokens at llm_router.complete()'s blanket default (4096),
+    # shared by every other router call in the app; a busy page with many
+    # structural differences could have its findings array cut off mid-object
+    # with nothing to detect or recover from that. VISUAL_JUDGE_VISION_MAX_TOKENS
+    # overrides the effective budget; unset preserves today's exact 4096
+    # default (no behavior change).
+    max_tokens = int(
+        os.environ.get("VISUAL_JUDGE_VISION_MAX_TOKENS", _DEFAULT_VISION_MAX_TOKENS)
+    )
+
+    def _call(tokens: int):
+        return llm_router.complete(
             "Compare these two images per your instructions.",
             system=_VISION_SYSTEM,
             images_b64=[
@@ -257,8 +324,43 @@ def run_vision_pass(
                 llm_router.encode_image_file(screenshot_path),
             ],
             expect_json=True,
+            max_tokens=tokens,
             model_override=model_override,
         )
+
+    try:
+        result = _call(max_tokens)
+        # finish_reason == "length" is the provider's own signal that the
+        # response was cut off by max_tokens, not a heuristic guess (see
+        # llm_router.RouterResult.finish_reason) — exactly the "findings
+        # array that stops mid-object" case this checklist item names.
+        # One retry at double the budget; if that's still truncated, the
+        # (possibly incomplete) result is used anyway rather than looping
+        # or failing the whole audit over it — same "best-effort, never
+        # blocks the run" contract as every other failure path here.
+        if result.finish_reason == "length":
+            retry_tokens = max_tokens * 2
+            logger.warning(
+                "Visual judge: vision pass response truncated at "
+                "max_tokens=%d (finish_reason=length) — retrying once at "
+                "max_tokens=%d",
+                max_tokens, retry_tokens,
+            )
+            try:
+                retried = _call(retry_tokens)
+                if retried.finish_reason == "length":
+                    logger.warning(
+                        "Visual judge: vision pass still truncated at "
+                        "max_tokens=%d — proceeding with a possibly "
+                        "incomplete findings list",
+                        retry_tokens,
+                    )
+                result = retried
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Visual judge: truncation retry failed (%s) — using the "
+                    "original, possibly-truncated response instead", exc,
+                )
     except Exception as exc:  # noqa: BLE001 — vision pass must never kill the run
         logger.warning("Visual judge: vision pass unavailable: %s", exc)
         return [], None
@@ -269,10 +371,6 @@ def run_vision_pass(
     for item in raw.get("findings", []):
         if not isinstance(item, dict) or not item.get("issue"):
             continue  # schema-invalid entry — drop, never guess
-        issue_text = str(item.get("issue", "")).lower()
-        # Merge policy: deterministic pass owns color/spacing claims
-        if any(kw in issue_text for kw in _DETERMINISTIC_KEYWORDS):
-            continue
         findings.append(
             {
                 "engine": "vision",
@@ -281,7 +379,7 @@ def run_vision_pass(
                 "issue": str(item["issue"]),
                 "expected": str(item.get("expected") or "") or None,
                 "actual": str(item.get("actual") or "") or None,
-                "region": None,
+                "region": _valid_region(item.get("region")),
             }
         )
     return findings, result.model_used
@@ -334,6 +432,35 @@ def judge(
         vision_findings, vision_model = run_vision_pass(
             reference_path, screenshot_path, model_override=model_override
         )
+
+    # Merge dedup (Phase 5, D.24): drop a vision finding as a duplicate of
+    # the deterministic pass ONLY when it both (a) uses color/spacing
+    # vocabulary AND (b) the model's own estimated region actually overlaps
+    # a real pixel-diff-flagged region — not on keyword vocabulary alone.
+    # A vision finding with no region (the model didn't localize it) or one
+    # that doesn't geometrically overlap any pixel-diff region is kept even
+    # if it happens to use one of these words in prose, since it's then
+    # reporting something the deterministic pass didn't actually catch.
+    pixel_regions = [pf["region"] for pf in pixel_findings if pf.get("region")]
+    deduped_vision_findings = []
+    dropped_count = 0
+    for vf in vision_findings:
+        issue_text = (vf.get("issue") or "").lower()
+        mentions_deterministic = any(kw in issue_text for kw in _DETERMINISTIC_KEYWORDS)
+        overlaps_pixel_finding = bool(vf.get("region")) and any(
+            _regions_overlap(vf["region"], pr) for pr in pixel_regions
+        )
+        if mentions_deterministic and overlaps_pixel_finding:
+            dropped_count += 1
+            continue
+        deduped_vision_findings.append(vf)
+    if dropped_count:
+        logger.info(
+            "Visual judge: merge step dropped %d vision finding(s) that "
+            "geometrically overlapped an existing pixel-diff finding",
+            dropped_count,
+        )
+    vision_findings = deduped_vision_findings
 
     findings = pixel_findings + vision_findings
     fail_pct = float(os.environ.get("VISUAL_FAIL_MISMATCH_PCT", _DEFAULT_FAIL_PCT))

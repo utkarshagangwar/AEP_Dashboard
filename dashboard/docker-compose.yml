@@ -35,13 +35,21 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GOOGLE_API_KEYS: ${GOOGLE_API_KEYS:-}
+      GOOGLE_KEY_COOLDOWN_S: ${GOOGLE_KEY_COOLDOWN_S:-21600}
       AI_LLM_MODEL: ${AI_LLM_MODEL:-}
+      VIBE_TEST_SOFT_TIME_LIMIT_S: ${VIBE_TEST_SOFT_TIME_LIMIT_S:-21600}
+      VIBE_TEST_HARD_TIME_LIMIT_S: ${VIBE_TEST_HARD_TIME_LIMIT_S:-21900}
+      # AXON metering gateway — same allowlist gotcha as SOW_ENABLED below:
+      # was set in .env but never listed here, so ai_runner.py's AXON
+      # fallback and the AI Usage page's per-key table never saw it.
+      AXON_API_KEY: ${AXON_API_KEY:-}
+      AXON_BASE_URL: ${AXON_BASE_URL:-}
       VISUAL_AUDIT_ENABLED: ${VISUAL_AUDIT_ENABLED:-false}
       VISUAL_DATA_DIR: /app/visual_qa_data
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       FIGMA_API_TOKEN: ${FIGMA_API_TOKEN:-}
-      VISUAL_LLM_PRIMARY: ${VISUAL_LLM_PRIMARY:-gemini/gemini-3.5-flash}
-      VISUAL_LLM_FALLBACKS: ${VISUAL_LLM_FALLBACKS:-gemini/gemini-2.5-flash}
+      VISUAL_LLM_PRIMARY: ${VISUAL_LLM_PRIMARY:-axon/gemini-flash-latest}
+      VISUAL_LLM_FALLBACKS: ${VISUAL_LLM_FALLBACKS:-gemini/gemini-2.5-flash-lite,gemini/gemini-2.5-flash}
       VISUAL_LLM_TIMEOUT_S: ${VISUAL_LLM_TIMEOUT_S:-120}
       VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-2}
       VISUAL_DIFF_THRESHOLD: ${VISUAL_DIFF_THRESHOLD:-0.1}
@@ -88,7 +96,11 @@ services:
     #    default, so cross-suite parallelism is a documented, tunable knob
     #    (CELERY_CONCURRENCY in .env) rather than an accident of the host's
     #    reported CPU count.
-    command: celery -A app.workers.celery_app:celery_app worker -B --loglevel=info --concurrency=${CELERY_CONCURRENCY:-2}
+    # Xvfb :99 gives ai_runner.py's Chromium subprocess (launched without
+    #    --headless, see _run_with_chromium) a real X display to render to --
+    #    testing whether IG's app treats a headless/no-GPU session
+    #    differently from a headed one for the admin-bypass cookie flow.
+    command: sh -c "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp & sleep 2 && celery -A app.workers.celery_app:celery_app worker -B --loglevel=info --concurrency=${CELERY_CONCURRENCY:-2}"
     volumes:
       - ../automation:/automation
       - visual_qa_data:/app/visual_qa_data
@@ -108,13 +120,20 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GOOGLE_API_KEYS: ${GOOGLE_API_KEYS:-}
+      GOOGLE_KEY_COOLDOWN_S: ${GOOGLE_KEY_COOLDOWN_S:-21600}
       AI_LLM_MODEL: ${AI_LLM_MODEL:-}
+      VIBE_TEST_SOFT_TIME_LIMIT_S: ${VIBE_TEST_SOFT_TIME_LIMIT_S:-21600}
+      VIBE_TEST_HARD_TIME_LIMIT_S: ${VIBE_TEST_HARD_TIME_LIMIT_S:-21900}
+      # AXON metering gateway — must match backend's block above (this
+      # worker also builds Hands/Brain LLM clients for queued runs).
+      AXON_API_KEY: ${AXON_API_KEY:-}
+      AXON_BASE_URL: ${AXON_BASE_URL:-}
       VISUAL_AUDIT_ENABLED: ${VISUAL_AUDIT_ENABLED:-false}
       VISUAL_DATA_DIR: /app/visual_qa_data
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       FIGMA_API_TOKEN: ${FIGMA_API_TOKEN:-}
-      VISUAL_LLM_PRIMARY: ${VISUAL_LLM_PRIMARY:-gemini/gemini-3.5-flash}
-      VISUAL_LLM_FALLBACKS: ${VISUAL_LLM_FALLBACKS:-gemini/gemini-2.5-flash}
+      VISUAL_LLM_PRIMARY: ${VISUAL_LLM_PRIMARY:-axon/gemini-flash-latest}
+      VISUAL_LLM_FALLBACKS: ${VISUAL_LLM_FALLBACKS:-gemini/gemini-2.5-flash-lite,gemini/gemini-2.5-flash}
       VISUAL_LLM_TIMEOUT_S: ${VISUAL_LLM_TIMEOUT_S:-120}
       VISUAL_LLM_MAX_RETRIES: ${VISUAL_LLM_MAX_RETRIES:-2}
       VISUAL_DIFF_THRESHOLD: ${VISUAL_DIFF_THRESHOLD:-0.1}

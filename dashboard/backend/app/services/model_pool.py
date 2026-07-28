@@ -6,9 +6,11 @@ self-execution, via llm_router.complete()).
 
 This module only serves the orchestrator (app/services/orchestrator.py). The
 existing static defaults elsewhere are untouched: ai_runner._build_llm()
-still applies its own Anthropic->OpenAI->Google precedence when no
-llm_override is given, and llm_router.complete() still falls back to its own
-VISUAL_LLM_PRIMARY/VISUAL_LLM_FALLBACKS chain when no model_override is given.
+still applies its own AXON->Google->OpenRouter precedence (2026-07-28:
+Anthropic/OpenAI removed from that chain — this deployment has no key for
+either) when no llm_override is given, and llm_router.complete() still
+falls back to its own VISUAL_LLM_PRIMARY/VISUAL_LLM_FALLBACKS chain when no
+model_override is given.
 
 Kept as its own leaf module (rather than folded into orchestrator.py) so
 ai_runner.py never has to import orchestrator.py — this module imports
@@ -27,13 +29,14 @@ logger = get_logger(__name__)
 _DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-20241022"
 _DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 _DEFAULT_OPENROUTER_MODEL = "google/gemma-4-26b-a4b-it:free"
+_AXON_MODEL = "gemini-flash-latest"
 
 
 @dataclass
 class ModelChoice:
     """An abstract model selection the orchestrator can act on."""
 
-    provider: str  # "anthropic" | "openai" | "google" | "openrouter"
+    provider: str  # "axon" | "anthropic" | "openai" | "google" | "openrouter"
     model: str  # provider-native model id, e.g. "google/gemma-4-26b-a4b-it:free"
     tier: str  # "cheap" | "capable" — used by the coordinator's judgment call
     reason: str  # human-readable, stored in the audit trail (OrchestratorStepDecision.rationale)
@@ -69,8 +72,16 @@ def available_pool() -> list[ModelChoice]:
     pool: list[ModelChoice] = []
     model_override = os.environ.get("AI_LLM_MODEL", "").strip()
 
+    # AXON is the deployment's default path. Put it first and in the capable
+    # tier so both the orchestrator's cheap classifier and its Hands/Judge
+    # calls select it before a free Gemini/OpenRouter provider.
+    if os.environ.get("AXON_API_KEY", "").strip():
+        pool.append(
+            ModelChoice("axon", _AXON_MODEL, "capable", "AXON gateway key configured")
+        )
+
     anthropic_keys = _get_key_list("ANTHROPIC_API_KEYS", "ANTHROPIC_API_KEY")
-    if anthropic_keys and ai_runner._anthropic_key_valid(anthropic_keys[0]):
+    if anthropic_keys and any(ai_runner._anthropic_key_valid(key) for key in anthropic_keys):
         pool.append(
             ModelChoice(
                 "anthropic",
@@ -81,7 +92,7 @@ def available_pool() -> list[ModelChoice]:
         )
 
     openai_keys = _get_key_list("OPENAI_API_KEYS", "OPENAI_API_KEY")
-    if openai_keys and ai_runner._openai_key_valid(openai_keys[0]):
+    if openai_keys and any(ai_runner._openai_key_valid(key) for key in openai_keys):
         pool.append(
             ModelChoice(
                 "openai",
@@ -118,7 +129,10 @@ def available_pool() -> list[ModelChoice]:
 
 
 def cheapest(pool: list[ModelChoice]) -> Optional[ModelChoice]:
-    """First tier=='cheap' entry, else first entry at all, else None."""
+    """Prefer AXON; otherwise first cheap entry, then first available."""
+    for choice in pool:
+        if choice.provider == "axon":
+            return choice
     for choice in pool:
         if choice.tier == "cheap":
             return choice
@@ -126,7 +140,10 @@ def cheapest(pool: list[ModelChoice]) -> Optional[ModelChoice]:
 
 
 def most_capable(pool: list[ModelChoice]) -> Optional[ModelChoice]:
-    """First tier=='capable' entry, else fall back to cheapest."""
+    """Prefer AXON; otherwise first capable entry, then the cheap selector."""
+    for choice in pool:
+        if choice.provider == "axon":
+            return choice
     for choice in pool:
         if choice.tier == "capable":
             return choice
@@ -142,15 +159,20 @@ def to_langchain_client(choice: ModelChoice):
     """
     from app.services import ai_runner
 
+    if choice.provider == "axon":
+        if not os.environ.get("AXON_API_KEY", "").strip():
+            raise ValueError("No AXON API key configured")
+        return ai_runner._axon_client(choice.model)
+
     if choice.provider == "anthropic":
         keys = _get_key_list("ANTHROPIC_API_KEYS", "ANTHROPIC_API_KEY")
-        if not keys or not ai_runner._anthropic_key_valid(keys[0]):
+        if not keys or not any(ai_runner._anthropic_key_valid(key) for key in keys):
             raise ValueError("No usable Anthropic API key available right now")
         return ai_runner._anthropic_client(choice.model, keys)
 
     if choice.provider == "openai":
         keys = _get_key_list("OPENAI_API_KEYS", "OPENAI_API_KEY")
-        if not keys or not ai_runner._openai_key_valid(keys[0]):
+        if not keys or not any(ai_runner._openai_key_valid(key) for key in keys):
             raise ValueError("No usable OpenAI API key available right now")
         return ai_runner._openai_client(choice.model, keys)
 
@@ -188,6 +210,8 @@ def to_langchain_client(choice: ModelChoice):
 
 def to_litellm_model_string(choice: ModelChoice) -> str:
     """Convert to the model string llm_router.complete(model_override=...) expects."""
+    if choice.provider == "axon":
+        return f"axon/{choice.model}"
     if choice.provider == "openrouter":
         return f"openrouter/{choice.model}"
     if choice.provider == "google":

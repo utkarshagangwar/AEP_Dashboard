@@ -10,6 +10,7 @@ import {
   FileText,
   Users,
   Shield,
+  Gauge,
 } from "lucide-react";
 import { getStoredUser, clearStoredUser } from "../utils/authStore";
 import { apiFetch, clearTokens } from "../utils/apiClient";
@@ -77,6 +78,11 @@ const ADMIN_NAV = [
     label: "Audit Logs",
     href: "/admin/audit-logs",
     icon: <Shield size={16} />,
+  },
+  {
+    label: "AI Usage",
+    href: "/admin/ai-usage",
+    icon: <Gauge size={16} />,
   },
 ];
 

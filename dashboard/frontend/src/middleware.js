@@ -61,6 +61,10 @@ const ADMIN_ROLES = ["admin", "qa_lead"];
 const ROLE_ROUTES = {
   "/admin/users": ["admin"],
   "/admin/audit-logs": ["admin", "qa_lead"],
+  // Admin-only (not qa_lead) — surfaces API keys' masked labels and spend,
+  // more sensitive than the audit trail. Matches the backend's
+  // require_roles(UserRole.admin) on every /api/v1/ai-usage endpoint.
+  "/admin/ai-usage": ["admin"],
 };
 
 // API routes handle their own auth via requireAuth/requireRole

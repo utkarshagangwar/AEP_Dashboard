@@ -102,6 +102,43 @@ class IngestError(RuntimeError):
     """Raised when a document cannot be ingested; message is user-safe."""
 
 
+# ATG's metered Gemini Flash gateway (see llm_router._resolve_call_target).
+# Brain-only: scoped here via model_override rather than as the router's
+# global VISUAL_LLM_PRIMARY, so it doesn't silently change behavior for the
+# other llm_router.complete() callers (SOW Creation/Rewrite, orchestrator,
+# visual_judge).
+_AXON_MODEL = "axon/gemini-flash-latest"
+
+
+def _complete_via_brain(prompt: str, *, system: str, max_tokens: int):
+    """Run a Brain completion, preferring AXON and falling back to the
+    router's default chain (native Gemini/Google/OpenRouter keys) if AXON is
+    unset or its $10 metered budget is exhausted (gateway returns HTTP 402).
+    Keeps SOW ingestion working without AXON being a hard dependency."""
+    from app.services import llm_router
+
+    if os.environ.get("AXON_API_KEY", "").strip():
+        try:
+            return llm_router.complete(
+                prompt,
+                system=system,
+                expect_json=True,
+                max_tokens=max_tokens,
+                model_override=_AXON_MODEL,
+            )
+        except llm_router.LLMRouterError as exc:
+            logger.warning(
+                "Brain: AXON call failed (%s), falling back to default LLM chain", exc
+            )
+
+    return llm_router.complete(
+        prompt,
+        system=system,
+        expect_json=True,
+        max_tokens=max_tokens,
+    )
+
+
 # ── Text extraction ──────────────────────────────────────────────────────────
 
 def extract_text(storage_path: str, file_name: str) -> str:
@@ -335,12 +372,7 @@ def parse_sow(text: str, *, part_label: str | None = None) -> tuple[list[dict], 
     prompt += ":\n\n" + text
 
     try:
-        result = llm_router.complete(
-            prompt,
-            system=_SOW_SYSTEM,
-            expect_json=True,
-            max_tokens=8192,
-        )
+        result = _complete_via_brain(prompt, system=_SOW_SYSTEM, max_tokens=8192)
     except llm_router.LLMRouterError as exc:
         raise IngestError(f"All LLM providers failed: {exc}") from exc
 

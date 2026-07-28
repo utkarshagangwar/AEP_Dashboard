@@ -8,6 +8,15 @@
  * in the Visual Audit section. The Figma token lives server-side only.
  *
  * Feature-detected like the other Visual QA sections: probe 404 → render null.
+ *
+ * Also usable in `embedded` mode (see props below) — this is how the UI Test
+ * flow's reference picker (VisualAuditSection.tsx) triggers a fresh Figma
+ * import without leaving that flow. Previously a stale code comment in
+ * ModeSelector.tsx claimed this was already reachable there; it wasn't —
+ * VisualAuditSection only had "upload PNG" and "pick an already-completed
+ * reference," with no path to a new Figma import at all. Embedding this
+ * component (rather than re-implementing the same list/select/import/poll
+ * logic a second time) closes that gap without duplicating it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -31,8 +40,29 @@ interface ImportedRef {
 
 const ACTIVE = new Set(["pending", "processing"]);
 
-export default function FigmaImportSection() {
-  const [enabled, setEnabled] = useState(false);
+interface FigmaImportSectionProps {
+  // When true: skip the standalone Card/header chrome and this component's
+  // own feature-detection probe (the parent has already confirmed the
+  // backend flag is on), and render just the import controls so this can be
+  // nested inside another section. Defaults to false — standalone behavior
+  // is unchanged for any other caller.
+  embedded?: boolean;
+  // Fired once per import batch, the moment every imported frame in that
+  // batch has reached a terminal parse_status (done/error) — lets an
+  // embedding parent (e.g. VisualAuditSection) refresh its own reference
+  // list and auto-select a newly-ready design instead of the caller having
+  // to poll a second time.
+  onImported?: (refs: ImportedRef[]) => void;
+}
+
+export default function FigmaImportSection({
+  embedded = false,
+  onImported,
+}: FigmaImportSectionProps = {}) {
+  // Embedded callers skip our own probe below (the parent already confirmed
+  // the feature flag is on), so start "enabled" for them; standalone callers
+  // start disabled until the probe resolves, same as before.
+  const [enabled, setEnabled] = useState(embedded);
   const [fileInput, setFileInput] = useState("");
   const [fileKey, setFileKey] = useState<string | null>(null);
   const [frames, setFrames] = useState<Frame[]>([]);
@@ -42,9 +72,14 @@ export default function FigmaImportSection() {
   const [imported, setImported] = useState<ImportedRef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Guards onImported so it fires exactly once per completed batch, not on
+  // every subsequent render where "no active imports" still holds true.
+  const notifiedRef = useRef(false);
 
-  // Feature detection (same probe the other sections use)
+  // Feature detection (same probe the other sections use) — skipped when
+  // embedded, since the parent section already did this check itself.
   useEffect(() => {
+    if (embedded) return;
     (async () => {
       try {
         await apiGet("/api/v1/visual-audits/references");
@@ -53,7 +88,7 @@ export default function FigmaImportSection() {
         setEnabled(false);
       }
     })();
-  }, []);
+  }, [embedded]);
 
   // Poll imported frames until all reach a terminal state
   const refreshImported = useCallback(async () => {
@@ -71,13 +106,17 @@ export default function FigmaImportSection() {
     const anyActive = imported.some((i) => ACTIVE.has(i.parse_status));
     if (!anyActive) {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (imported.length > 0 && !notifiedRef.current) {
+        notifiedRef.current = true;
+        onImported?.(imported);
+      }
       return;
     }
     pollRef.current = setInterval(refreshImported, 3000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [imported, refreshImported]);
+  }, [imported, refreshImported, onImported]);
 
   const handleListFrames = async () => {
     if (!fileInput.trim() || loadingFrames) return;
@@ -115,6 +154,10 @@ export default function FigmaImportSection() {
     if (!fileKey || selected.size === 0 || importing) return;
     setImporting(true);
     setError(null);
+    // Re-arm the onImported guard so a second import batch in the same
+    // mount (e.g. embedded panel, import once, then import again) still
+    // notifies the parent when this new batch settles.
+    notifiedRef.current = false;
     try {
       const chosen = frames.filter((f) => selected.has(f.node_id));
       const data: ImportedRef[] = await apiPost("/api/v1/visual-audits/figma/import", {
@@ -132,26 +175,10 @@ export default function FigmaImportSection() {
 
   if (!enabled) return null;
 
-  return (
-    <Card className="shadow-sm mt-6">
-      <CardHeader className="pb-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="text-lg">Figma Import</CardTitle>
-            <p className="text-sm text-gray-500 mt-1">
-              Pull design frames straight from Figma as visual-audit
-              references — no manual exporting.
-            </p>
-          </div>
-          <Badge
-            variant="outline"
-            className="text-purple-600 border-purple-300 bg-purple-50 flex-shrink-0"
-          >
-            Beta
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+  // Shared between the standalone (own Card) and embedded (bare) renders so
+  // the two never drift apart.
+  const content = (
+    <div className="space-y-4">
         <div className="flex gap-2">
           <input
             type="text"
@@ -250,12 +277,39 @@ export default function FigmaImportSection() {
             ))}
             {imported.every((i) => !ACTIVE.has(i.parse_status)) && (
               <p className="text-xs text-gray-400 pt-1">
-                Ready frames are now available in the Visual Audit reference
-                list above.
+                {embedded
+                  ? "Ready frames are now available in the reference picker above."
+                  : "Ready frames are now available in the Visual Audit reference list above."}
               </p>
             )}
           </div>
         )}
+    </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <Card className="shadow-sm mt-6">
+      <CardHeader className="pb-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-lg">Figma Import</CardTitle>
+            <p className="text-sm text-gray-500 mt-1">
+              Pull design frames straight from Figma as visual-audit
+              references — no manual exporting.
+            </p>
+          </div>
+          <Badge
+            variant="outline"
+            className="text-purple-600 border-purple-300 bg-purple-50 flex-shrink-0"
+          >
+            Beta
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {content}
       </CardContent>
     </Card>
   );

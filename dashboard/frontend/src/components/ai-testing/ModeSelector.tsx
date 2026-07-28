@@ -8,21 +8,33 @@
  * step. Picking a mode just toggles which panel is visible in page.tsx —
  * this component owns no data/API logic of its own, it's purely the picker.
  *
- * Four modes map 1:1 to four distinct existing backend-backed features:
- *  - quick  → the plain-language goal test (unchanged)
- *  - visual → AutonomousQASection (URL + Figma + video + SOW + saved
- *             reference + credentials, all submitted together as one run)
- *  - sow    → SowCheckpointsSection variant="sow"
- *  - video  → SowCheckpointsSection variant="video"
- * Visual Audit and Figma Import are intentionally not represented here —
- * removed from the Vibe Testing page per product decision.
+ * Five modes map 1:1 to five distinct existing backend-backed features:
+ *  - ui         → VisualAuditSection (reference design + target URL,
+ *                 backed by visual_judge.judge() / visual_runs). Replaces
+ *                 the old single free-text "quick" goal box's UI-testing
+ *                 half — see Vibe_Test_Gaps_and_Implementation_Checklist.md
+ *                 Phase 1. A leaner, single-reference-vs-one-URL check;
+ *                 "Visual and design QA" below remains the richer combined
+ *                 Figma+video+SOW Autonomous QA audit — different tool.
+ *  - functional → FunctionalTestPanel (preconditions + ordered steps +
+ *                 expected results + optional data sets, compiled into a
+ *                 goal server-side and run by the existing Hands agent).
+ *                 Replaces the old "quick" goal box's functional half.
+ *  - visual     → AutonomousQASection (URL + Figma + video + SOW + saved
+ *                 reference + credentials, all submitted together as one
+ *                 run) — unchanged.
+ *  - sow        → SowCheckpointsSection variant="sow" — unchanged.
+ *  - video      → SowCheckpointsSection variant="video" — unchanged.
+ * Figma Import (standalone) is intentionally not represented here — removed
+ * from the Vibe Testing page per product decision; still reachable inside
+ * the "ui" mode's reference picker via VisualAuditSection.
  */
 
 import type { ReactNode } from "react";
-import { Clapperboard, FileText, LayoutTemplate, Play } from "lucide-react";
+import { Clapperboard, FileText, LayoutTemplate, ListChecks, ScanEye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type TestMode = "quick" | "visual" | "sow" | "video";
+export type TestMode = "ui" | "functional" | "visual" | "sow" | "video";
 
 interface ModeCardConfig {
   id: TestMode;
@@ -37,10 +49,20 @@ interface ModeCardConfig {
 
 const CARDS: ModeCardConfig[] = [
   {
-    id: "quick",
-    title: "New Vibe UI test",
-    desc: "Describe a goal in plain English and let the AI plan and drive the browser. No design file needed.",
-    icon: <Play className="h-4 w-4" />,
+    id: "ui",
+    title: "UI Test",
+    desc: "Compare a live page against one design reference — pixel-diff plus AI structural review. No steps to script.",
+    icon: <ScanEye className="h-4 w-4" />,
+    selectedClasses: "border-purple-200 bg-purple-50/80",
+    accentClasses: "bg-purple-600",
+    iconClasses: "bg-purple-100 text-purple-700",
+    focusClasses: "focus-visible:ring-purple-500",
+  },
+  {
+    id: "functional",
+    title: "Functional Test",
+    desc: "Author preconditions, ordered steps, and expected results — the AI drives the browser and checks each one.",
+    icon: <ListChecks className="h-4 w-4" />,
     selectedClasses: "border-indigo-200 bg-indigo-50/80",
     accentClasses: "bg-indigo-600",
     iconClasses: "bg-indigo-100 text-indigo-700",

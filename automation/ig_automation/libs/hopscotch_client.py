@@ -3,7 +3,8 @@ hopscotch_client.py
 ────────────────────────────────────────────────────────────────────────────────
 Robot Framework library — Suite A CI/CD auth bypass.
 
-Calls POST /admin-login-by-api-key on the backend,
+Calls GET /auth/admin-token on the backend (confirmed by dev 2026-07-23;
+previously POST /admin-login-by-api-key — endpoint was replaced),
 receives the auth_token, and injects it as a cookie into the
 Playwright Browser library session so tests start already logged in.
 
@@ -96,24 +97,38 @@ class HopscotchClient:
         return config
 
     def _fetch_token(self, config: dict, email: str, otp: str) -> str:
-        """Make POST /admin-login-by-api-key and return the auth_token string."""
+        """
+        Make GET {API_BASE_URL}{BYPASS_ENDPOINT} and return the auth_token string.
+
+        Endpoint contract (confirmed by dev, 2026-07-23):
+          GET /auth/admin-token
+          Headers: x-api-key, Content-Type: application/json
+          No request body / query params — the token is scoped to the
+          API key itself, not to a specific user, so email/otp are not
+          sent on the wire. They are kept as parameters here only for
+          backward compatibility with existing call sites
+          (bypass_login_and_open_session, refresh_session_token) —
+          if this endpoint's contract changes to require them again,
+          this is the one place to wire them back in.
+        """
         url = f"{config['base_url']}{config['endpoint']}"
 
         headers = {
             "Content-Type": "application/json",
             "x-api-key":    config["api_key"],
         }
-        body = {
-            "email": email,
-            "otp":   otp,
-        }
 
-        logger.info(f"[HopscotchClient] POST {url}")
+        if email or otp:
+            logger.info(
+                "[HopscotchClient] email/otp were supplied but GET "
+                "/auth/admin-token does not accept them — ignoring."
+            )
+
+        logger.info(f"[HopscotchClient] GET {url}")
 
         try:
-            response = requests.post(
+            response = requests.get(
                 url,
-                json=body,
                 headers=headers,
                 timeout=15,
                 verify=True,
@@ -146,10 +161,10 @@ class HopscotchClient:
                 f"Raw: {response.text[:300]}"
             )
 
-        token = data.get("auth_token")
+        token = data.get("token")
         if not token:
             raise RuntimeError(
-                f"[HopscotchClient] 'auth_token' not found in response. "
+                f"[HopscotchClient] 'token' not found in response. "
                 f"Keys present: {list(data.keys())}. "
                 f"Full response: {data}"
             )

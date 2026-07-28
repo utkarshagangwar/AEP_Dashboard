@@ -149,6 +149,70 @@ def extract_transcript_ledger_task(self, source_id: str) -> None:
         session.close()
 
 
+@celery_app.task(name="sow_ledger.extract_existing_sow_ledger_task", bind=True, max_retries=0)
+def extract_existing_sow_ledger_task(self, source_id: str) -> None:
+    """Import SOW (SOW tab): extract ledger facts from an uploaded
+    pre-existing SOW/requirements document (.docx/.pdf/.txt/.md). Mirrors
+    extract_transcript_ledger_task exactly, except text extraction goes
+    through sow_import.extract_existing_sow_text (adds .docx support) and
+    the LLM pass uses a prompt tuned for "existing document" rather than
+    "meeting transcript" (sow_ledger.extract_ledger_from_sow_document_full).
+    """
+    from app.core.database import SessionLocal
+    from app.models.sow import SowDocumentSource, SowSourceStatus
+    from app.services import sow_ledger
+    from app.services.design_ingest import IngestError
+    from app.services.sow_import import extract_existing_sow_text
+
+    session = SessionLocal()
+    try:
+        from app.models.visual_qa import DesignArtifact
+
+        source = session.get(SowDocumentSource, source_id)
+        if source is None or source.artifact_id is None:
+            logger.error("SOW ledger: existing-SOW source %s not found", source_id)
+            return
+        artifact = session.get(DesignArtifact, source.artifact_id)
+        if artifact is None:
+            source.status = SowSourceStatus.error
+            source.error_message = "Underlying file is missing (artifact was deleted)."
+            session.commit()
+            return
+
+        source.status = SowSourceStatus.processing
+        session.commit()
+
+        try:
+            text = extract_existing_sow_text(artifact.storage_path, artifact.file_name)
+            facts, model_used = sow_ledger.extract_ledger_from_sow_document_full(text)
+        except IngestError as exc:
+            source.status = SowSourceStatus.error
+            source.error_message = str(exc)
+            session.commit()
+            logger.warning("SOW ledger: existing-SOW source %s failed: %s", source_id, exc)
+            return
+
+        _clear_prior_facts(session, source.document_id, source.artifact_id)
+        session.flush()
+        count = _save_facts(session, source.document_id, source.artifact_id, facts)
+        source.status = SowSourceStatus.done
+        source.error_message = None
+        source.ledger_fact_count = count
+        session.commit()
+        logger.info(
+            "SOW ledger: existing-SOW source %s -> %d fact(s) via %s",
+            source_id, count, model_used,
+        )
+    except Exception:
+        logger.exception("SOW ledger: unexpected failure for existing-SOW source %s", source_id)
+        session.rollback()
+        session.close()
+        _mark_unexpected_failure(source_id)
+        return
+    finally:
+        session.close()
+
+
 @celery_app.task(
     name="sow_ledger.extract_recording_ledger_task",
     bind=True,

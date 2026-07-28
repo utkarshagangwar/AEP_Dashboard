@@ -50,6 +50,7 @@ from app.models.sow import (
     SowUIElementType,
     SowSourceStatus,
 )
+from app.models.ai_usage import AIUsageEvent, AIKeyLimit
 
 __all__ = [
     "User",
@@ -102,4 +103,6 @@ __all__ = [
     "SowUIElementType",
     "SowDocumentSource",
     "SowSourceStatus",
+    "AIUsageEvent",
+    "AIKeyLimit",
 ]

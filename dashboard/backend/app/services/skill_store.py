@@ -17,7 +17,9 @@ through here to guarantee identical hashing/identity rules:
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
+import os
 import re
 
 
@@ -26,6 +28,79 @@ def compute_goal_hash(goal: str) -> str:
     trivial formatting differences don't produce a different identity."""
     normalized = " ".join(goal.lower().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+# ── Fuzzy skill matching (New Vibe Test Phase 7, F.26) ───────────────────────
+#
+# compute_goal_hash() above is exact (whitespace/case-insensitive, nothing
+# more) — a genuine rewording (fixing a typo, reordering a clause, adding a
+# clarifying word) produces a completely different hash, which used to mean
+# _maybe_save_skill() would create a brand-new AISkill row instead of
+# recognizing "this is still the same test", fragmenting that test's
+# replay/pass-fail/flakiness history across two rows for no real reason.
+#
+# find_similar_skill() is a deliberately conservative fallback, only ever
+# consulted when the exact hash lookup already missed (see
+# _maybe_save_skill): stdlib difflib.SequenceMatcher (no new dependency)
+# ratio on the normalized goal text, matched only above a high threshold
+# (default 0.93). This is intentionally biased toward "only merge near-
+# identical rewordings" over "also merge similar-but-different tests" — two
+# goals that share most of their words but differ in one meaningful clause
+# (e.g. "log in as admin ..." vs "log in as guest ...") are a real
+# difference in what's being tested, not a rewording, and merging them would
+# corrupt exactly the flakiness/pass-rate signal Phase 6/7 exist to build
+# trust in. A false NON-match (two rewordings that stay as separate skills)
+# is a much smaller cost than a false match.
+_DEFAULT_FUZZY_MATCH_THRESHOLD = 0.93
+
+
+def get_fuzzy_match_threshold() -> float:
+    """Read SKILL_FUZZY_MATCH_THRESHOLD, clamped to (0, 1]. Falls back to
+    _DEFAULT_FUZZY_MATCH_THRESHOLD on anything unset/unparseable/out of
+    range, same "never let a bad env value break the caller" convention as
+    app.services.ai_eval.get_eval_threshold."""
+    raw = os.environ.get("SKILL_FUZZY_MATCH_THRESHOLD", "").strip()
+    if not raw:
+        return _DEFAULT_FUZZY_MATCH_THRESHOLD
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_FUZZY_MATCH_THRESHOLD
+    if not (0.0 < value <= 1.0):
+        return _DEFAULT_FUZZY_MATCH_THRESHOLD
+    return value
+
+
+def find_similar_skill(candidates, goal: str, threshold: "float | None" = None):
+    """Return (best_matching_skill, similarity_ratio) from `candidates`, or
+    (None, 0.0) if nothing clears `threshold` (default:
+    get_fuzzy_match_threshold()).
+
+    candidates: an iterable of AISkill-like objects (only `.goal` is read
+    here) — the caller decides the candidate pool (see _maybe_save_skill:
+    scoped to the same project, excluding the goal_hash already tried).
+    Picks the single closest match, not just the first one above threshold,
+    so the result doesn't depend on the candidates' iteration order.
+    """
+    threshold = threshold if threshold is not None else get_fuzzy_match_threshold()
+    normalized_goal = " ".join((goal or "").lower().split())
+    if not normalized_goal:
+        return None, 0.0
+
+    best = None
+    best_ratio = 0.0
+    for candidate in candidates:
+        candidate_goal = " ".join((getattr(candidate, "goal", "") or "").lower().split())
+        if not candidate_goal:
+            continue
+        ratio = difflib.SequenceMatcher(None, normalized_goal, candidate_goal).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best = candidate
+
+    if best is not None and best_ratio >= threshold:
+        return best, best_ratio
+    return None, 0.0
 
 
 def _slug(text: str) -> str:

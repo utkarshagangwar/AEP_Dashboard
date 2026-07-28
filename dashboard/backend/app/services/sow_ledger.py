@@ -220,6 +220,90 @@ def extract_ledger_from_transcript(text: str) -> tuple[list[dict], str]:
     return all_facts, ", ".join(models_used)
 
 
+# ── Existing SOW document extraction (Import SOW, SOW tab) ──────────────────
+#
+# Same fact schema/validator/chunking as the transcript path above -- the
+# only thing that differs is the system prompt's framing, since the input
+# here is already-written SOW/requirements prose (headings, numbered
+# requirements, tables), not a meeting transcript. Kept as its own function
+# rather than reusing extract_ledger_from_text with a flag: this file's
+# established convention is one function per source kind (see
+# extract_ledger_from_recording / extract_ledger_from_image below), and a
+# prompt tuned for "here is a document" reads differently than one tuned for
+# "here is a conversation" -- conflating them risks quietly degrading
+# whichever framing loses out.
+
+def extract_ledger_from_sow_document(text: str, *, part_label: str | None = None) -> tuple[list[dict], str]:
+    """Extract ledger facts from an uploaded pre-existing SOW/requirements
+    document (or an excerpt of a large one — see
+    extract_ledger_from_sow_document_full for chunking). Returns
+    (facts, model_used). Raises IngestError on total provider failure."""
+    from app.services import llm_router
+
+    system = (
+        "You are a senior QA/business analyst turning an existing Statement "
+        "of Work / requirements document for a software product into a "
+        "structured requirements ledger. This document is being imported as "
+        "the baseline for further authoring on this platform — the ledger "
+        "will be used to (re)draft the SOW's sections and to auto-generate "
+        "QA test checkpoints for vibe testing. Anything you omit here will "
+        "be MISSING from both, which has real business impact. Respond "
+        "with JSON only:\n"
+        f"{_LEDGER_RESPONSE_SHAPE}\n\n{_LEDGER_RULES}"
+    )
+    prompt = "Extract a requirements ledger from this existing SOW/requirements document"
+    if part_label:
+        prompt += (
+            f" ({part_label} of a larger document — this is an excerpt; "
+            "extract only what appears in this excerpt)"
+        )
+    prompt += ":\n\n" + text
+
+    try:
+        result = llm_router.complete(prompt, system=system, expect_json=True, max_tokens=8192)
+    except llm_router.LLMRouterError as exc:
+        raise IngestError(f"All LLM providers failed: {exc}") from exc
+
+    raw = result.parsed_json or {}
+    items = raw.get("facts", []) if isinstance(raw, dict) else []
+    facts = _validate_facts(items, source_label=part_label or "existing SOW document")
+    logger.info(
+        "SOW ledger: %d fact(s) extracted from existing SOW document via %s",
+        len(facts), result.model_used,
+    )
+    return facts, result.model_used
+
+
+def extract_ledger_from_sow_document_full(text: str) -> tuple[list[dict], str]:
+    """Chunk a (possibly large) existing-SOW document with
+    design_ingest.chunk_text and concatenate facts across chunks — same
+    chunking mechanism extract_ledger_from_transcript already uses, so a
+    long document never silently truncates. Simple concatenation, no
+    cross-chunk dedup (matches the transcript path's Phase 1 scope). Raises
+    IngestError only if EVERY chunk fails."""
+    chunks = chunk_text(text)
+    all_facts: list[dict] = []
+    models_used: list[str] = []
+    errors: list[str] = []
+
+    for i, chunk in enumerate(chunks, start=1):
+        part_label = f"part {i} of {len(chunks)}" if len(chunks) > 1 else None
+        try:
+            facts, model_used = extract_ledger_from_sow_document(chunk, part_label=part_label)
+            all_facts.extend(facts)
+            if model_used not in models_used:
+                models_used.append(model_used)
+        except IngestError as exc:
+            logger.warning(
+                "SOW ledger: existing SOW document chunk %d/%d failed: %s", i, len(chunks), exc
+            )
+            errors.append(str(exc))
+
+    if not models_used:
+        raise IngestError(f"All document chunks failed: {'; '.join(errors)}")
+    return all_facts, ", ".join(models_used)
+
+
 # ── Meeting recording extraction (extends video_ingest.py) ──────────────────
 
 _RECORDING_MIME_BY_EXT = {

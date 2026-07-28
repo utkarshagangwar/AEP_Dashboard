@@ -104,6 +104,11 @@ class RunCreate(BaseModel):
     artifact_id: uuid.UUID
     project_id: uuid.UUID | None = None
     environment: str | None = Field(default=None, max_length=200)
+    # Free-text requirement/checkpoint reference (New Vibe Test Phase 1 — UI
+    # Test flow). Same field name/shape as the Functional Test flow's
+    # linked_requirement (AIRunCreate) so both can eventually be reported
+    # against one coverage view (Phase 6).
+    linked_requirement: str | None = Field(default=None, max_length=500)
 
 
 class FindingOut(BaseModel):
@@ -126,6 +131,7 @@ class RunOut(BaseModel):
     summary: str | None
     error_message: str | None
     duration_ms: int | None
+    linked_requirement: str | None = None
     created_at: str
     findings: list[FindingOut] = []
 
@@ -141,6 +147,7 @@ def _run_out(run: VisualRun, findings: list[VisualFinding] | None = None) -> Run
         summary=run.summary,
         error_message=run.error_message,
         duration_ms=run.duration_ms,
+        linked_requirement=run.linked_requirement,
         created_at=run.created_at.isoformat() if run.created_at else "",
         findings=[
             FindingOut(
@@ -932,6 +939,7 @@ def create_run(
         environment=payload.environment,
         target_url=str(payload.target_url),
         artifact_id=artifact.id,
+        linked_requirement=payload.linked_requirement,
         status=VisualRunStatus.pending,
     )
     db.add(run)

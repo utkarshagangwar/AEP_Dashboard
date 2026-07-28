@@ -2,7 +2,7 @@
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import mapped_column
 
@@ -16,6 +16,16 @@ class AIRunStatus(str, PyEnum):
     failed = "failed"
     inconclusive = "inconclusive"
     cancelled = "cancelled"
+    # New Vibe Test Phase 4 (2026-07-28): the agent self-reported "passed",
+    # but the independent GEval quality score (app/services/ai_eval.py) came
+    # back below threshold -- neither "passed" (the self-report is disputed)
+    # nor "failed" (the agent did complete something; a human should decide,
+    # not the gate) is right, so this is its own terminal state. Only ever
+    # assigned by _persist_result's gating in
+    # app/workers/tasks/ai_execution.py; the engine itself never returns
+    # this status string directly. See AITestRun.eval_score/eval_reason for
+    # why.
+    needs_review = "needs_review"
 
 
 class AIEventStatus(str, PyEnum):
@@ -263,6 +273,61 @@ class AITestRun(Base):
     failing_step_index = mapped_column(Integer, nullable=True)
     failing_step_description = mapped_column(Text, nullable=True)
     failing_step_screenshot_url = mapped_column(Text, nullable=True)
+    # Server-side path to the full-session recording on the visual_qa_data
+    # volume (see app/services/ai_run_capture.py). Null = no video — either
+    # a legacy run, capture failed, or this run never opted in (Autonomous
+    # QA's Hands sub-step and Android runs never set this).
+    video_path = mapped_column(Text, nullable=True)
+    # Post-run DeepEval (GEval) quality score -- see app/services/ai_eval.py.
+    # Web-platform "ai"/"skill_replay" runs only, and only once the run
+    # reaches a terminal passed/failed status (see _persist_result's gating
+    # in app/workers/tasks/ai_execution.py); always null for Android runs,
+    # Autonomous QA (a separate table/pipeline), and pre-feature rows.
+    eval_score = mapped_column(Float, nullable=True)
+    eval_reason = mapped_column(Text, nullable=True)
+    # "completed" | "unavailable" | null (never attempted). Plain string,
+    # not a native enum -- same convention as AISkill.source_type for a
+    # small, still-growing set of values.
+    eval_status = mapped_column(String(20), nullable=True)
+    eval_metric = mapped_column(String(50), nullable=True)
+    # Second, complementary judge pass (New Vibe Test Phase 4) --
+    # app.services.ai_eval.evaluate_expected_results() -- a final-state
+    # screenshot compared against this row's own `expected_results`
+    # (Functional Test only), independent of the action-trace eval_score
+    # above. Same "completed" | "unavailable" | null (never attempted)
+    # convention as eval_status; always null for a non-Functional-Test run
+    # (no expected_results to check against) or when no final screenshot
+    # was available.
+    visual_eval_score = mapped_column(Float, nullable=True)
+    visual_eval_reason = mapped_column(Text, nullable=True)
+    visual_eval_status = mapped_column(String(20), nullable=True)
+    visual_eval_metric = mapped_column(String(50), nullable=True)
+    # ── Structured Functional Test fields (New Vibe Test Phase 1) ──────────
+    # 'functional' for a run created via the new structured Functional Test
+    # flow; null for every pre-existing row and for rows still created via a
+    # plain goal (Android, Skill Replay, Autonomous QA orchestrator) — those
+    # paths are unmodified. `goal` above is still always populated: for a
+    # functional-test row it holds the goal text compiled server-side from
+    # the fields below, so every existing consumer of `goal` (ai_runner.py,
+    # ai_eval.py, Skill auto-save, the Results tab) needs no changes.
+    test_category = mapped_column(String(20), nullable=True)
+    preconditions = mapped_column(Text, nullable=True)
+    steps = mapped_column(JSONB, nullable=True)  # ordered list of atomic step strings
+    expected_results = mapped_column(JSONB, nullable=True)  # list of strings
+    # List of {name, values: {...}} named data sets. One AITestRun row is
+    # created per data set at submit time (data-driven execution) — this
+    # column records which full set of data sets the parent submission
+    # offered, not just the single set this particular row used.
+    test_data = mapped_column(JSONB, nullable=True)
+    test_type = mapped_column(String(20), nullable=True)  # happy | negative | edge
+    # Free-text requirement/checkpoint reference. Same column name/shape as
+    # VisualRun.linked_requirement so UI and functional tests can eventually
+    # be reported against one coverage view (Phase 6).
+    linked_requirement = mapped_column(String(500), nullable=True)
+    # "desktop" (default/null) | "tablet" | "mobile" — see
+    # app.services.ai_runner.VIEWPORT_PRESETS. Functional Test only (Phase
+    # 2); null for every other run keeps today's fixed desktop viewport.
+    viewport_preset = mapped_column(String(20), nullable=True)
     created_by = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

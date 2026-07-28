@@ -91,6 +91,13 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _MAX_DESIGN_IMAGE_BYTES = 10 * 1024 * 1024
 _VALID_LEDGER_FACT_TYPES = ("feature", "decision", "ui_element", "open_question")
 
+# Import SOW (SOW tab): an uploaded pre-existing SOW/requirements document
+# used as a source to seed a document's ledger baseline (app/services/
+# sow_import.py). Larger cap than a plain transcript since real-world SOWs
+# arrive as formatted .docx/.pdf files, not just plain text.
+_EXISTING_SOW_EXTENSIONS = (".docx", ".pdf", ".txt", ".md")
+_MAX_EXISTING_SOW_BYTES = 20 * 1024 * 1024
+
 
 def _feature_enabled() -> None:
     """Gate every endpoint behind SOW_ENABLED (default: off), matching the
@@ -457,6 +464,89 @@ async def add_transcript_source(
     extract_transcript_ledger_task.delay(str(source.id))
     logger.info(
         "SOW document %s: transcript source %s attached by %s", doc.id, source.id, current_user.id
+    )
+    return _source_out(db, source)
+
+
+@router.post(
+    "/documents/{document_id}/sources/existing-sow",
+    response_model=SowDocumentSourceOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_existing_sow_source(
+    document_id: uuid.UUID,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("sow")),
+):
+    """Import SOW (SOW tab): attach a pre-existing SOW/requirements document
+    (.docx/.pdf/.txt/.md) as a source. Enqueues the same shape of ledger
+    extraction every other source type gets (see
+    app/workers/tasks/sow_ledger.py::extract_existing_sow_ledger_task) --
+    the extracted facts land in GET .../ledger, then flow through the
+    existing Generate button exactly like a meeting-sourced document, so
+    the resulting SOW is fully editable/versioned/exportable and eligible
+    for Rewrite once new meeting sources are attached later. Distinct from
+    the standalone SOW-Checkpoints upload (app/api/v1/visual_audit.py::
+    upload_sow) -- that pipeline is unmodified and untouched by this
+    endpoint; this one only feeds the SOW-authoring ledger."""
+    _feature_enabled()
+    doc = _get_active_document_or_404(db, document_id)
+
+    file_name = (file.filename or "existing-sow")[:500]
+    ext = os.path.splitext(file_name.lower())[1]
+    if ext not in _EXISTING_SOW_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Existing SOW must be a .docx, .pdf, .txt, or .md file",
+        )
+
+    content = await file.read()
+    if len(content) > _MAX_EXISTING_SOW_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the {_MAX_EXISTING_SOW_BYTES // (1024 * 1024)}MB limit.",
+        )
+    if not content:
+        raise HTTPException(status_code=400, detail="File is empty")
+
+    sha = hashlib.sha256(content).hexdigest()
+    artifact = (
+        db.query(DesignArtifact)
+        .filter(
+            DesignArtifact.sha256 == sha,
+            DesignArtifact.project_id == doc.project_id,
+            DesignArtifact.artifact_type == ArtifactType.sow_import,
+        )
+        .first()
+    )
+    if artifact is None:
+        import_dir = os.path.join(_data_dir(), "sow_existing_document")
+        os.makedirs(import_dir, exist_ok=True)
+        storage_path = os.path.join(import_dir, f"{sha}{ext}")
+        with open(storage_path, "wb") as fh:
+            fh.write(content)
+
+        artifact = DesignArtifact(
+            project_id=doc.project_id,
+            artifact_type=ArtifactType.sow_import,
+            file_name=file_name,
+            sha256=sha,
+            storage_path=storage_path,
+            parse_status=ParseStatus.not_required,
+        )
+        db.add(artifact)
+        db.commit()
+        db.refresh(artifact)
+
+    source = _attach_source(db, doc, artifact, current_user)
+
+    from app.workers.tasks.sow_ledger import extract_existing_sow_ledger_task
+
+    extract_existing_sow_ledger_task.delay(str(source.id))
+    logger.info(
+        "SOW document %s: existing-SOW source %s attached by %s", doc.id, source.id, current_user.id
     )
     return _source_out(db, source)
 

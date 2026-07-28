@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
 import PageContainer from "../../components/PageContainer";
-import { apiGet, apiPost, apiPatch, apiDelete } from "../../utils/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete, apiFetch } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
 import {
   Select,
@@ -52,8 +53,15 @@ function StatusBadge({ status }) {
   );
 }
 
+// Import SOW: same upload validation the backend endpoint enforces
+// (app/api/v1/sow.py::add_existing_sow_source's _EXISTING_SOW_EXTENSIONS) --
+// mirrored here only so a wrong file type is rejected instantly in the UI
+// instead of round-tripping to the server first.
+const IMPORT_ACCEPT = ".docx,.pdf,.txt,.md";
+
 export default function SowPage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const user = typeof window !== "undefined" ? getStoredUser() : null;
   const canWrite =
     !!user && (user.role === "admin" || (user.permissions || []).includes("sow"));
@@ -65,6 +73,65 @@ export default function SowPage() {
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
+
+  // Import SOW: create a document, then attach the uploaded file as an
+  // "existing-sow" source in one step -- the resulting document lands on
+  // /sow/{id} where extraction progress, the requirements ledger, and the
+  // existing Generate button all work exactly as they do for a meeting-
+  // sourced document (nothing new on that page's generation/editor/export/
+  // Send-to-Vibe-Testing flow -- this only adds a new way to seed the
+  // ledger).
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importForm, setImportForm] = useState({ title: "", project_id: "", file: null });
+  const [importError, setImportError] = useState("");
+  const [importSubmitting, setImportSubmitting] = useState(false);
+
+  function resetImportModal() {
+    setShowImportModal(false);
+    setImportForm({ title: "", project_id: "", file: null });
+    setImportError("");
+    setImportSubmitting(false);
+  }
+
+  async function submitImport() {
+    setImportError("");
+    if (!importForm.file) {
+      setImportError("Choose a file to import.");
+      return;
+    }
+    const title = importForm.title.trim() || importForm.file.name.replace(/\.[^./]+$/, "");
+    setImportSubmitting(true);
+    try {
+      const doc = await apiPost("/api/sow/documents", {
+        title,
+        project_id: importForm.project_id || null,
+      });
+
+      const body = new FormData();
+      body.append("file", importForm.file);
+      const res = await apiFetch(
+        `/api/v1/sow/documents/${doc.id}/sources/existing-sow`,
+        { method: "POST", body }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.detail || `Upload failed (${res.status})`);
+      }
+
+      qc.invalidateQueries(["sow-documents"]);
+      resetImportModal();
+      router.push(`/sow/${doc.id}`);
+    } catch (e) {
+      // The document may already have been created even if the file
+      // upload step failed -- refresh the library list so it's visible
+      // either way, and let the user retry the upload from the document
+      // page's "Existing SOW document" source panel rather than losing
+      // the reserved document.
+      qc.invalidateQueries(["sow-documents"]);
+      setImportError(e.message);
+      setImportSubmitting(false);
+    }
+  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["sow-documents"],
@@ -143,24 +210,44 @@ export default function SowPage() {
             </p>
           </div>
           {canWrite && (
-            <button
-              onClick={() => {
-                setShowModal(true);
-                setFormError("");
-              }}
-              style={{
-                padding: "9px 16px",
-                background: "#2563EB",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              + New SOW
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => {
+                  resetImportModal();
+                  setShowImportModal(true);
+                }}
+                style={{
+                  padding: "9px 16px",
+                  background: "#fff",
+                  color: "#374151",
+                  border: "1px solid #D1D5DB",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Import SOW
+              </button>
+              <button
+                onClick={() => {
+                  setShowModal(true);
+                  setFormError("");
+                }}
+                style={{
+                  padding: "9px 16px",
+                  background: "#2563EB",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                + New SOW
+              </button>
+            </div>
           )}
         </div>
 
@@ -454,6 +541,139 @@ export default function SowPage() {
                 }}
               >
                 {createMutation.isPending ? "Creating…" : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import SOW modal */}
+      {showImportModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(17,24,39,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+          onClick={() => !importSubmitting && resetImportModal()}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              borderRadius: 12,
+              padding: 24,
+              width: 440,
+              maxWidth: "90vw",
+            }}
+          >
+            <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 600, color: "#111827" }}>
+              Import SOW
+            </h2>
+            <p style={{ margin: "0 0 16px", fontSize: 12, color: "#6B7280" }}>
+              Upload an existing SOW/requirements document (.docx, .pdf, .txt, or .md). It's
+              parsed into this document's requirements ledger — click Generate on the document
+              page to produce an editable, structured SOW from it, then refine it further with
+              meeting sources or send it to Vibe Testing whenever you're ready.
+            </p>
+
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+              Title (optional — defaults to the file name)
+            </label>
+            <input
+              autoFocus
+              value={importForm.title}
+              onChange={(e) => setImportForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="e.g. Checkout Redesign — SOW"
+              style={{
+                display: "block",
+                width: "100%",
+                marginTop: 4,
+                marginBottom: 14,
+                fontSize: 13,
+                padding: "8px 10px",
+                border: "1px solid #D1D5DB",
+                borderRadius: 8,
+                boxSizing: "border-box",
+              }}
+            />
+
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+              Project (optional)
+            </label>
+            <div style={{ marginTop: 4, marginBottom: 14 }}>
+              <Select
+                value={importForm.project_id || "none"}
+                onValueChange={(v) =>
+                  setImportForm((f) => ({ ...f, project_id: v === "none" ? "" : v }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="No project" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No project</SelectItem>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>File</label>
+            <input
+              type="file"
+              accept={IMPORT_ACCEPT}
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                setImportForm((form) => ({ ...form, file: f }));
+              }}
+              style={{ fontSize: 12, marginTop: 4, marginBottom: 14, display: "block" }}
+              disabled={importSubmitting}
+            />
+
+            {importError && (
+              <p style={{ fontSize: 12, color: "#DC2626", margin: "0 0 10px" }}>{importError}</p>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                onClick={resetImportModal}
+                disabled={importSubmitting}
+                style={{
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: "#374151",
+                  background: "#fff",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  cursor: importSubmitting ? "default" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitImport}
+                disabled={!importForm.file || importSubmitting}
+                style={{
+                  padding: "8px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#fff",
+                  background: !importForm.file || importSubmitting ? "#93C5FD" : "#2563EB",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: !importForm.file || importSubmitting ? "default" : "pointer",
+                }}
+              >
+                {importSubmitting ? "Importing…" : "Import"}
               </button>
             </div>
           </div>

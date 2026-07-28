@@ -8,6 +8,11 @@ bcrypt==4.2.1
 python-jose[cryptography]==3.4.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
+# Was already installed transitively (pydantic-settings uses it for its own
+# env_file support). Pinned explicitly now that app/core/config.py imports it
+# directly to export .env into os.environ for modules that read provider
+# keys (e.g. AXON_API_KEY) straight from os.environ instead of via Settings.
+python-dotenv==1.2.2
 email-validator==2.2.0
 python-multipart==0.0.31
 celery==5.4.0
@@ -74,3 +79,15 @@ python-docx==1.2.0
 # -- see that file's comment) or PDF rendering fails at write_pdf() time,
 # not at import time.
 weasyprint==69.0
+# Vibe Testing quality scoring (app/services/ai_eval.py): post-run DeepEval
+# GEval judging of whether a New Vibe Test / Skill Replay run actually
+# accomplished its goal. Pinned to 3.3.9, NOT the latest (4.x) -- 4.x
+# requires pydantic>=2.11.7, which conflicts with this project's
+# pydantic==2.10.4 pin (touches every schema in the app); pip's resolver
+# settles on 3.3.9 as the newest release compatible with pydantic==2.10.4,
+# openai (kept <2.0.0, satisfying langchain-openai's pin above), and every
+# other pin in this file -- verified via a full dry-run resolve of this
+# exact file before adding this line. The GEval/DeepEvalBaseLLM/LLMTestCase
+# API used in ai_eval.py was verified directly against this exact version
+# (3.3.9), not against docs, which mostly describe the newer 4.x API.
+deepeval==3.3.9

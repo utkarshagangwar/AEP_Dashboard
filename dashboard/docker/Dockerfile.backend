@@ -23,10 +23,16 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl gnupg ffmpeg \
     libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 libffi-dev \
-    shared-mime-info fonts-liberation && \
+    shared-mime-info fonts-liberation xvfb && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
+
+# Virtual display for running Chromium headed inside the container (no real
+# X server here) -- xvfb is started by celery_worker's command in
+# docker-compose.yml before the worker process starts; this just points any
+# process launched under it (Chromium via ai_runner.py) at that display.
+ENV DISPLAY=:99
 
 # Backend Python deps
 COPY requirements.txt .

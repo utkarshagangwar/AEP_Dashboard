@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import OrchestratorRunDetail from "./OrchestratorRunDetail";
 import RunDetail from "./RunDetail";
+import VisualTestRunDetail, { VisualTestRunResult } from "./VisualTestRunDetail";
 import { RunResult, RunStatusBadge, formatDuration } from "./shared";
 
 interface RunListItem {
@@ -38,6 +39,11 @@ const LIMIT = 20;
 export default function ResultsTab() {
   const [page, setPage] = useState(1);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // Which endpoint/shape to fetch the detail from — a "ui_test" row (New
+  // Vibe Test Phase 5) is a VisualRun, not an AITestRun, so its detail
+  // comes from a different API entirely. Set together with selectedRunId
+  // when a list row is clicked.
+  const [selectedRunType, setSelectedRunType] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -78,7 +84,7 @@ export default function ResultsTab() {
   const { data: detail, isLoading: detailLoading } = useQuery<RunResult | null>({
     queryKey: ["ai-run-detail", selectedRunId],
     queryFn: async () => {
-      if (!selectedRunId) return null;
+      if (!selectedRunId || selectedRunType === "ui_test") return null;
       const run = await apiGet(`/api/ai-testing/runs/${selectedRunId}`);
       return {
         run_id: run.id,
@@ -96,6 +102,16 @@ export default function ResultsTab() {
         failing_step_index: run.failing_step_index,
         failing_step_description: run.failing_step_description,
         failing_step_screenshot_url: run.failing_step_screenshot_url,
+        video_available: run.video_available,
+        eval_score: run.eval_score,
+        eval_reason: run.eval_reason,
+        eval_status: run.eval_status,
+        visual_eval_score: run.visual_eval_score,
+        visual_eval_reason: run.visual_eval_reason,
+        visual_eval_status: run.visual_eval_status,
+        test_category: run.test_category,
+        test_type: run.test_type,
+        linked_requirement: run.linked_requirement,
         events: run.events || [],
         created_at: run.created_at,
         error_message: run.error_message,
@@ -107,15 +123,30 @@ export default function ResultsTab() {
         findings: run.findings || [],
       } as RunResult;
     },
-    enabled: !!selectedRunId,
+    enabled: !!selectedRunId && selectedRunType !== "ui_test",
   });
+
+  // Separate query for a "ui_test" row (VisualRun) — different API, different
+  // shape (findings/images, no goal/steps/events) — see VisualTestRunDetail.
+  const { data: visualDetail, isLoading: visualDetailLoading } =
+    useQuery<VisualTestRunResult | null>({
+      queryKey: ["ai-run-detail-visual", selectedRunId],
+      queryFn: async () => {
+        if (!selectedRunId || selectedRunType !== "ui_test") return null;
+        return apiGet(`/api/v1/visual-audits/${selectedRunId}`);
+      },
+      enabled: !!selectedRunId && selectedRunType === "ui_test",
+    });
 
   // ── Detail view ────────────────────────────────────────────────────────────
   if (selectedRunId) {
     return (
       <div className="space-y-4">
         <button
-          onClick={() => setSelectedRunId(null)}
+          onClick={() => {
+            setSelectedRunId(null);
+            setSelectedRunType(null);
+          }}
           className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-900 transition-colors"
         >
           <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
@@ -129,7 +160,16 @@ export default function ResultsTab() {
           </svg>
           Back to results
         </button>
-        {detailLoading || !detail ? (
+        {selectedRunType === "ui_test" ? (
+          visualDetailLoading || !visualDetail ? (
+            <div className="space-y-4">
+              <Skeleton className="h-28 w-full rounded-xl" />
+              <Skeleton className="h-64 w-full rounded-xl" />
+            </div>
+          ) : (
+            <VisualTestRunDetail result={visualDetail} />
+          )
+        ) : detailLoading || !detail ? (
           <div className="space-y-4">
             <Skeleton className="h-28 w-full rounded-xl" />
             <Skeleton className="h-64 w-full rounded-xl" />
@@ -137,7 +177,10 @@ export default function ResultsTab() {
         ) : detail.run_type === "autonomous_qa" ? (
           <OrchestratorRunDetail
             result={detail}
-            onNavigateToRun={(runId) => setSelectedRunId(runId)}
+            onNavigateToRun={(runId) => {
+              setSelectedRunId(runId);
+              setSelectedRunType("ai");
+            }}
           />
         ) : (
           <RunDetail result={detail} />
@@ -203,7 +246,10 @@ export default function ResultsTab() {
             {runs.map((run) => (
               <tr
                 key={run.id}
-                onClick={() => setSelectedRunId(run.id)}
+                onClick={() => {
+                  setSelectedRunId(run.id);
+                  setSelectedRunType(run.run_type);
+                }}
                 className="border-b border-gray-50 last:border-b-0 hover:bg-gray-50 cursor-pointer transition-colors"
               >
                 <td className="px-4 py-3 text-gray-800 max-w-[320px]">
@@ -221,14 +267,18 @@ export default function ResultsTab() {
                           ? "border-indigo-200 text-indigo-600"
                           : run.run_type === "autonomous_qa"
                             ? "border-teal-200 text-teal-600"
-                            : "border-purple-200 text-purple-600"
+                            : run.run_type === "ui_test"
+                              ? "border-blue-200 text-blue-600"
+                              : "border-purple-200 text-purple-600"
                       }`}
                     >
                       {run.run_type === "skill_replay"
                         ? "Replay"
                         : run.run_type === "autonomous_qa"
                           ? "Autonomous QA"
-                          : "AI"}
+                          : run.run_type === "ui_test"
+                            ? "UI Test"
+                            : "AI"}
                     </Badge>
                     {run.platform === "android" && (
                       <Badge variant="outline" className="text-xs border-emerald-200 text-emerald-600">

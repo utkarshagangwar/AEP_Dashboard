@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/components/VisualAuditSection.tsx",
+    "src/components/FigmaImportSection.tsx",
+    "src/components/AutonomousQASection.tsx",
+    "src/components/ai-testing/ModeSelector.tsx",
+    "src/app/ai-testing/page.tsx",
+    "next-env.d.ts"
+  ]
+}

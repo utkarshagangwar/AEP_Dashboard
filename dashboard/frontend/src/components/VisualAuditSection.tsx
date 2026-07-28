@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiGet, apiPost } from "@/utils/apiClient";
-import { ColorSwatch } from "@/components/ai-testing/shared";
+import { AuthImage, ColorSwatch } from "@/components/ai-testing/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+// Reused (embedded) rather than reimplemented — see FigmaImportSection.tsx's
+// module comment for why. This is the fix for the confirmed bug: previously
+// there was no way to trigger a new Figma import from inside this flow at
+// all, despite a comment elsewhere claiming there was.
+import FigmaImportSection from "@/components/FigmaImportSection";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,11 +83,16 @@ export default function VisualAuditSection() {
   const [references, setReferences] = useState<Reference[]>([]);
   const [selectedRef, setSelectedRef] = useState("");
   const [targetUrl, setTargetUrl] = useState("");
+  // Optional requirement/checkpoint reference (New Vibe Test Phase 1).
+  const [linkedRequirement, setLinkedRequirement] = useState("");
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState<VisualRun | null>(null);
   const [imageTab, setImageTab] = useState<"reference" | "screenshot" | "diff">("diff");
+  // Confirmed-bug fix: lets the reference picker trigger a fresh Figma
+  // import inline instead of forcing the user elsewhere in the app first.
+  const [showFigmaImport, setShowFigmaImport] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -107,6 +117,21 @@ export default function VisualAuditSection() {
   useEffect(() => {
     loadReferences();
   }, [loadReferences]);
+
+  // Fired by the embedded FigmaImportSection once an import batch settles
+  // (every frame in it reached done/error). Refresh the picker so the new
+  // reference(s) show up immediately, and — same UX as a direct PNG
+  // upload — auto-select it when exactly one frame was imported.
+  const handleFigmaImported = useCallback(
+    (refs: Reference[]) => {
+      loadReferences();
+      const ready = refs.filter(
+        (r) => r.parse_status === "done" || r.parse_status === "not_required"
+      );
+      if (ready.length === 1) setSelectedRef(ready[0].id);
+    },
+    [loadReferences]
+  );
 
   // ── Poll active run until terminal ─────────────────────────────────────────
   useEffect(() => {
@@ -171,6 +196,7 @@ export default function VisualAuditSection() {
       const data = await apiPost("/api/v1/visual-audits", {
         target_url: targetUrl.trim(),
         artifact_id: selectedRef,
+        linked_requirement: linkedRequirement.trim() || undefined,
       });
       setRun(data);
       setImageTab("diff");
@@ -239,7 +265,26 @@ export default function VisualAuditSection() {
           >
             {uploading ? "Uploading…" : "Upload PNG"}
           </Button>
+
+          <Button
+            variant="outline"
+            className="h-9 text-sm"
+            onClick={() => setShowFigmaImport((v) => !v)}
+          >
+            {showFigmaImport ? "Hide Figma import" : "Import from Figma"}
+          </Button>
         </div>
+
+        {/* Inline Figma import — the fix for the confirmed reference-picker
+            gap: previously a fresh Figma import could only be started
+            elsewhere in the app, then brought back here. Remounted (not
+            just hidden) each time the panel opens, so its internal state
+            starts clean on every open. */}
+        {showFigmaImport && (
+          <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+            <FigmaImportSection embedded onImported={handleFigmaImported} />
+          </div>
+        )}
 
         {/* Target URL */}
         <input
@@ -250,6 +295,15 @@ export default function VisualAuditSection() {
             setError(null);
           }}
           placeholder="Live page URL, e.g. https://staging.myapp.com/checkout"
+          className="w-full rounded-md border border-gray-200 px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+        />
+
+        {/* Optional requirement/checkpoint reference (New Vibe Test Phase 1) */}
+        <input
+          type="text"
+          value={linkedRequirement}
+          onChange={(e) => setLinkedRequirement(e.target.value)}
+          placeholder='Linked requirement (optional), e.g. "REQ-102"'
           className="w-full rounded-md border border-gray-200 px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
         />
 
@@ -370,52 +424,5 @@ export default function VisualAuditSection() {
         )}
       </CardContent>
     </Card>
-  );
-}
-
-/** Fetches a run image with the JWT (plain <img src> can't send the header). */
-function AuthImage({
-  runId,
-  kind,
-}: {
-  runId: string;
-  kind: "reference" | "screenshot" | "diff";
-}) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let objectUrl: string | null = null;
-    let cancelled = false;
-    setSrc(null);
-    setFailed(false);
-    (async () => {
-      try {
-        const res = await apiFetch(`/api/v1/visual-audits/${runId}/images/${kind}`);
-        if (!res.ok) throw new Error("image unavailable");
-        const blob = await res.blob();
-        objectUrl = URL.createObjectURL(blob);
-        if (!cancelled) setSrc(objectUrl);
-      } catch {
-        if (!cancelled) setFailed(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [runId, kind]);
-
-  if (failed)
-    return <p className="text-xs text-gray-400">Image not available for this run.</p>;
-  if (!src)
-    return <div className="h-48 bg-gray-100 rounded-md animate-pulse" />;
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt={`${kind} image`}
-      className="w-full border border-gray-200 rounded-md"
-    />
   );
 }

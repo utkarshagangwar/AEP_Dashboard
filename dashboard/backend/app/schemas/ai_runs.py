@@ -5,6 +5,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+
+class FunctionalTestStep(BaseModel):
+    """One atomic, orderable step authored in the Functional Test flow.
+    Order is the position in AIRunCreate.steps, not a stored field."""
+    text: str = Field(..., min_length=1, max_length=1000)
+
+
+class FunctionalTestDataSet(BaseModel):
+    """One named, parameterized data set for a Functional Test. Submitting
+    N data sets creates N ai_test_runs rows (one per set) — see
+    submit_run()'s data-driven expansion in app/api/v1/ai_runs.py."""
+    name: str = Field(..., min_length=1, max_length=200)
+    values: dict[str, str] = Field(default_factory=dict)
+
 # Fields required in `credentials` when kind="bypass" — see
 # app/workers/tasks/ai_execution.py::_resolve_bypass_profile for how they're
 # used (an admin API-key login call, not a typed-in-form login). The X-API-Key
@@ -59,13 +73,27 @@ class CredentialProfileResponse(BaseModel):
 
 
 class AIRunCreate(BaseModel):
-    goal: str = Field(..., min_length=5, max_length=2000)
+    # 20000 (up from 2000) -- large/multi-step Vibe Test goals (e.g. a long
+    # numbered workflow spanning several pages) were hitting this ceiling
+    # and getting rejected with a 422 before ever reaching the agent. The
+    # backing column (AITestRun.goal) is already Text/unbounded in Postgres,
+    # so raising this is just the request-schema side of the same "don't
+    # artificially cap large runs" fix as ai_runner.py's step/duration caps.
+    #
+    # Optional as of the structured Functional Test flow: when
+    # test_category="functional", goal is not authored directly — it's
+    # compiled server-side from preconditions/steps/expected_results/
+    # test_type/test_data (see submit_run() in app/api/v1/ai_runs.py) and
+    # this field is ignored if sent. Every other caller (Android, Skill
+    # Replay, Autonomous QA orchestrator) still sends goal directly and is
+    # unaffected — see _validate_functional below for the exact gating.
+    goal: Optional[str] = Field(default=None, max_length=20000)
     project_id: Optional[UUID] = None
     credential_profile_id: Optional[UUID] = None
     environment: Optional[str] = Field(None, max_length=200)
-    # One-off "Website without/with login" path (Quick mode, non-"IG
-    # Automation" environments) — mutually exclusive with
-    # credential_profile_id, never persisted as a reusable profile.
+    # One-off "Website without/with login" path (non-"IG Automation"
+    # environments) — mutually exclusive with credential_profile_id, never
+    # persisted as a reusable profile.
     target_url: Optional[str] = None
     login_identifier: Optional[str] = Field(default=None, max_length=300)  # email/phone
     login_password: Optional[str] = Field(default=None, max_length=300)
@@ -75,6 +103,23 @@ class AIRunCreate(BaseModel):
     platform: str = Field(default="web", pattern="^(web|android)$")
     android_app_build_id: Optional[UUID] = None
     device_profile: Optional[str] = Field(default=None, max_length=100)
+
+    # ── Structured Functional Test flow (New Vibe Test Phase 1) ────────────
+    # Set test_category="functional" to author a test as preconditions +
+    # ordered steps + expected results instead of a single free-text goal.
+    # Leave unset (None) for every other existing caller — behavior for
+    # those is completely unchanged.
+    test_category: Optional[str] = Field(default=None, pattern="^(functional)$")
+    preconditions: Optional[str] = Field(default=None, max_length=5000)
+    steps: Optional[list[FunctionalTestStep]] = Field(default=None, max_length=100)
+    expected_results: Optional[list[str]] = Field(default=None, max_length=50)
+    test_data: Optional[list[FunctionalTestDataSet]] = Field(default=None, max_length=20)
+    test_type: str = Field(default="happy", pattern="^(happy|negative|edge)$")
+    # Free-text requirement/checkpoint reference — optional on both flows.
+    linked_requirement: Optional[str] = Field(default=None, max_length=500)
+    # "desktop" (default) | "tablet" | "mobile" — see
+    # app.services.ai_runner.VIEWPORT_PRESETS. Functional Test only.
+    viewport_preset: str = Field(default="desktop", pattern="^(desktop|tablet|mobile)$")
 
     @model_validator(mode="after")
     def _validate_adhoc(self):
@@ -104,6 +149,24 @@ class AIRunCreate(BaseModel):
             raise ValueError(
                 "android_app_build_id/device_profile are only valid when platform='android'"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_functional(self):
+        if self.test_category == "functional":
+            if self.platform != "web":
+                raise ValueError("Functional Test only supports platform='web' today")
+            if not self.steps or len([s for s in self.steps if s.text.strip()]) == 0:
+                raise ValueError("Functional Test requires at least one step")
+            if not self.expected_results or len(
+                [r for r in self.expected_results if r.strip()]
+            ) == 0:
+                raise ValueError("Functional Test requires at least one expected result")
+        else:
+            # Legacy/other callers (Android, Skill Replay, Autonomous QA
+            # orchestrator): exact same requirement as before this feature.
+            if not self.goal or len(self.goal.strip()) < 5:
+                raise ValueError("goal must be at least 5 characters")
         return self
 
 
@@ -165,6 +228,36 @@ class AIRunResponse(BaseModel):
     failing_step_index: Optional[int] = None
     failing_step_description: Optional[str] = None
     failing_step_screenshot_url: Optional[str] = None
+    # True once a full-session recording exists for this run (New Vibe
+    # Test / Skill Replay only — see app/services/ai_run_capture.py). The
+    # frontend builds its own proxied /video URL from this flag rather than
+    # the backend dictating a frontend route shape, same as the stream URL.
+    video_available: bool = False
+    # Post-run DeepEval quality score (New Vibe Test / Skill Replay, web
+    # platform only) -- see app/services/ai_eval.py. None for every other
+    # run (Android, Autonomous QA, non-terminal status, pre-feature rows,
+    # or scoring itself was unavailable).
+    eval_score: Optional[float] = None
+    eval_reason: Optional[str] = None
+    eval_status: Optional[str] = None
+    # Second, complementary judge pass (New Vibe Test Phase 4) — final-state
+    # screenshot vs. this run's own expected_results. Functional Test only;
+    # None for every other run or when scoring itself was unavailable. See
+    # app/services/ai_eval.py's evaluate_expected_results.
+    visual_eval_score: Optional[float] = None
+    visual_eval_reason: Optional[str] = None
+    visual_eval_status: Optional[str] = None
+    # Structured Functional Test fields (New Vibe Test Phase 1) — all None
+    # for a run created via any other flow (Android, Skill Replay,
+    # Autonomous QA, or a pre-feature row).
+    test_category: Optional[str] = None
+    preconditions: Optional[str] = None
+    steps: Optional[list[dict]] = None
+    expected_results: Optional[list[str]] = None
+    test_data: Optional[list[dict]] = None
+    test_type: Optional[str] = None
+    linked_requirement: Optional[str] = None
+    viewport_preset: Optional[str] = None
     created_by: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
@@ -200,6 +293,9 @@ class AIRunListItem(BaseModel):
     step_count: int = 0
     run_type: str = "ai"
     platform: str = "web"
+    test_category: Optional[str] = None
+    test_type: Optional[str] = None
+    linked_requirement: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -286,3 +382,73 @@ class BulkSkillIds(BaseModel):
 class BulkAssignProjectRequest(BulkSkillIds):
     # None unassigns the selected skills from any project.
     project_id: Optional[UUID] = None
+
+
+# ── Coverage report (New Vibe Test Phase 6, A.4/D.15) ───────────────────────
+#
+# "Requirement -> linked test(s) -> latest status -> (functional) GEval
+# score -> last-run date" per the checklist. Neither AITestRun nor VisualRun
+# has a "test case" identity distinct from an individual run row -- grouping
+# key is computed at query time, not stored (see get_coverage() in
+# app/api/v1/ai_runs.py): a functional test group is
+# (linked_requirement, sha256-normalized-goal) — the exact same goal_hash
+# app.services.skill_store.compute_goal_hash already uses for Skill
+# auto-save identity, so re-submitting the identical structured Functional
+# Test fields always lands in the same group. A UI test group is
+# (linked_requirement, target_url, artifact_id) — same reference design +
+# same page compared again is "the same test"; a different reference or
+# page is a different one even under the same requirement tag. Per explicit
+# product decision (2026-07-28) over the simpler "group by requirement
+# alone" option, which would have blended different tests' pass/fail
+# history into one misleading rate whenever they happened to share a
+# requirement tag.
+
+
+class CoverageTestEntry(BaseModel):
+    kind: str  # "functional" | "ui"
+    label: str  # goal (truncated) for functional, target_url for ui
+    test_type: Optional[str] = None  # functional only: happy | negative | edge
+    latest_run_id: UUID
+    latest_status: str
+    last_run_at: datetime
+    # Functional only — None for a ui entry or if scoring was unavailable.
+    latest_eval_score: Optional[float] = None
+    # UI only — None for a functional entry.
+    latest_pixel_mismatch_pct: Optional[int] = None
+    total_runs: int
+    pass_count: int
+    fail_count: int
+    # Functional only (VisualRun has no needs_review-equivalent status) —
+    # always 0 for a ui entry.
+    needs_review_count: int = 0
+    # pass_count / (pass_count + fail_count), excluding needs_review/
+    # inconclusive/cancelled/pending/running from the denominator entirely
+    # — an undecided or never-finished run shouldn't silently count against
+    # (or for) a test's reliability. None if there's no terminal run yet.
+    pass_rate: Optional[float] = None
+    # New Vibe Test Phase 7 (F.26) — replaces CoverageTab's old crude
+    # "pass_count > 0 and fail_count > 0" Flaky badge, which flagged a test
+    # that failed once three months ago and has passed cleanly ever since
+    # exactly the same as one that alternates every run. Computed over the
+    # SAME decided-only (passed/failed) run sequence as pass_rate, in
+    # chronological order: the fraction of consecutive decided-run pairs
+    # whose status differs. A test that's always passed or always failed is
+    # 0.0 (consistent, not flaky, regardless of how many runs). A test that
+    # alternates every single run approaches 1.0. None if there are fewer
+    # than 2 decided runs — not enough history to call it either way.
+    flakiness_rate: Optional[float] = None
+
+
+class CoverageRequirementGroup(BaseModel):
+    linked_requirement: str
+    functional_tests: list[CoverageTestEntry] = []
+    ui_tests: list[CoverageTestEntry] = []
+
+
+class CoverageResponse(BaseModel):
+    requirements: list[CoverageRequirementGroup] = []
+    # Runs that exist but have no linked_requirement set — surfaced as a
+    # single count (not enumerated) so the report can say "N test(s) have no
+    # linked requirement" instead of silently omitting them with no trace.
+    unlinked_functional_count: int = 0
+    unlinked_ui_count: int = 0
