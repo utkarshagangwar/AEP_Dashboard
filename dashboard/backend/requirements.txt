@@ -60,7 +60,7 @@ langchain-openai==0.3.11
 # litellm.completion() as an SDK -- the proxy never runs here, so none of
 # these are reachable. Bumping would also force openai>=2.20.0, breaking the
 # pin above. Left as-is; do not install the "proxy" extra on this package.
-litellm==1.74.15.post2
+litellm==1.93.0
 Pillow==12.2.0
 Pillow==12.2.0
 pixelmatch==0.3.0
