@@ -123,6 +123,81 @@ def _data_dir() -> str:
     return data_dir()
 
 
+def _ensure_artifact_file(
+    db: Session, artifact: DesignArtifact, content: bytes, *, subdir: str, ext: str
+) -> None:
+    """Guarantee the reused artifact's file is actually on the volume.
+
+    WHY THIS EXISTS
+    ---------------
+    Uploads are deduplicated by sha256: if a DesignArtifact row already
+    exists for this content, the endpoint reuses it and skips writing the
+    file. That trusts the database about the state of the filesystem, and
+    nothing ever reconciled the two. When the visual_qa_data volume is
+    recreated or pruned while Postgres data survives (a `docker compose
+    down -v` on the app stack, a volume prune, or a DB restored from a
+    backup taken on a different host), every subsequent upload of that same
+    file produces an artifact pointing at a path that no longer exists. The
+    upload itself returns 201, and the failure only surfaces later, in the
+    Celery worker:
+
+        Could not read document: [Errno 2] No such file or directory:
+        '/app/visual_qa_data/sow_existing_document/<sha>.md'
+
+    Re-uploading could never fix it, because re-uploading took the same
+    dedup branch that skipped the write in the first place.
+
+    WHAT IT DOES
+    ------------
+    Nothing at all when the file is present -- the normal path is
+    unchanged, no extra write, no extra commit. When the file is missing it
+    heals: the bytes are still in memory at this point in the request, so
+    they are rewritten and the row is repointed at the current data
+    directory. The user simply re-uploads and it works.
+
+    The filename is preserved from the existing row where possible so a
+    reused artifact keeps its original extension (the content is
+    byte-identical, but extension drives parser selection downstream, and
+    silently changing .txt to .md would change how it is read).
+    """
+    if artifact.storage_path and os.path.exists(artifact.storage_path):
+        return
+
+    basename = (
+        os.path.basename(artifact.storage_path)
+        if artifact.storage_path
+        else f"{artifact.sha256}{ext}"
+    )
+
+    # _data_dir() creates the volume root, so it belongs inside the guard
+    # too: on a volume that is unmounted or read-only it raises OSError just
+    # as the write does, and that must surface as the same clean message
+    # rather than an unhandled 500.
+    try:
+        target_dir = os.path.join(_data_dir(), subdir)
+        storage_path = os.path.join(target_dir, basename)
+        logger.warning(
+            "SOW: artifact %s was reused but its file is missing from storage "
+            "(%s) — rewriting it from the uploaded content to %s",
+            artifact.id, artifact.storage_path or "<no path recorded>", storage_path,
+        )
+        os.makedirs(target_dir, exist_ok=True)
+        with open(storage_path, "wb") as fh:
+            fh.write(content)
+    except OSError as exc:
+        logger.exception("SOW: could not restore artifact %s file", artifact.id)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not write the uploaded file to storage. "
+                   "Check that the visual_qa_data volume is mounted and writable.",
+        ) from exc
+
+    if artifact.storage_path != storage_path:
+        artifact.storage_path = storage_path
+        db.commit()
+        db.refresh(artifact)
+
+
 def _max_recording_bytes() -> int:
     return int(os.environ.get("SOW_MAX_RECORDING_MB", "300")) * 1024 * 1024
 
@@ -148,7 +223,42 @@ def _generate_rate_limit() -> str:
     return os.environ.get("SOW_GENERATE_RATE_LIMIT", "10/hour")
 
 
-def _document_out(d: SowDocument) -> SowDocumentOut:
+def _can_generate(db: Session, d: SowDocument) -> bool:
+    """Whether a full regeneration is currently worth offering.
+
+    Always true before the first generation. After that it requires new
+    source material: regenerating an unchanged document redrafts every
+    section from the same ledger, discards every hand edit, and re-pays for
+    the whole document to arrive somewhere equivalent. "Regenerate" is for
+    incorporating new material; Rewrite is for redoing a section that came
+    out wrong.
+
+    Keyed on the source's own updated_at against the version's created_at
+    rather than a stored flag, so it cannot drift out of sync with reality.
+    """
+    if d.current_version_id is None:
+        return True
+
+    version = db.get(SowDocumentVersion, d.current_version_id)
+    if version is None:
+        return True
+
+    newer = (
+        db.query(SowDocumentSource.id)
+        .filter(
+            SowDocumentSource.document_id == d.id,
+            SowDocumentSource.status.in_(
+                (SowSourceStatus.done, SowSourceStatus.done_with_errors)
+            ),
+            SowDocumentSource.updated_at > version.created_at,
+        )
+        .first()
+    )
+    return newer is not None
+
+
+def _document_out(d: SowDocument, db: Session | None = None) -> SowDocumentOut:
+    keys = d.pending_section_keys if isinstance(d.pending_section_keys, list) else None
     return SowDocumentOut(
         id=d.id,
         project_id=d.project_id,
@@ -156,6 +266,11 @@ def _document_out(d: SowDocument) -> SowDocumentOut:
         status=d.status.value if hasattr(d.status, "value") else str(d.status),
         is_active=d.is_active,
         current_version_id=d.current_version_id,
+        pending_section_keys=[str(k) for k in keys] if keys else None,
+        pending_new_fact_count=d.pending_new_fact_count,
+        # db=None only from call sites that have just created or renamed a
+        # document, where nothing can have changed the answer.
+        can_generate=_can_generate(db, d) if db is not None else True,
         created_by=d.created_by,
         created_at=d.created_at,
         updated_at=d.updated_at,
@@ -183,6 +298,9 @@ def _source_out(db: Session, source: SowDocumentSource) -> SowDocumentSourceOut:
         file_name=artifact.file_name if artifact else None,
         status=source.status.value if hasattr(source.status, "value") else str(source.status),
         error_message=source.error_message,
+        progress_stage=source.progress_stage,
+        progress_current=source.progress_current,
+        progress_total=source.progress_total,
         ledger_fact_count=source.ledger_fact_count,
         added_by=source.added_by,
         created_at=source.created_at,
@@ -209,6 +327,11 @@ def _attach_source(
     if existing:
         existing.status = SowSourceStatus.pending
         existing.error_message = None
+        # A retry restarts from zero -- leaving the previous run's progress
+        # in place would render a bar that appears to resume mid-way.
+        existing.progress_stage = None
+        existing.progress_current = None
+        existing.progress_total = None
         db.commit()
         db.refresh(existing)
         return existing
@@ -284,7 +407,7 @@ def list_documents(
     if project_id is not None:
         query = query.filter(SowDocument.project_id == project_id)
     docs = query.order_by(SowDocument.updated_at.desc()).limit(limit).all()
-    return [_document_out(d) for d in docs]
+    return [_document_out(d, db) for d in docs]
 
 
 @router.get("/documents/{document_id}", response_model=SowDocumentOut)
@@ -295,7 +418,7 @@ def get_document(
 ):
     _feature_enabled()
     doc = _get_active_document_or_404(db, document_id)
-    return _document_out(doc)
+    return _document_out(doc, db)
 
 
 @router.patch("/documents/{document_id}", response_model=SowDocumentOut)
@@ -330,7 +453,9 @@ def rename_document(
         details={"old_title": old_title, "new_title": doc.title},
         ip_address=_client_ip(request),
     )
-    return _document_out(doc)
+    # db passed: a renamed document may already have been generated, so
+    # can_generate must be computed rather than assumed.
+    return _document_out(doc, db)
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_200_OK)
@@ -456,6 +581,13 @@ async def add_transcript_source(
         db.add(artifact)
         db.commit()
         db.refresh(artifact)
+    else:
+        # Reused artifact (sha256 match) — verify its file is still on the
+        # volume before queueing a worker that can only fail with ENOENT if
+        # it is not. See _ensure_artifact_file.
+        _ensure_artifact_file(
+            db, artifact, content, subdir="sow_meeting_transcript", ext=".txt"
+        )
 
     source = _attach_source(db, doc, artifact, current_user)
 
@@ -539,6 +671,13 @@ async def add_existing_sow_source(
         db.add(artifact)
         db.commit()
         db.refresh(artifact)
+    else:
+        # Reused artifact (sha256 match). The row says where the file is;
+        # verify it is actually there before queueing a worker that can only
+        # fail with ENOENT if it is not. See _ensure_artifact_file.
+        _ensure_artifact_file(
+            db, artifact, content, subdir="sow_existing_document", ext=ext
+        )
 
     source = _attach_source(db, doc, artifact, current_user)
 
@@ -645,6 +784,19 @@ async def add_recording_source(
         db.add(artifact)
         db.commit()
         db.refresh(artifact)
+    else:
+        # Reused artifact (sha256 match) — verify its file is still on the
+        # volume. See _ensure_artifact_file. The duration check above is
+        # deliberately NOT repeated here: this exact content already passed
+        # it when the artifact was first registered, and re-running ffprobe
+        # would only add latency to a path that is already known-good.
+        _ensure_artifact_file(
+            db,
+            artifact,
+            content,
+            subdir="sow_meeting_recording",
+            ext=os.path.splitext(file_name.lower())[1],
+        )
 
     source = _attach_source(db, doc, artifact, current_user)
 
@@ -729,6 +881,12 @@ async def add_design_source(
             db.add(artifact)
             db.commit()
             db.refresh(artifact)
+        else:
+            # Reused artifact (sha256 match) — verify its file is still on
+            # the volume. See _ensure_artifact_file.
+            _ensure_artifact_file(
+                db, artifact, content, subdir="sow_design_ref", ext=".png"
+            )
 
     source = _attach_source(db, doc, artifact, current_user)
 
@@ -810,16 +968,26 @@ def delete_source(
 @router.get("/documents/{document_id}/ledger", response_model=list[SowRequirementsLedgerOut])
 def list_ledger(
     document_id: uuid.UUID,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     fact_type: str | None = Query(default=None),
-    limit: int = Query(default=500, ge=1, le=2000),
+    limit: int = Query(default=2000, ge=1, le=5000),
 ):
     """The raw requirements-ledger dump Phase 1 promises: every extracted
     fact for this document, across every attached source. This is
     intentionally unstructured/ungrouped (Phase 2 formalizes grouping into
     SOW sections) — it exists so extraction quality can be inspected
-    directly against the source material before anything is drafted from it."""
+    directly against the source material before anything is drafted from it.
+
+    `X-Total-Count` reports how many facts MATCH, independently of how many
+    this page returns. Without it the client could only count the array it
+    received, so a document with more facts than `limit` reported the limit
+    as its fact total -- a ledger whose entire purpose is exhaustiveness
+    silently under-reporting itself. The default limit is well above any
+    realistic document (a 138 KB SOW yields ~570) so the two normally agree;
+    the header is what makes the disagreement visible when they don't.
+    """
     _feature_enabled()
     doc = _get_active_document_or_404(db, document_id)
 
@@ -831,6 +999,9 @@ def list_ledger(
         if fact_type not in _VALID_LEDGER_FACT_TYPES:
             raise HTTPException(status_code=400, detail=f"Invalid fact_type '{fact_type}'")
         query = query.filter(SowRequirementsLedger.fact_type == fact_type)
+
+    total = query.order_by(None).count()
+    response.headers["X-Total-Count"] = str(total)
 
     rows = query.order_by(SowRequirementsLedger.created_at.asc()).limit(limit).all()
     return [
@@ -962,6 +1133,15 @@ def generate_document(
             "wait for extraction to finish before generating.",
         )
 
+    if not _can_generate(db, locked_doc):
+        raise HTTPException(
+            status_code=409,
+            detail="This document has already been generated and no new source has "
+            "been added since. Regenerating would redraft every section from the "
+            "same ledger and discard any manual edits. Attach a new source to "
+            "regenerate, or use Rewrite to redo individual sections.",
+        )
+
     try:
         next_version_number = (
             db.query(func.max(SowDocumentVersion.version_number))
@@ -993,6 +1173,10 @@ def generate_document(
         )
         db.add(job)
         locked_doc.status = SowDocumentStatus.generating
+        # A full regeneration re-groups the WHOLE ledger, so the impact
+        # task's "these sections are affected" hint is consumed by it.
+        locked_doc.pending_section_keys = None
+        locked_doc.pending_new_fact_count = None
         db.commit()
         db.refresh(version)
         db.refresh(job)
@@ -1159,6 +1343,17 @@ def rewrite_document(
         )
         db.add(job)
         locked_doc.status = SowDocumentStatus.generating
+        # Drop the sections this rewrite covers from the "new source affects
+        # these" hint. Any the caller chose NOT to rewrite stay pending, so
+        # the banner keeps offering them rather than silently forgetting a
+        # section the new source genuinely touched.
+        remaining = [
+            key for key in (locked_doc.pending_section_keys or [])
+            if key not in to_regen_set
+        ]
+        locked_doc.pending_section_keys = remaining or None
+        if not remaining:
+            locked_doc.pending_new_fact_count = None
         db.commit()
         db.refresh(version)
         db.refresh(job)

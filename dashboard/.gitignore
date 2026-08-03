@@ -3,3 +3,11 @@ node_modules/
 .venv/
 __pycache__/
 *.pyc
+
+# Generated test fixtures (SOW_CHUNKING_PLAN Phase 1). Built on demand by
+# backend/tests/fixtures/make_fixtures.py, and automatically by conftest.py
+# on a fresh clone -- the generator is the reviewable source of truth, the
+# binaries are not committed.
+backend/tests/fixtures/generated/
+.pytest_cache/
+.hypothesis/

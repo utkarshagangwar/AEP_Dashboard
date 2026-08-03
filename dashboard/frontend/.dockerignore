@@ -1,5 +1,13 @@
 node_modules
 .next
 .env.local
+.pytest_cache
 .venv
 *.log
+
+# Local-only build artifacts and scratch configs. These get COPY . .'d into
+# the builder stage otherwise, which busts the layer cache on every local
+# typecheck and ships dead files into the image.
+*.tsbuildinfo
+*.bak
+seed.mjs

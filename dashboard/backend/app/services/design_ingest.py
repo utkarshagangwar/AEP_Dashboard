@@ -5,9 +5,13 @@ checkpoints and functional skills via the LLM router, and caches the result
 in the Memory Bank (design_rules) keyed by the artifact's sha256 so each
 document is ever parsed once.
 
-Large documents are split into parts (see chunk_text) instead of being
-truncated, so every part of the document is eventually analyzed rather than
-silently dropped.
+Large documents are split into parts instead of being truncated, so every
+part of the document is eventually analyzed rather than silently dropped.
+Splitting is now structure-aware (app.services.doc_chunking, via the block
+extraction in app.services.doc_blocks): parts break on headings, never
+mid-table or mid-clause, and each carries the section path it came from.
+chunk_text() below is the superseded character-window splitter, kept only
+as the reference implementation for the unstructured-input fallback.
 
 Checkpoint schema stored in design_rules.checkpoints (JSONB):
   [
@@ -48,6 +52,7 @@ from __future__ import annotations
 import os
 
 from app.core.logging import get_logger
+from app.services import doc_blocks as _doc_blocks
 
 logger = get_logger(__name__)
 
@@ -61,7 +66,8 @@ _SOW_SYSTEM = (
     '{"checkpoints": [{"type": "functional"|"visual", "title": str, '
     '"description": str|null, "role": str|null, "objective": str|null, '
     '"context": str|null, "instructions": [str]|null, "notes": [str]|null, '
-    '"page": str|null, "expected": str|null}]}\n'
+    '"page": str|null, "expected": str|null, "review_status": "ready"|'
+    '"needs_review"|"needs_design_flow", "review_reason": str|null}]}\n'
     "\n"
     "For type \"visual\" (layout/branding/design requirements): fill only "
     "'description' — a short, testable claim about appearance. Leave role/"
@@ -94,12 +100,46 @@ _SOW_SYSTEM = (
     "\"Job Creation\", \"Add Candidate\" — used to identify this skill "
     "across re-analysis, so keep it stable and specific.\n"
     "\n"
+    "ONE CHECKPOINT PER FEATURE. Organize by feature, not by paragraph: a "
+    "feature with several distinct user flows (create / edit / delete, or "
+    "search / filter / sort) produces a SEPARATE checkpoint per flow, each "
+    "independently executable, rather than one broad checkpoint that tries "
+    "to cover them all. A checkpoint a tester cannot run start-to-finish on "
+    "its own is too broad — split it.\n"
+    "\n"
+    "COMPLETENESS VS HONESTY — 'review_status'. Some requirements are stated "
+    "but under-specified or conflicting: the document says a control exists "
+    "without saying what it does, names a screen without describing how to "
+    "reach it, or gives two incompatible behaviours for the same feature. "
+    "For those:\n"
+    "  - Still emit the checkpoint. Never omit a requirement because it was "
+    "vague — an omitted requirement is invisible to everyone downstream and "
+    "will never be clarified or tested.\n"
+    "  - Never invent steps to make it look complete. Fabricated steps are "
+    "worse than acknowledged gaps: they produce tests that pass against "
+    "behaviour nobody specified.\n"
+    "  - Set 'review_status' to \"needs_review\" and put in 'review_reason' "
+    "exactly what is missing or conflicting (e.g. \"the document lists a "
+    "Status dropdown but never states its allowed values\" or \"two sections "
+    "disagree on whether deletion requires confirmation\").\n"
+    "  - Use \"needs_design_flow\" instead when the requirement implies a "
+    "user flow the document never describes at all — it names a screen, "
+    "outcome or state but no path to reach it. That needs a design "
+    "decision, not just a clarification.\n"
+    "  - Use \"ready\" ONLY when the steps you wrote are fully grounded in "
+    "what the document actually states. If you had to guess at any step, it "
+    "is not ready.\n"
+    "\n"
     'Return {"checkpoints": []} if no testable requirements are found.'
 )
 
 
-class IngestError(RuntimeError):
-    """Raised when a document cannot be ingested; message is user-safe."""
+# IngestError moved to app.services.doc_blocks (SOW_CHUNKING_PLAN Phase 1) so
+# that module has no import dependency on this one -- design_ingest imports
+# doc_blocks, not the reverse. Re-exported here as the SAME class object, so
+# every existing `from app.services.design_ingest import IngestError` and
+# `except design_ingest.IngestError` keeps working with no change.
+IngestError = _doc_blocks.IngestError
 
 
 # ATG's metered Gemini Flash gateway (see llm_router._resolve_call_target).
@@ -141,8 +181,44 @@ def _complete_via_brain(prompt: str, *, system: str, max_tokens: int):
 
 # ── Text extraction ──────────────────────────────────────────────────────────
 
+_SUPPORTED_EXTENSIONS = (".txt", ".md", ".pdf")
+
+
+def extract_blocks(storage_path: str, file_name: str) -> list[_doc_blocks.Block]:
+    """Structured blocks for a SOW file (SOW_CHUNKING_PLAN Phase 1).
+
+    This is what app.services.doc_chunking consumes -- headings, tables and
+    page markers preserved, so chunks can split on real section boundaries
+    and carry a "p.12" locator.
+
+    The extension gate is applied HERE rather than delegated wholesale to
+    doc_blocks.extract_blocks, which also accepts .docx. This pipeline (SOW
+    Checkpoints / Video Walkthrough) has only ever accepted txt/md/pdf, and
+    silently widening it would be an unrelated behavior change to a shipped
+    endpoint -- .docx support belongs to app.services.sow_import.
+    """
+    ext = os.path.splitext(file_name.lower())[1]
+    if ext not in _SUPPORTED_EXTENSIONS:
+        raise IngestError(f"Unsupported SOW format '{ext}'. Use .txt, .md, or .pdf.")
+    return _doc_blocks.extract_blocks(storage_path, file_name)
+
+
 def extract_text(storage_path: str, file_name: str) -> str:
-    """Extract plain text from a SOW file. Supports .txt, .md, .pdf."""
+    """Extract plain text from a SOW file. Supports .txt, .md, .pdf.
+
+    UNCHANGED by SOW_CHUNKING_PLAN Phase 1, deliberately. An earlier draft
+    routed this through doc_blocks.render_blocks() for a single source of
+    truth; that was reverted because rendering is lossy for this caller --
+    it strips markdown heading markers ("## 4.3 Scope" -> "4.3 Scope") and
+    list bullets, so the SOW Checkpoints LLM prompt would have lost the
+    document structure it can currently see in the raw text. A cleanliness
+    refactor is not worth degrading a shipped prompt.
+
+    Structure-aware consumers use extract_blocks() above instead. The two
+    functions read the same files by different routes on purpose: this one
+    preserves the author's original bytes, that one preserves the author's
+    semantics.
+    """
     ext = os.path.splitext(file_name.lower())[1]
 
     if ext in (".txt", ".md"):
@@ -186,7 +262,27 @@ def extract_text(storage_path: str, file_name: str) -> str:
 # ── Chunking for large documents ─────────────────────────────────────────────
 
 def chunk_text(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list[str]:
-    """Split text into parts of at most ~max_chars, breaking on paragraphs.
+    """DEPRECATED — use app.services.doc_chunking.chunk_document instead.
+
+    Superseded by SOW_CHUNKING_PLAN Phase 2. This splitter is structure-
+    blind: it breaks on "\\n\\n" and a character count, so it cuts through
+    tables and numbered clauses, and the parts it returns carry no section
+    context. Both defects are why a large SOW's ledger loses requirements at
+    chunk boundaries.
+
+    Kept, unmodified, for two reasons:
+      1. It is the reference implementation for the paragraph fallback --
+         tests/test_doc_chunking.py (T-C-015) asserts chunk_document()
+         reproduces its output byte-for-byte for unstructured input, so a
+         document with no structure to exploit chunks exactly as it does
+         today.
+      2. Any caller not yet migrated keeps working unchanged.
+
+    No production code path calls this any more.
+
+    ---
+
+    Split text into parts of at most ~max_chars, breaking on paragraphs.
 
     Every character of the input is preserved across the returned parts (no
     content is dropped). A document that already fits in one part is returned
@@ -260,6 +356,8 @@ def render_skill_markdown(
     context: str | None,
     instructions: list[str],
     notes: list[str],
+    review_status: str | None = None,
+    review_reason: str | None = None,
 ) -> str:
     """Deterministic Role/Objective/Context/Instructions/Notes markdown.
 
@@ -267,8 +365,29 @@ def render_skill_markdown(
     this is the single place that decides formatting — every skill looks the
     same regardless of model quirks. This rendered text is what actually
     becomes the AI agent's goal (AISkill.goal / "Use as goal").
+
+    A flagged skill leads with a "Needs review" banner. That is deliberate
+    duplication of AISkill.review_status: the rendered text travels places
+    the column does not (it IS the agent's goal, it gets copied into the
+    Vibe goal box, it appears in exports), and a warning that only lives in
+    a database column is a warning the person actually running the skill
+    never sees.
     """
     sections: list[str] = []
+    if review_status:
+        label = (
+            "Needs Design Flow"
+            if review_status == "needs_design_flow"
+            else "Needs Review"
+        )
+        banner = (
+            f"# ⚠️ {label}\n"
+            "This skill is NOT fully specified by the source document and is not "
+            "ready to run as-is."
+        )
+        if review_reason:
+            banner += f"\n\nWhat is missing: {review_reason}"
+        sections.append(banner)
     if role:
         sections.append(f"# Role\n{role}")
     sections.append(f"# Objective\n{objective}")
@@ -284,8 +403,41 @@ def render_skill_markdown(
     return "\n\n".join(sections)[:_MAX_SKILL_CHARS]
 
 
+_VALID_REVIEW_STATUSES = ("needs_review", "needs_design_flow")
+_UNSPECIFIED_STEP = (
+    "The source document does not specify the steps for this requirement. "
+    "Clarify what this control/flow actually does before running this skill."
+)
+
+
+def _read_review_status(item: dict) -> tuple[str | None, str | None]:
+    """(review_status, review_reason) as supplied by the model.
+
+    Anything other than the two flagged values — including the literal
+    "ready", an unknown string, or a missing key — normalises to None,
+    meaning "runnable as written". Unknown values are treated as ready
+    rather than flagged so a model quirk cannot mark an entire document as
+    needing review; the validator below flags on the concrete evidence
+    (missing steps) independently of what the model claimed.
+    """
+    raw = item.get("review_status")
+    status = raw if raw in _VALID_REVIEW_STATUSES else None
+    reason = str(item.get("review_reason") or "").strip()[:2000] or None
+    return status, (reason if status else None)
+
+
 def _validate_checkpoint(item: object) -> dict | None:
-    """Return a normalized checkpoint dict, or None if schema-invalid."""
+    """Return a normalized checkpoint dict, or None if there is genuinely
+    nothing to record.
+
+    An under-specified requirement is FLAGGED (review_status), never
+    dropped. Dropping was the previous behaviour and it was the worst
+    available option: the requirement disappeared from the checkpoint list,
+    from the skills list, and from every count the UI showed, so a document
+    full of vague requirements looked identically "fully parsed" to one that
+    was actually complete. Only a checkpoint with no usable content at all
+    still returns None.
+    """
     if not isinstance(item, dict):
         return None
     title = str(item.get("title") or "").strip()
@@ -296,6 +448,7 @@ def _validate_checkpoint(item: object) -> dict | None:
     expected = (
         (str(item["expected"]).strip()[:2000] or None) if item.get("expected") else None
     )
+    review_status, review_reason = _read_review_status(item)
 
     if ctype == "visual":
         description = str(item.get("description") or "").strip()
@@ -312,6 +465,8 @@ def _validate_checkpoint(item: object) -> dict | None:
             "notes": [],
             "page": page,
             "expected": expected,
+            "review_status": review_status,
+            "review_reason": review_reason,
         }
 
     # functional — prefer the structured fields; fall back to a single-step
@@ -331,11 +486,43 @@ def _validate_checkpoint(item: object) -> dict | None:
         instructions = [legacy_description[:_MAX_INSTRUCTION_CHARS]]
     if not objective:
         objective = (legacy_description[:_MAX_OBJECTIVE_CHARS] or title)[:_MAX_OBJECTIVE_CHARS]
-    if not instructions or not objective:
+
+    # Nothing at all to record — no title, no objective, no description.
+    # This is the only case that is still dropped.
+    if not objective and not title:
         return None
 
+    # Missing steps or objective means the source document didn't specify
+    # this requirement well enough to execute it. Flag it and keep it: the
+    # requirement is real, it just isn't runnable yet. The flag is derived
+    # from the evidence here rather than trusted from the model, so a model
+    # that claims "ready" while omitting the steps is still caught.
+    missing: list[str] = []
+    if not instructions:
+        missing.append("no executable steps are given")
+    if not objective:
+        missing.append("no pass condition is stated")
+
+    if missing:
+        review_status = review_status or "needs_review"
+        review_reason = review_reason or (
+            "The source document describes this requirement but "
+            + " and ".join(missing)
+            + "."
+        )
+        if not instructions:
+            instructions = [_UNSPECIFIED_STEP]
+        if not objective:
+            objective = (title or instructions[0])[:_MAX_OBJECTIVE_CHARS]
+
     description = render_skill_markdown(
-        role=role, objective=objective, context=context, instructions=instructions, notes=notes
+        role=role,
+        objective=objective,
+        context=context,
+        instructions=instructions,
+        notes=notes,
+        review_status=review_status,
+        review_reason=review_reason,
     )
     return {
         "type": "functional",
@@ -348,6 +535,8 @@ def _validate_checkpoint(item: object) -> dict | None:
         "notes": notes,
         "page": page,
         "expected": expected,
+        "review_status": review_status,
+        "review_reason": review_reason,
     }
 
 

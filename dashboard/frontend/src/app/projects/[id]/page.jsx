@@ -3,6 +3,13 @@ import { useState, use } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
+import { toastSuccess } from "../../../lib/toast";
+import { Checkbox } from "../../../components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../../../components/ui/tooltip";
 import { apiGet, apiPost, apiPatch } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -88,6 +95,7 @@ export default function ProjectDetailPage({ params }) {
       setShowModal(false);
       setForm({ name: "", suite_type: "smoke", description: "" });
       setFormError("");
+      toastSuccess("Test suite created");
     },
     onError: (e) => setFormError(e.message),
   });
@@ -100,6 +108,7 @@ export default function ProjectDetailPage({ params }) {
       setShowEnvModal(false);
       setProjectFormError("");
       setEnvError("");
+      toastSuccess("Project updated");
     },
     onError: (e) => {
       setProjectFormError(e.message);
@@ -114,6 +123,7 @@ export default function ProjectDetailPage({ params }) {
       qc.invalidateQueries(["project", projectId]);
       setEditingSuite(null);
       setSuiteEditError("");
+      toastSuccess("Test suite updated");
     },
     onError: (e) => setSuiteEditError(e.message),
   });
@@ -576,6 +586,9 @@ export default function ProjectDetailPage({ params }) {
                 </span>
                 {canWrite ? (
                   <div style={{ position: "relative" }}>
+                    <Tooltip>
+                    <TooltipTrigger
+                      render={
                     <button
                       onClick={() =>
                         setOpenSuiteMenuId(openSuiteMenuId === suite.id ? null : suite.id)
@@ -600,6 +613,10 @@ export default function ProjectDetailPage({ params }) {
                         <circle cx="12" cy="19" r="1.8" />
                       </svg>
                     </button>
+                      }
+                    />
+                    <TooltipContent>Suite actions</TooltipContent>
+                    </Tooltip>
                     {openSuiteMenuId === suite.id && (
                       <div
                         style={{
@@ -1004,10 +1021,9 @@ export default function ProjectDetailPage({ params }) {
                         textTransform: "capitalize",
                       }}
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={checked}
-                        onChange={() => toggleEnv(env)}
+                        onCheckedChange={() => toggleEnv(env)}
                       />
                       {env}
                     </label>

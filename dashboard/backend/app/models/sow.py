@@ -107,7 +107,32 @@ class SowSourceStatus(str, PyEnum):
     pending = "pending"
     processing = "processing"
     done = "done"
+    # Some parts of a chunked document extracted, some did not. Distinct
+    # from `done` on purpose (migration 0040): partial results ARE saved
+    # now, and the only thing making that safe is that a partial source can
+    # never be mistaken for a complete one. error_message names the failing
+    # parts so the user knows exactly what to retry.
+    done_with_errors = "done_with_errors"
     error = "error"
+
+
+# Progress stage tokens written to SowDocumentSource.progress_stage
+# (migration 0039). Deliberately plain strings, not a DB Enum: they are
+# display-only breadcrumbs, and adding a stage must never require a
+# migration or risk an enum-value mismatch against an older worker still
+# running mid-deploy. The frontend maps unknown values to a generic
+# "Working" label, so an unrecognised token degrades, never breaks.
+SOW_SOURCE_STAGE_READING = "reading"       # pulling text/blocks out of the file
+SOW_SOURCE_STAGE_CHUNKING = "chunking"     # splitting on structure
+SOW_SOURCE_STAGE_EXTRACTING = "extracting"  # LLM pass, per chunk
+SOW_SOURCE_STAGE_SAVING = "saving"         # dedup + writing ledger rows
+
+SOW_SOURCE_PROGRESS_STAGES = (
+    SOW_SOURCE_STAGE_READING,
+    SOW_SOURCE_STAGE_CHUNKING,
+    SOW_SOURCE_STAGE_EXTRACTING,
+    SOW_SOURCE_STAGE_SAVING,
+)
 
 
 class SowUIElementType(str, PyEnum):
@@ -153,6 +178,15 @@ class SowDocument(Base):
         ForeignKey("sow_document_versions.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Section keys a newly attached source affects, computed by
+    # app.workers.tasks.sow_impact after each extraction (migration 0040).
+    # ADVISORY ONLY -- the Rewrite dialog pre-ticks these; nothing redrafts
+    # off them without the user pressing the button. Cleared when a
+    # generation or patch consumes them.
+    pending_section_keys = mapped_column(JSONB, nullable=True)
+    # How many not-yet-drafted facts arrived with that source. Drives the
+    # "new source affects N sections" banner copy.
+    pending_new_fact_count = mapped_column(Integer, nullable=True)
     created_by = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -286,6 +320,17 @@ class SowRequirementsLedger(Base):
     # e.g. "video_still#3", "transcript:00:14:32", "design_frame:checkout.png"
     # -- traceability back to exactly what produced this fact.
     source_ref = mapped_column(String(500), nullable=True)
+    # The heading path this fact sat under in the SOURCE document, e.g.
+    # ["InterviewGod Platform v2.5.2", "21. Demo List Page"] (migration
+    # 0040). Written by the chunker from the document's real structure, never
+    # by the model, so it cannot be hallucinated. Null for transcripts,
+    # recordings and design images, which have no document outline.
+    #
+    # This is what makes "keep the imported document's format" a property of
+    # stored data: sow_drafting.group_ledger_into_sections groups on it
+    # directly when most facts carry it, reproducing the source's own section
+    # order instead of asking a model to invent a new one.
+    source_heading_path = mapped_column(JSONB, nullable=True)
     assigned_section_key = mapped_column(String(200), nullable=True)
     # Retired (not deleted) once a rewrite supersedes it with a fresher fact
     # from newer source material -- preserves the ledger's audit trail
@@ -369,8 +414,24 @@ class SowDocumentSource(Base):
         index=True,
     )
     error_message = mapped_column(Text, nullable=True)
+    # Live extraction progress (migration 0039). Display-only -- no code
+    # branches on these, so a worker that never writes them (or dies before
+    # it can) degrades to exactly the pre-0039 behaviour: a plain status
+    # badge. progress_stage is one of the SOW_SOURCE_PROGRESS_STAGES tokens
+    # below; progress_total <= 1 or NULL means the work is a single
+    # indivisible LLM call and no honest percentage exists for it.
+    progress_stage = mapped_column(String(40), nullable=True)
+    progress_current = mapped_column(Integer, nullable=True)
+    progress_total = mapped_column(Integer, nullable=True)
     # Informational only -- see migration 0029's comment.
     ledger_fact_count = mapped_column(Integer, nullable=True)
+    # The imported document's own table of contents, in its original order
+    # (migration 0040): [{"heading_path": [...], "heading": str, "locator":
+    # str|null}]. Only existing-SOW sources populate it. Kept so a later
+    # regeneration can reproduce the source's structure rather than an
+    # invented one -- see SowRequirementsLedger.source_heading_path, which is
+    # the per-fact counterpart this is derived alongside.
+    source_outline = mapped_column(JSONB, nullable=True)
     added_by = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

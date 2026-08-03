@@ -38,6 +38,7 @@ celery_app.conf.update(
         "app.workers.tasks.sow_ledger",
         "app.workers.tasks.sow_reconcile",
         "app.workers.tasks.sow_generation",
+        "app.workers.tasks.sow_impact",
     ],
 )
 

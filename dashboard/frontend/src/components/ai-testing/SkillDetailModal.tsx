@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "@/utils/apiClient";
 import { Button } from "@/components/ui/button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -156,19 +161,26 @@ export default function SkillDetailModal({
               {skill.manually_edited ? " · manually edited" : ""}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-700 flex-shrink-0"
-            aria-label="Close"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-              <path
-                fillRule="evenodd"
-                d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
-                clipRule="evenodd"
-              />
-            </svg>
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  onClick={onClose}
+                  className="text-gray-400 hover:text-gray-700 flex-shrink-0"
+                  aria-label="Close"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path
+                      fillRule="evenodd"
+                      d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </button>
+              }
+            />
+            <TooltipContent>Close</TooltipContent>
+          </Tooltip>
         </div>
 
         <div className="px-6 py-4 overflow-y-auto flex-1 space-y-4">

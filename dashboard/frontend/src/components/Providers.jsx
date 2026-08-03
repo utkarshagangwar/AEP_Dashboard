@@ -2,6 +2,8 @@
 
 import { useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 // The pre-emptive "redeem the refresh cookie before anything else fires"
 // logic that used to live here has moved to module-load time in
@@ -25,5 +27,16 @@ export default function Providers({ children }) {
     });
   }
 
-  return <QueryClientProvider client={queryClientRef.current}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={queryClientRef.current}>
+      {/* Short delay rather than 0: these tooltips sit on table-row action
+          icons, and an instant popup on every pointer cross is noise. */}
+      <TooltipProvider delay={350}>
+        {children}
+        {/* Bottom-right so it never covers the sidebar nav or a page's
+            top-right primary actions. */}
+        <Toaster position="bottom-right" />
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
 }

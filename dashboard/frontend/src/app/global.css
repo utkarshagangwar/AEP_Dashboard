@@ -10,7 +10,13 @@
     --card-foreground: oklch(0.145 0 0);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
+    /* The app's blue (#2563EB). Every page styles its accents with that hex
+       inline — sidebar active icon, focus borders, primary buttons — while
+       this token stayed a neutral near-black, so anything built on ui/*
+       rendered black next to blue chrome. Pointing the token at the same blue
+       is what makes the two systems agree. White on this blue is ~5.2:1,
+       which clears AA for body text. */
+    --primary: oklch(0.546 0.245 262.88);
     --primary-foreground: oklch(0.985 0 0);
     --secondary: oklch(0.97 0 0);
     --secondary-foreground: oklch(0.205 0 0);
@@ -19,9 +25,15 @@
     --accent: oklch(0.97 0 0);
     --accent-foreground: oklch(0.205 0 0);
     --destructive: oklch(0.577 0.245 27.325);
+    /* Was missing entirely, so `text-destructive-foreground` (used by
+       delete-icon-button) compiled to nothing and the hover label inherited
+       whatever colour happened to be around. White on this red is ~4.9:1. */
+    --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    /* Blue-tinted to match --primary: a neutral grey focus ring next to blue
+       controls reads as an unstyled default rather than a deliberate state. */
+    --ring: oklch(0.546 0.245 262.88);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
@@ -35,7 +47,8 @@
     --sidebar-accent: oklch(0.97 0 0);
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0)
+    --sidebar-ring: oklch(0.708 0 0);
+    --loader-accent: oklch(0.74 0.16 55);
   }
   .dark {
     --background: oklch(0.145 0 0);
@@ -44,7 +57,9 @@
     --card-foreground: oklch(0.985 0 0);
     --popover: oklch(0.205 0 0);
     --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
+    /* Lighter blue for dark surfaces, keeping the existing dark-mode pattern
+       of a light primary with dark ink on top. */
+    --primary: oklch(0.7 0.16 262.88);
     --primary-foreground: oklch(0.205 0 0);
     --secondary: oklch(0.269 0 0);
     --secondary-foreground: oklch(0.985 0 0);
@@ -53,6 +68,7 @@
     --accent: oklch(0.269 0 0);
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.205 0 0);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.556 0 0);
@@ -102,6 +118,150 @@
     .animate-fade-in-up {
       animation: none;
       opacity: 1;
+    }
+  }
+  @keyframes checkbox-draw {
+    from {
+      stroke-dashoffset: 20;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  .animate-checkbox-draw {
+    stroke-dasharray: 20;
+    stroke-dashoffset: 0;
+    animation: checkbox-draw 0.25s ease-out;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-checkbox-draw {
+      animation: none;
+    }
+  }
+
+  /* ── Delete button ──────────────────────────────────────────────────────
+     The supplied design, translated from styled-components to plain CSS so it
+     needs no new dependency. The motion is a vertical swap: the trash icon
+     grows and slides down out of the pill while the label drops in above it.
+
+     TWO DEVIATIONS FROM THE SOURCE, both to stop it disturbing the page:
+
+     1. Sized down from the source's 50px/140px to 32px/96px. At 50px the
+        button was taller than a table row, so every row in the SOW, Reports
+        and Users tables grew to fit it.
+
+     2. The button is absolutely positioned inside `.delete-button-slot`, a
+        wrapper that reserves the FULL expanded width up front. In the source
+        the button is in normal flow, so growing 32px -> 96px on hover pushed
+        its siblings and reflowed the whole table sideways (the STATUS column
+        visibly jumped). Reserving the space means the pill expands leftward
+        into empty room it already owns: no reflow, and no overlapping the
+        "Rename" action beside it. Everything outside this column is
+        unaffected, hover or not.
+
+     Sizes are variables so a call site can override per context without
+     touching this rule.
+
+     Other additions, all necessary rather than stylistic:
+       · :focus-visible mirrors every :hover rule, so keyboard users get the
+         same reveal instead of a button whose label they can never read.
+       · content: var(--delete-button-label) lets a call site say "Remove" or
+         "Deleting…" instead of the hard-coded "Delete".
+       · :disabled styling, since several call sites disable this mid-request.
+       · a reduced-motion branch — required by PRODUCT.md for all animation.
+         The end states still apply, only the tweening stops. */
+  .delete-button-slot {
+    --delete-button-size: 32px;
+    --delete-button-expanded: 96px;
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+    vertical-align: middle;
+    /* Reserve the expanded footprint permanently — this is what makes the
+       hover cost zero layout. */
+    width: var(--delete-button-expanded);
+    height: var(--delete-button-size);
+  }
+  .delete-button {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: var(--delete-button-size);
+    height: var(--delete-button-size);
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background-color: rgb(20, 20, 20);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0px 0px 12px rgba(0, 0, 0, 0.164);
+    cursor: pointer;
+    transition-duration: 0.3s;
+    overflow: hidden;
+  }
+  .delete-button__icon {
+    width: 11px;
+    transition-duration: 0.3s;
+  }
+  .delete-button__icon path {
+    fill: white;
+  }
+  .delete-button:hover,
+  .delete-button:focus-visible {
+    width: var(--delete-button-expanded);
+    border-radius: 50px;
+    background-color: rgb(255, 69, 69);
+    align-items: center;
+  }
+  .delete-button:hover .delete-button__icon,
+  .delete-button:focus-visible .delete-button__icon {
+    width: var(--delete-button-size);
+    transform: translateY(60%);
+  }
+  .delete-button::before {
+    position: absolute;
+    top: -20px;
+    content: var(--delete-button-label, "Delete");
+    color: white;
+    transition-duration: 0.3s;
+    font-size: 2px;
+  }
+  .delete-button:hover::before,
+  .delete-button:focus-visible::before {
+    /* +6px from the top of a 32px button, matching the source's proportions
+       (it used -20px + 30px on a 50px button). */
+    font-size: 12px;
+    opacity: 1;
+    transform: translateY(26px);
+  }
+  .delete-button:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  .delete-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .delete-button:disabled:hover {
+    width: var(--delete-button-size);
+    border-radius: 50%;
+    background-color: rgb(20, 20, 20);
+  }
+  .delete-button:disabled:hover .delete-button__icon {
+    width: 11px;
+    transform: none;
+  }
+  .delete-button:disabled:hover::before {
+    font-size: 2px;
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .delete-button,
+    .delete-button__icon,
+    .delete-button::before {
+      transition-duration: 0s;
     }
   }
 }

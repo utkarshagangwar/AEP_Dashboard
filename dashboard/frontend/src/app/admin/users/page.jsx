@@ -2,7 +2,11 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
+import GlobalLoader from "../../../components/GlobalLoader";
 import PageContainer from "../../../components/PageContainer";
+import { toastSuccess } from "../../../lib/toast";
+import { Button } from "../../../components/ui/button";
+import { DeleteIconButton } from "../../../components/ui/delete-icon-button";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 import {
@@ -92,6 +96,7 @@ export default function UsersPage() {
       qc.invalidateQueries(["users"]);
       setShowModal(false);
       setForm({ email: "", password: "", full_name: "", role: "viewer", permissions: [] });
+      toastSuccess("User created");
     },
     onError: (e) => setFormError(e.message),
   });
@@ -103,6 +108,7 @@ export default function UsersPage() {
     onSuccess: () => {
       qc.invalidateQueries(["users"]);
       setEditUser(null);
+      toastSuccess("User updated");
     },
     onError: (e) => setFormError(e.message),
   });
@@ -112,6 +118,7 @@ export default function UsersPage() {
     onSuccess: () => {
       qc.invalidateQueries(["users"]);
       setDeleteConfirm(null);
+      toastSuccess("User removed");
     },
   });
 
@@ -254,16 +261,7 @@ export default function UsersPage() {
             ))}
           </div>
           {isLoading ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: "center",
-                color: "#9CA3AF",
-                fontSize: 13,
-              }}
-            >
-              Loading…
-            </div>
+            <GlobalLoader />
           ) : !users.length ? (
             <div
               style={{
@@ -402,20 +400,11 @@ export default function UsersPage() {
                     Edit
                   </button>
                   {user.id !== u.id && (
-                    <button
+                    <DeleteIconButton
                       onClick={() => setDeleteConfirm(u)}
-                      style={{
-                        fontSize: 11,
-                        padding: "4px 8px",
-                        border: "1px solid #FECACA",
-                        borderRadius: 6,
-                        background: "#FEF2F2",
-                        color: "#DC2626",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Remove
-                    </button>
+                      label="Remove"
+                      aria-label={`Remove ${u.email}`}
+                    />
                   )}
                 </div>
               </div>
@@ -612,22 +601,14 @@ export default function UsersPage() {
                 >
                   Cancel
                 </button>
-                <button
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() => createMutation.mutate(form)}
                   disabled={createMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                  }}
                 >
                   {createMutation.isPending ? "Creating…" : "Create User"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

@@ -33,6 +33,16 @@ class SowDocumentOut(BaseModel):
     status: str
     is_active: bool
     current_version_id: Optional[UUID]
+    # Sections a newly attached source affects, computed by the impact task
+    # (migration 0040). The Rewrite dialog pre-ticks these. Empty/None means
+    # nothing new has arrived since the current version was generated.
+    pending_section_keys: Optional[list[str]] = None
+    pending_new_fact_count: Optional[int] = None
+    # Whether a full regeneration is currently offered. False once a version
+    # exists and no source has been added since — regenerating an unchanged
+    # document would discard every hand edit and re-pay for every section to
+    # arrive at the same place. Computed per request, never stored.
+    can_generate: bool = True
     created_by: Optional[UUID]
     created_at: datetime
     updated_at: datetime
@@ -49,6 +59,12 @@ class SowDocumentSourceOut(BaseModel):
     file_name: Optional[str] = None       # denormalized from design_artifacts for display
     status: str
     error_message: Optional[str]
+    # Live extraction progress (migration 0039). All three are None for
+    # sources written before 0039 and for any worker that never reported --
+    # the UI falls back to the plain status badge in that case.
+    progress_stage: Optional[str] = None
+    progress_current: Optional[int] = None
+    progress_total: Optional[int] = None
     ledger_fact_count: Optional[int]
     added_by: Optional[UUID]
     created_at: datetime

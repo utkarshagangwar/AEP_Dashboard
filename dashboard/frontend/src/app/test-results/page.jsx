@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import GlobalLoader from "../../components/GlobalLoader";
 import { apiGet } from "../../utils/apiClient";
 import {
   Select,
@@ -169,16 +170,7 @@ export default function TestResultsPage() {
               ))}
             </div>
             {isLoading ? (
-              <div
-                style={{
-                  padding: 40,
-                  textAlign: "center",
-                  color: "#9CA3AF",
-                  fontSize: 13,
-                }}
-              >
-                Loading…
-              </div>
+              <GlobalLoader />
             ) : !results.length ? (
               <div
                 style={{

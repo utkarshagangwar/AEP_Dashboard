@@ -13,7 +13,13 @@
  * gate route access without a network round trip. It is never read here for
  * authorizing API calls — only the in-memory token is used for that.
  */
-import { setAccessToken, getAccessToken } from "../lib/api";
+import {
+  setAccessToken,
+  getAccessToken,
+  clearAllAuth,
+  refreshAccessToken,
+  getInFlightRefresh,
+} from "../lib/api";
 import { getStoredUser } from "./authStore";
 
 const BASE = "";
@@ -27,61 +33,16 @@ function setTokens(access) {
 }
 
 function clearTokens() {
-  setAccessToken(null);
-  // Clean up any leftovers from the old localStorage-based implementation, in
-  // case this loads in a browser tab that still has stale entries from before.
-  try {
-    localStorage.removeItem("aep_access_token");
-    localStorage.removeItem("aep_refresh_token");
-    localStorage.removeItem("aep_user");
-  } catch {}
+  clearAllAuth();
 }
 
-async function _doRefresh() {
-  try {
-    // No body needed — /api/auth/refresh reads the httpOnly aep_refresh_token
-    // cookie directly; a same-origin fetch sends it automatically.
-    const res = await fetch(`${BASE}/api/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-    });
-    if (!res.ok) {
-      clearTokens();
-      return false;
-    }
-    const data = await res.json();
-    setTokens(data.access_token);
-    // Sync the middleware cookie with the freshly refreshed token.
-    if (typeof document !== "undefined") {
-      document.cookie = `aep_token=${data.access_token}; path=/; max-age=${24 * 60 * 60}; SameSite=Lax`;
-    }
-    return true;
-  } catch {
-    clearTokens();
-    return false;
-  }
-}
-
-// The refresh token is single-use (the backend revokes it and issues a new
-// one on every /auth/refresh call). A dashboard page fires several queries
-// in parallel on mount, and every one of them hits a 401 at the same time
-// whenever the in-memory access token is empty (e.g. right after a hard
-// navigation) — without de-duplication, each would independently call
-// refreshAccessToken(), and all but the first would present an
-// already-rotated-out token and get rejected, forcing a hard logout even
-// though the session was perfectly valid. Sharing one in-flight promise
-// across every concurrent caller is what makes that safe.
-let _refreshPromise = null;
-
-function refreshAccessToken() {
-  if (!_refreshPromise) {
-    _refreshPromise = _doRefresh().finally(() => {
-      _refreshPromise = null;
-    });
-  }
-  return _refreshPromise;
-}
+// The refresh token is single-use (the backend revokes it and issues a new one
+// on every /auth/refresh call), so every concurrent caller must share ONE
+// in-flight rotation. That shared promise now lives in ../lib/api alongside the
+// access token itself, because this module is only half the story: the axios
+// instance there is the other HTTP client, and when the two kept separate
+// dedupe state they could still fire two rotations a few hundred ms apart and
+// hard-log-out a valid session. See the single-flight comment in ../lib/api.
 
 // Kick off a redemption of the httpOnly refresh cookie the instant this
 // module is evaluated — which happens while the JS module graph loads,
@@ -102,12 +63,14 @@ if (typeof window !== "undefined" && getStoredUser() && !getAccessToken()) {
 }
 
 export async function apiFetch(path, options = {}) {
-  // If a refresh is already in flight (the pre-emptive one above, or one
-  // triggered by a sibling request's 401), wait for it before firing this
-  // request instead of racing it — racing means this request goes out
-  // token-less, guaranteed-401s, and only *then* joins the refresh queue.
-  if (_refreshPromise) {
-    await _refreshPromise;
+  // If a refresh is already in flight (the pre-emptive one above, one
+  // triggered by a sibling request's 401, or one started by the axios client
+  // in ../lib/api), wait for it before firing this request instead of racing
+  // it — racing means this request goes out token-less, guaranteed-401s, and
+  // only *then* joins the refresh queue.
+  const inFlight = getInFlightRefresh();
+  if (inFlight) {
+    await inFlight;
   }
   const { access } = getTokens();
   // FormData bodies must NOT get an explicit Content-Type — the browser sets

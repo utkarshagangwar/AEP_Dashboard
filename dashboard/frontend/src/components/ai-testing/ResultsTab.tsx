@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiFetch } from "@/utils/apiClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DeleteIconButton } from "@/components/ui/delete-icon-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import OrchestratorRunDetail from "./OrchestratorRunDetail";
 import RunDetail from "./RunDetail";
@@ -300,26 +301,16 @@ export default function ResultsTab() {
                   })}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <button
+                  <DeleteIconButton
                     onClick={(e) => {
+                      // Row click opens the run detail — this must not.
                       e.stopPropagation();
                       handleDelete(run);
                     }}
                     disabled={deletingId === run.id}
-                    title="Delete report"
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-red-200 text-xs font-medium text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-50"
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
-                      <path
-                        d="M2.5 4h11M6.5 4V2.75A.75.75 0 017.25 2h1.5a.75.75 0 01.75.75V4m2.75 0v9.25a1 1 0 01-1 1h-7.5a1 1 0 01-1-1V4M6.5 7v5M9.5 7v5"
-                        stroke="currentColor"
-                        strokeWidth="1.25"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                    {deletingId === run.id ? "Deleting…" : "Delete"}
-                  </button>
+                    label={deletingId === run.id ? "Deleting…" : "Delete"}
+                    aria-label="Delete report"
+                  />
                 </td>
               </tr>
             ))}

@@ -4,6 +4,12 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  SegmentedTabs,
+  SegmentedTabsIndicator,
+  SegmentedTabsList,
+  SegmentedTabsTab,
+} from "@/components/ui/segmented-tabs";
+import {
   RunResult,
   VideoPane,
   StepRow,
@@ -165,21 +171,27 @@ export default function RunDetail({ result }: { result: RunResult }) {
 
       {/* Subtabs */}
       <div>
-        <div className="flex border-b border-gray-200 gap-6">
-          {(["summary", "steps", "video"] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`pb-3 text-sm font-medium border-b-2 -mb-px transition-colors capitalize ${
-                activeTab === tab
-                  ? "border-gray-900 text-gray-900"
-                  : "border-transparent text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
+        <SegmentedTabs
+          value={activeTab}
+          onValueChange={(value) =>
+            setActiveTab(value as "summary" | "steps" | "video")
+          }
+        >
+          <SegmentedTabsList>
+            <SegmentedTabsIndicator />
+            {(["summary", "steps", "video"] as const).map((tab) => (
+              // w-auto px-4 overrides the component's fixed 50px tab width,
+              // which only fits very short labels.
+              <SegmentedTabsTab
+                key={tab}
+                value={tab}
+                className="w-auto px-4 capitalize"
+              >
+                {tab}
+              </SegmentedTabsTab>
+            ))}
+          </SegmentedTabsList>
+        </SegmentedTabs>
 
         <div className="pt-6">
           {activeTab === "summary" && (

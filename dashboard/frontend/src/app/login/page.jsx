@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { Terminal, ArrowRight, Loader2 } from "lucide-react";
+import { PasswordRevealSwitch } from "../../components/ui/password-reveal-switch";
 import { setAccessToken } from "../../lib/api";
 
 export default function LoginPage() {
@@ -72,112 +73,68 @@ export default function LoginPage() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#F9FAFB",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "24px",
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 400 }}>
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6">
+      <div className="w-full max-w-[400px] animate-fade-in-up">
         {/* Brand */}
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              marginBottom: 8,
-            }}
-          >
-            <img
-              src="/spider-logo.png"
-              alt="AEP logo"
-              width={84}
-              height={53}
-              style={{ flexShrink: 0, objectFit: "contain" }}
-            />
-          </div>
-          <h1
-            style={{
-              fontSize: 24,
-              fontWeight: 600,
-              color: "#111827",
-              margin: 0,
-              letterSpacing: "-0.02em",
-            }}
-          >
+        <div className="text-center mb-8">
+          <img
+            src="/spider-logo.png"
+            alt="AEP logo"
+            width={84}
+            height={53}
+            className="inline-block object-contain mb-2"
+          />
+          <h1 className="text-2xl font-semibold text-gray-900 tracking-[-0.02em] m-0">
             Automation Execution Platform (AEP)
           </h1>
-          <p style={{ fontSize: 13, color: "#6B7280", marginTop: 6 }}>
+          <p className="text-[13px] text-gray-500 mt-1.5">
             Sign in to your workspace
           </p>
         </div>
 
         {/* Card — no <form> tag; uses state + onClick per spec */}
-        <div
-          style={{
-            background: "#fff",
-            border: "1px solid #E5E7EB",
-            borderRadius: 12,
-            padding: 32,
-          }}
-        >
-          <div>
-            <div style={{ marginBottom: 16 }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#374151",
-                  marginBottom: 6,
-                }}
-              >
+        <div className="rounded-xl overflow-hidden shadow-xl shadow-gray-950/10 ring-1 ring-black/5">
+          {/* Terminal-style header */}
+          <div className="flex items-center gap-2 bg-gray-900 px-4 py-2.5">
+            <Terminal className="w-4 h-4 text-blue-400" aria-hidden="true" />
+            <span className="text-sm font-medium text-white">Sign in</span>
+          </div>
+
+          {/* Terminal-style body */}
+          <div className="bg-gray-950 px-4 py-5 [font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace]">
+            <div className="mb-4">
+              <label htmlFor="login-email" className="sr-only">
                 Email address
               </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleLogin();
-                }}
-                placeholder="you@company.com"
-                autoComplete="email"
-                style={{
-                  width: "100%",
-                  padding: "9px 12px",
-                  fontSize: 14,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  outline: "none",
-                  color: "#111827",
-                  background: "#fff",
-                  boxSizing: "border-box",
-                  transition: "border-color 0.15s",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
-                onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
-              />
+              <div className="flex items-center gap-2.5">
+                <span className="text-sm text-emerald-400 shrink-0">
+                  email:
+                </span>
+                <input
+                  id="login-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleLogin();
+                  }}
+                  placeholder="you@company.com"
+                  autoComplete="email"
+                  className="flex-1 min-w-0 bg-transparent text-sm text-white placeholder:text-gray-400 outline-none caret-emerald-400 rounded-sm focus:ring-1 focus:ring-emerald-400/50"
+                />
+              </div>
             </div>
 
-            <div style={{ marginBottom: 24 }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#374151",
-                  marginBottom: 6,
-                }}
-              >
+            <div>
+              <label htmlFor="login-password" className="sr-only">
                 Password
               </label>
-              <div style={{ position: "relative" }}>
+              <div className="flex items-center gap-2.5">
+                <span className="text-sm text-emerald-400 shrink-0">
+                  password:
+                </span>
                 <input
+                  id="login-password"
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -186,92 +143,57 @@ export default function LoginPage() {
                   }}
                   placeholder="••••••••"
                   autoComplete="current-password"
-                  style={{
-                    width: "100%",
-                    padding: "9px 40px 9px 12px",
-                    fontSize: 14,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    outline: "none",
-                    color: "#111827",
-                    background: "#fff",
-                    boxSizing: "border-box",
-                    transition: "border-color 0.15s",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#2563EB")}
-                  onBlur={(e) => (e.target.style.borderColor = "#E5E7EB")}
+                  className="flex-1 min-w-0 bg-transparent text-sm text-white placeholder:text-gray-400 outline-none caret-emerald-400 rounded-sm focus:ring-1 focus:ring-emerald-400/50"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  tabIndex={-1}
-                  style={{
-                    position: "absolute",
-                    right: 10,
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    background: "none",
-                    border: "none",
-                    padding: 4,
-                    cursor: "pointer",
-                    color: "#6B7280",
-                  }}
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
+                <PasswordRevealSwitch
+                  revealed={showPassword}
+                  onRevealedChange={setShowPassword}
+                  labelClassName="text-gray-400"
+                />
               </div>
             </div>
 
             {error && (
-              <div
-                style={{
-                  background: "#FEF2F2",
-                  border: "1px solid #FECACA",
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                  marginBottom: 16,
-                }}
-              >
-                <p style={{ fontSize: 13, color: "#DC2626", margin: 0 }}>
-                  {error}
-                </p>
-              </div>
+              <p role="alert" className="mt-4 text-sm text-red-300">
+                ✗ {error}
+              </p>
             )}
-
-            <button
-              type="button"
-              onClick={handleLogin}
-              disabled={loading}
-              style={{
-                width: "100%",
-                padding: "10px 16px",
-                background: loading ? "#93C5FD" : "#2563EB",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: loading ? "not-allowed" : "pointer",
-                transition: "background 0.15s",
-              }}
-            >
-              {loading ? "Signing in…" : "Sign in"}
-            </button>
           </div>
         </div>
 
-        <p
-          style={{
-            textAlign: "center",
-            marginTop: 20,
-            fontSize: 12,
-            color: "#9CA3AF",
-          }}
+        {/* Sign-in CTA — gradient glow ring on hover/focus */}
+        <button
+          type="button"
+          onClick={handleLogin}
+          disabled={loading}
+          className="group relative w-full mt-5 inline-block p-px rounded-xl bg-gray-800 shadow-lg shadow-gray-950/10 transition-transform duration-300 ease-out motion-reduce:transition-none hover:scale-[1.02] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:scale-100 focus-visible:ring-2 focus-visible:ring-blue-400/60"
         >
+          <span
+            aria-hidden="true"
+            className="absolute inset-0 rounded-xl bg-gradient-to-r from-teal-400 via-blue-500 to-purple-500 opacity-0 transition-opacity duration-500 motion-reduce:transition-none group-hover:opacity-100 group-focus-visible:opacity-100"
+          />
+          <span className="relative z-10 flex items-center justify-center gap-2 rounded-[11px] bg-gray-950 px-6 py-3 text-sm font-semibold text-white">
+            {loading ? (
+              <>
+                <Loader2
+                  className="w-4 h-4 motion-safe:animate-spin"
+                  aria-hidden="true"
+                />
+                Signing in…
+              </>
+            ) : (
+              <>
+                Sign in
+                <ArrowRight
+                  className="w-4 h-4 transition-transform duration-300 motion-reduce:transition-none group-hover:translate-x-1"
+                  aria-hidden="true"
+                />
+              </>
+            )}
+          </span>
+        </button>
+
+        <p className="text-center mt-5 text-xs text-gray-400">
           QA Team Internal Tool · v1.0.0
         </p>
       </div>

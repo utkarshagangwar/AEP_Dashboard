@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import GlobalLoader from "../../components/GlobalLoader";
 import PageContainer from "../../components/PageContainer";
 import { apiGet } from "../../utils/apiClient";
 import {
@@ -30,42 +31,45 @@ const STATUS_BG = {
   cancelled: "#F3F4F6",
 };
 
-function StatCard({ label, value, sub, accent }) {
+// Carries the card design's signature traits — hover lift, diagonal sheen
+// sweep, badge, accent shift — over the existing metric layout.
+//
+// Deliberately not ui/FeatureCard: that component is a fixed 190px wide and
+// leads with a 100px media block plus a "+" action, none of which a metric
+// tile has. Dropping it in here would have broken the five-across grid and
+// shipped an empty gradient panel and a button that does nothing. The label /
+// value / sub hierarchy below is unchanged, so no information moved or was
+// lost; only the surface treatment is new.
+function StatCard({ label, value, sub, accent, badge }) {
   return (
-    <div
-      style={{
-        background: "#fff",
-        border: "1px solid #E5E7EB",
-        borderRadius: 12,
-        padding: "20px 24px",
-      }}
-    >
-      <p
+    <div className="group/stat relative overflow-hidden rounded-xl border border-gray-200 bg-white px-6 py-5 transition-all duration-500 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-1 hover:border-gray-300 hover:shadow-lg motion-reduce:transition-none motion-reduce:hover:translate-y-0">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover/stat:opacity-100 motion-reduce:transition-none"
         style={{
-          margin: "0 0 4px",
-          fontSize: 12,
-          fontWeight: 500,
-          color: "#6B7280",
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
+          background:
+            "linear-gradient(120deg, transparent 40%, rgba(255,255,255,0.8) 50%, transparent 60%)",
         }}
-      >
-        {label}
-      </p>
-      <p
-        style={{
-          margin: "0 0 4px",
-          fontSize: 28,
-          fontWeight: 600,
-          color: accent || "#111827",
-          letterSpacing: "-0.02em",
-        }}
-      >
-        {value ?? "—"}
-      </p>
-      {sub && (
-        <p style={{ margin: 0, fontSize: 12, color: "#6B7280" }}>{sub}</p>
+      />
+
+      {badge && (
+        <span className="absolute top-3 right-3 z-10 scale-75 rounded-full bg-emerald-500 px-2 py-0.5 text-[11px] font-semibold text-white opacity-0 transition-all delay-100 duration-300 group-hover/stat:scale-100 group-hover/stat:opacity-100 motion-reduce:transition-none motion-reduce:delay-0">
+          {badge}
+        </span>
       )}
+
+      <div className="relative">
+        <p className="m-0 mb-1 text-xs font-medium uppercase tracking-[0.06em] text-gray-500">
+          {label}
+        </p>
+        <p
+          className="m-0 mb-1 text-[28px] font-semibold tracking-[-0.02em]"
+          style={{ color: accent || "#111827" }}
+        >
+          {value ?? "—"}
+        </p>
+        {sub && <p className="m-0 text-xs text-gray-500">{sub}</p>}
+      </div>
     </div>
   );
 }
@@ -185,6 +189,12 @@ export default function DashboardPage() {
   const selectedProjectName = selectedProject
     ? projects.find((p) => p.id === selectedProject)?.name
     : null;
+
+  // One full-screen loader for the whole page, replacing the per-panel
+  // "Loading…" text. isLoading (not isFetching) is deliberate: it's true only
+  // on the first load, so the 30s background refetch above never blanks the
+  // dashboard out from under someone reading it.
+  if (isLoading) return <GlobalLoader />;
 
   return (
     <AppShell noPadding>
@@ -325,18 +335,7 @@ export default function DashboardPage() {
                 Recent Test Runs
               </h2>
             </div>
-            {isLoading ? (
-              <div
-                style={{
-                  padding: 32,
-                  textAlign: "center",
-                  color: "#9CA3AF",
-                  fontSize: 13,
-                }}
-              >
-                Loading…
-              </div>
-            ) : !data?.recent_runs?.length ? (
+            {!data?.recent_runs?.length ? (
               <div
                 style={{
                   padding: 32,
@@ -452,19 +451,7 @@ export default function DashboardPage() {
                 Top Open Defects
               </h2>
             </div>
-            {isLoading ? (
-              <div
-                style={{
-                  padding: 32,
-                  textAlign: "center",
-                  color: "#9CA3AF",
-                  fontSize: 13,
-                }}
-              >
-                Loading…
-              </div>
-            ) : (
-              <div style={{ padding: "8px 0" }}>
+            <div style={{ padding: "8px 0" }}>
                 {!(data?.top_defects || []).length ? (
                   <div style={{ padding: "20px 24px", textAlign: "center", color: "#9CA3AF", fontSize: 13 }}>
                     No open defects
@@ -517,8 +504,7 @@ export default function DashboardPage() {
                     </span>
                   </div>
                 ))}
-              </div>
-            )}
+            </div>
           </div>
         </div>
       </PageContainer>

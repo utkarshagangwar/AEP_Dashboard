@@ -25,72 +25,74 @@ from __future__ import annotations
 import os
 
 from app.core.logging import get_logger
-from app.services.design_ingest import IngestError, extract_text
+from app.services import doc_blocks
+from app.services.doc_blocks import Block, IngestError
 
 logger = get_logger(__name__)
 
-# Same ceiling design_ingest.extract_text applies to txt/md/pdf -- kept in
-# sync deliberately, not imported (that constant is module-private there),
-# so a very large parsed .docx is refused rather than silently truncated,
-# consistent with how oversized txt/md/pdf are already handled.
-_MAX_SOW_CHARS = 2_000_000
+# The size ceiling is now enforced in exactly one place
+# (doc_blocks.MAX_SOW_CHARS) instead of being duplicated here and in
+# design_ingest. Re-exported so any caller reading sow_import._MAX_SOW_CHARS
+# still sees the live value rather than a copy that can drift out of sync.
+_MAX_SOW_CHARS = doc_blocks.MAX_SOW_CHARS
 
-_DOCX_EXTENSIONS = (".docx",)
-_DELEGATED_EXTENSIONS = (".txt", ".md", ".pdf")
+_DOCX_EXTENSIONS = doc_blocks.DOCX_EXTENSIONS
+_DELEGATED_EXTENSIONS = doc_blocks.TEXT_EXTENSIONS + doc_blocks.PDF_EXTENSIONS
 SUPPORTED_EXTENSIONS = _DOCX_EXTENSIONS + _DELEGATED_EXTENSIONS
 
 
-def _extract_docx_text(storage_path: str) -> str:
-    """Plain text from a .docx: every paragraph, plus every table cell (SOWs
-    frequently put functional requirements in tables — dropping them would
-    silently lose exactly the kind of exhaustive detail this feature exists
-    to preserve, per SOW_FEATURE_PLAN.md's "if anything goes missing... it
-    will impact the business" constraint)."""
-    try:
-        from docx import Document
+def extract_existing_sow_blocks(storage_path: str, file_name: str) -> list[Block]:
+    """Structured blocks for an uploaded existing-SOW file (SOW_CHUNKING_PLAN
+    Phase 1). Supports .docx, .pdf, .txt, .md — the same format set the
+    "Import SOW" upload endpoint (app/api/v1/sow.py) validates against.
 
-        doc = Document(storage_path)
-    except Exception as exc:  # noqa: BLE001 — python-docx raises several exception types
-        raise IngestError(f"Could not parse .docx file: {exc}") from exc
+    This is what app.services.doc_chunking consumes. Heading levels, table
+    boundaries and page markers are preserved, which is what lets the
+    chunker split on real section boundaries instead of counting characters.
 
-    parts: list[str] = []
-    for para in doc.paragraphs:
-        if para.text.strip():
-            parts.append(para.text)
-    for table in doc.tables:
-        for row in table.rows:
-            cells = [cell.text.strip() for cell in row.cells]
-            if any(cells):
-                parts.append(" | ".join(cells))
-
-    return "\n".join(parts)
+    The .docx parsing that used to live in this module's _extract_docx_text()
+    now lives in doc_blocks, because the .pdf/.md paths need the same block
+    model and duplicating it would have guaranteed the two drifted apart.
+    """
+    ext = os.path.splitext(file_name.lower())[1]
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise IngestError(
+            f"Unsupported SOW format '{ext}'. Use .docx, .pdf, .txt, or .md."
+        )
+    return doc_blocks.extract_blocks(storage_path, file_name)
 
 
 def extract_existing_sow_text(storage_path: str, file_name: str) -> str:
-    """Extract plain text from an uploaded existing-SOW file. Supports
-    .docx, .pdf, .txt, .md — the same format set the "Import SOW" upload
-    endpoint (app/api/v1/sow.py) validates against."""
-    ext = os.path.splitext(file_name.lower())[1]
+    """Plain text from an uploaded existing-SOW file, rendered from the
+    structured blocks above.
 
-    if ext in _DOCX_EXTENSIONS:
-        text = _extract_docx_text(storage_path).strip()
-        if not text:
-            raise IngestError(
-                "No text could be extracted from this .docx file. If it's mostly "
-                "images/scans, it needs OCR first."
-            )
-        if len(text) > _MAX_SOW_CHARS:
-            raise IngestError(
-                f"Document is too large to ingest ({len(text):,} chars). "
-                "Split it into smaller files and upload separately."
-            )
-        return text
+    BEHAVIOR CHANGE (SOW_CHUNKING_PLAN Phase 1, deliberate): .docx tables now
+    appear in their true document position. The previous implementation read
+    every paragraph first and every table afterwards, which relocated each
+    table to the END of the document — a requirements table under
+    "2. Requirements" was emitted after "5. Sign-off", severing it from its
+    heading, and on any document over one chunk's worth of text every table
+    landed together in the final chunk with the least surrounding context.
+
+    No content is gained or lost by this change; only ordering is corrected.
+    tests/test_doc_blocks.py asserts both halves of that claim
+    (test_te001a_docx_render_preserves_all_content,
+    test_te001b_docx_tables_appear_in_document_order).
+
+    .txt/.md/.pdf still delegate to design_ingest.extract_text unchanged --
+    that path returns the author's raw bytes, which preserves markdown
+    heading markers and list bullets the LLM prompt benefits from seeing.
+    Only .docx needs rendering, because .docx has no plain-text form.
+    """
+    ext = os.path.splitext(file_name.lower())[1]
 
     if ext in _DELEGATED_EXTENSIONS:
         # Unmodified reuse of the existing SOW-Checkpoints extractor's text
         # extraction -- identical need, zero duplicated logic/behavior.
+        from app.services.design_ingest import extract_text
+
         return extract_text(storage_path, file_name)
 
-    raise IngestError(
-        f"Unsupported SOW format '{ext}'. Use .docx, .pdf, .txt, or .md."
+    return doc_blocks.render_blocks(
+        extract_existing_sow_blocks(storage_path, file_name)
     )

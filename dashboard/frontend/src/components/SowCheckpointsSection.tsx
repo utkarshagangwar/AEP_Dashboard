@@ -45,6 +45,12 @@ interface Checkpoint {
   notes?: string[];
   page?: string | null;
   expected?: string | null;
+  // null/absent = fully specified and runnable. Set when the source document
+  // named this requirement without specifying it well enough to execute —
+  // the checkpoint is real, it just isn't ready. Optional because
+  // checkpoints parsed before this shipped carry no such field.
+  review_status?: "needs_review" | "needs_design_flow" | null;
+  review_reason?: string | null;
 }
 
 interface Part {
@@ -465,6 +471,42 @@ export default function SowCheckpointsSection({
                           {(parts[sow.id] || []).filter((p) => p.status === "done").length} of{" "}
                           {sow.total_parts} analyzed)
                         </p>
+                        {/* Parts analyze automatically, chained one after
+                            another. The per-part buttons below stay as the
+                            retry path for a part that failed. */}
+                        {(() => {
+                          const list = parts[sow.id] || [];
+                          const running = list.find((p) => p.status === "processing");
+                          const waiting = list.some((p) => p.status === "pending");
+                          if (running) {
+                            return (
+                              <p className="text-xs text-blue-600">
+                                Analyzing part {running.part_number} of {sow.total_parts}{" "}
+                                automatically — the rest follow on their own.
+                              </p>
+                            );
+                          }
+                          if (waiting && sow.parse_status !== "error") {
+                            return (
+                              <p className="text-xs text-gray-500">
+                                Queued — remaining parts start automatically.
+                              </p>
+                            );
+                          }
+                          return null;
+                        })()}
+                        {(() => {
+                          const flagged = (checkpoints[sow.id] || []).filter(
+                            (c) => c.review_status
+                          ).length;
+                          if (!flagged) return null;
+                          return (
+                            <p className="text-xs text-amber-700">
+                              {flagged} checkpoint{flagged === 1 ? "" : "s"} need review —
+                              the document does not specify them well enough to run.
+                            </p>
+                          );
+                        })()}
                         {(parts[sow.id] || []).length === 0 ? (
                           <p className="text-xs text-gray-400">Loading parts…</p>
                         ) : (
@@ -564,7 +606,27 @@ export default function SowCheckpointsSection({
                                     <span className="text-sm font-medium text-gray-800 truncate">
                                       {cp.title}
                                     </span>
+                                    {cp.review_status && (
+                                      // A flagged checkpoint is a real
+                                      // requirement the document under-specified.
+                                      // It is shown, not hidden — but it must
+                                      // never read as ready to run.
+                                      <Badge
+                                        variant="outline"
+                                        className="text-amber-700 border-amber-300 bg-amber-50 shrink-0"
+                                        title={cp.review_reason || undefined}
+                                      >
+                                        {cp.review_status === "needs_design_flow"
+                                          ? "needs design flow"
+                                          : "needs review"}
+                                      </Badge>
+                                    )}
                                   </div>
+                                  {cp.review_status && cp.review_reason && (
+                                    <p className="mt-1 text-xs text-amber-700">
+                                      {cp.review_reason}
+                                    </p>
+                                  )}
 
                                   {hasStructure ? (
                                     <div className="mt-1.5 space-y-1.5 text-sm text-gray-600 border-l-2 border-blue-100 pl-3">

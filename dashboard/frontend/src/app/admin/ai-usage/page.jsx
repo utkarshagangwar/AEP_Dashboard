@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
 import { apiGet, apiPut, apiDelete } from "../../../utils/apiClient";
+import { toastSuccess } from "../../../lib/toast";
 import { getStoredUser } from "../../../utils/authStore";
 import {
   Table,
@@ -95,6 +96,7 @@ function KeyLimitEditor({ keyRow, onSaved }) {
       setEditing(false);
       setError("");
       onSaved();
+      toastSuccess("Limit saved");
     },
     onError: (e) => setError(e.message),
   });
@@ -104,6 +106,7 @@ function KeyLimitEditor({ keyRow, onSaved }) {
     onSuccess: () => {
       setEditing(false);
       onSaved();
+      toastSuccess("Limit cleared");
     },
   });
 

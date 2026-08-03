@@ -47,6 +47,7 @@ from app.models.visual_qa import (
     VisualRun,
     VisualRunStatus,
 )
+from app.services.doc_chunking import STRATEGY_HARD_SPLIT
 
 logger = get_logger(__name__)
 
@@ -199,6 +200,13 @@ class CheckpointOut(BaseModel):
     notes: list[str] = []
     page: str | None
     expected: str | None
+    # None = fully specified and runnable. "needs_review"/"needs_design_flow"
+    # mean the source document named this requirement but did not specify it
+    # well enough to execute — the checkpoint is real, not ready. Optional
+    # because checkpoints parsed before migration 0040 have no such key in
+    # their stored JSONB.
+    review_status: str | None = None
+    review_reason: str | None = None
 
 
 class PartOut(BaseModel):
@@ -209,6 +217,30 @@ class PartOut(BaseModel):
     checkpoint_count: int
     char_count: int
     preview: str
+
+    # ── Chunk provenance (SOW_CHUNKING_PLAN Phase 3 / migration 0038) ──
+    # Exposed so the chunker's behavior is assertable from the UI and from
+    # the Robot Framework suites, not just from worker logs. Without these
+    # on the API, a vibe test can only verify chunking by reading the
+    # database directly, which is not a vibe test.
+    #
+    # All default to null: parts written before migration 0038 carry no
+    # provenance and must keep rendering.
+    #
+    # heading_path -- the section this part covers, e.g.
+    #   ["2. Functional Requirements", "2.1 Candidate List"].
+    heading_path: list[str] = []
+    # locator -- "p.12" / "§4.3.2" / "00:14:32", traceability into the source.
+    locator: str | None = None
+    # strategy -- which chunking strategy produced this part.
+    strategy: str | None = None
+    # degraded -- True when strategy == "hard_split", meaning this part had
+    #   to be cut at an arbitrary point because a single unit (an unbroken
+    #   paragraph, an oversized table row) exceeded the character budget on
+    #   its own. Extraction quality at those boundaries is reduced. The UI
+    #   renders this as a badge; suite 05_failure_surfacing.robot asserts on
+    #   it.
+    degraded: bool = False
 
 
 class SowDetailOut(SowOut):
@@ -255,6 +287,8 @@ def _checkpoint_out(c: dict) -> CheckpointOut:
         notes=[str(s) for s in (c.get("notes") or [])],
         page=c.get("page"),
         expected=c.get("expected"),
+        review_status=c.get("review_status"),
+        review_reason=c.get("review_reason"),
     )
 
 
@@ -281,6 +315,14 @@ def _parts_out(db: Session, artifact: DesignArtifact) -> list["PartOut"]:
                 checkpoint_count=len(p.checkpoints or []),
                 char_count=p.char_count,
                 preview=(p.content or "").strip()[:160],
+                # heading_path is JSONB; guard the type rather than trusting
+                # it, since rows predating migration 0038 hold NULL.
+                heading_path=[str(h) for h in (p.heading_path or [])]
+                if isinstance(p.heading_path, list)
+                else [],
+                locator=p.locator,
+                strategy=p.strategy,
+                degraded=(p.strategy == STRATEGY_HARD_SPLIT),
             )
             for p in sow_parts
         ]

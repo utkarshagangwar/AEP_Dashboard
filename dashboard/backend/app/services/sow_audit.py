@@ -30,6 +30,11 @@ from app.services.design_ingest import IngestError
 
 logger = get_logger(__name__)
 
+# Facts per audit call. Matches sow_drafting._FACTS_PER_DRAFT_CALL: the audit
+# returns one verdict object per fact, so its response grows with the fact
+# count exactly the way drafting's does.
+_FACTS_PER_AUDIT_CALL = 45
+
 _AUDIT_SYSTEM = (
     "You are an independent QA reviewer auditing a drafted Statement of "
     "Work section. You did NOT write this draft — your job is to catch "
@@ -83,38 +88,66 @@ def audit_section(heading: str, blocks: list[dict], facts: list) -> tuple[int, l
     if not facts:
         return 100, [], ""
 
-    indexed = [_fact_summary(f, i) for i, f in enumerate(facts)]
     section_text = render_blocks_markdown(blocks)
-    prompt = (
-        f"Section: {heading}\n\n"
-        f"Facts to verify:\n{indexed}\n\n"
-        f"Drafted section text:\n{section_text}"
-    )
-
-    try:
-        result = llm_router.complete(prompt, system=_AUDIT_SYSTEM, expect_json=True, max_tokens=4096)
-    except llm_router.LLMRouterError as exc:
-        raise IngestError(f"All LLM providers failed while auditing section '{heading}': {exc}") from exc
-
-    raw = result.parsed_json or {}
-    raw_results = raw.get("results", []) if isinstance(raw, dict) else []
 
     covered_indices: set[int] = set()
     addressed: set[int] = set()
     gaps: list[dict] = []
+    models_used: list[str] = []
+    failures = 0
+    total_batches = 0
 
-    for entry in raw_results:
-        if not isinstance(entry, dict):
+    # Batched for the same reason drafting is: the audit must return one
+    # entry per fact, so a section with a few hundred facts overran the
+    # response budget. A truncated audit response is uniquely damaging here —
+    # every fact it never got to is counted as a gap by the sweep below, so
+    # truncation showed up as a catastrophic coverage score on a section that
+    # was actually fine.
+    for offset in range(0, len(facts), _FACTS_PER_AUDIT_CALL):
+        total_batches += 1
+        batch = facts[offset : offset + _FACTS_PER_AUDIT_CALL]
+        indexed = [_fact_summary(f, offset + i) for i, f in enumerate(batch)]
+        prompt = (
+            f"Section: {heading}\n\n"
+            f"Facts to verify:\n{indexed}\n\n"
+            f"Drafted section text:\n{section_text}"
+        )
+
+        try:
+            result = llm_router.complete_json_complete(
+                prompt, system=_AUDIT_SYSTEM, max_tokens=8192
+            )
+        except llm_router.LLMRouterError as exc:
+            failures += 1
+            logger.warning(
+                "SOW audit: section '%s' batch at offset %d failed: %s",
+                heading, offset, exc,
+            )
             continue
-        idx = entry.get("index")
-        if not isinstance(idx, int) or not (0 <= idx < len(facts)) or idx in addressed:
-            continue
-        addressed.add(idx)
-        reason = str(entry.get("reason") or "").strip()[:1000]
-        if entry.get("covered") is True:
-            covered_indices.add(idx)
-        else:
-            gaps.append(_gap_entry(facts[idx], idx, reason or "Flagged as not covered by the audit."))
+
+        if result.model_used not in models_used:
+            models_used.append(result.model_used)
+        raw = result.parsed_json or {}
+        raw_results = raw.get("results", []) if isinstance(raw, dict) else []
+
+        for entry in raw_results:
+            if not isinstance(entry, dict):
+                continue
+            idx = entry.get("index")
+            if not isinstance(idx, int) or not (0 <= idx < len(facts)) or idx in addressed:
+                continue
+            addressed.add(idx)
+            reason = str(entry.get("reason") or "").strip()[:1000]
+            if entry.get("covered") is True:
+                covered_indices.add(idx)
+            else:
+                gaps.append(_gap_entry(facts[idx], idx, reason or "Flagged as not covered by the audit."))
+
+    if failures == total_batches:
+        raise IngestError(
+            f"All LLM providers failed while auditing section '{heading}' "
+            f"({total_batches} batch(es))."
+        )
 
     # Any fact index the audit response never addressed at all is ALSO a
     # gap, never assumed covered by omission — same principle used
@@ -125,11 +158,14 @@ def audit_section(heading: str, blocks: list[dict], facts: list) -> tuple[int, l
             gaps.append(_gap_entry(fact, i, "Audit response did not address this fact."))
 
     score = round(100 * len(covered_indices) / len(facts))
+    model_label = ", ".join(models_used)
     logger.info(
-        "SOW audit: section '%s' — %d/%d fact(s) covered (%d%%), %d gap(s), via %s",
-        heading, len(covered_indices), len(facts), score, len(gaps), result.model_used,
+        "SOW audit: section '%s' — %d/%d fact(s) covered (%d%%), %d gap(s), "
+        "%d batch(es) (%d failed), via %s",
+        heading, len(covered_indices), len(facts), score, len(gaps),
+        total_batches, failures, model_label or "unknown",
     )
-    return score, gaps, result.model_used
+    return score, gaps, model_label
 
 
 def _gap_entry(fact, index: int, reason: str) -> dict:

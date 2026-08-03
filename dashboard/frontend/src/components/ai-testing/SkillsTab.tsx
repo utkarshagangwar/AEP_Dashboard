@@ -5,6 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiFetch } from "@/utils/apiClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DeleteIconButton } from "@/components/ui/delete-icon-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -319,11 +321,9 @@ export default function SkillsTab({
           passes.
         </p>
         <label className="flex items-center gap-2 text-sm text-gray-600 flex-shrink-0 cursor-pointer">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allowFallback}
-            onChange={(e) => setAllowFallback(e.target.checked)}
-            className="rounded border-gray-300"
+            onCheckedChange={(checked) => setAllowFallback(checked === true)}
           />
           Fall back to AI planning if replay fails
         </label>
@@ -397,11 +397,9 @@ export default function SkillsTab({
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer select-none">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={skills.length > 0 && skills.every((s) => selectedIds.has(s.id))}
-                onChange={() => toggleSelectAllOnPage(skills)}
-                className="rounded border-gray-300"
+                onCheckedChange={() => toggleSelectAllOnPage(skills)}
               />
               Select all on this page
             </label>
@@ -437,15 +435,14 @@ export default function SkillsTab({
                 >
                   Run selected
                 </Button>
-                <Button
+                {/* Label stays "Delete" so the button keeps its designed
+                    collapse/expand geometry; the toolbar it sits in already
+                    reads "N selected", and aria-label carries the full intent. */}
+                <DeleteIconButton
                   onClick={handleBulkDelete}
                   disabled={bulkPending}
-                  size="sm"
-                  variant="outline"
-                  className="h-8 text-xs text-gray-500 hover:text-red-600 hover:border-red-300"
-                >
-                  Delete selected
-                </Button>
+                  aria-label="Delete selected skills"
+                />
                 <Button
                   onClick={clearSelection}
                   disabled={bulkPending}
@@ -462,11 +459,10 @@ export default function SkillsTab({
           {skills.map((skill) => (
             <Card key={skill.id} className="shadow-sm">
               <CardContent className="pt-4 pb-4 flex items-center gap-4">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={selectedIds.has(skill.id)}
-                  onChange={() => toggleSelect(skill.id)}
-                  className="flex-shrink-0 rounded border-gray-300"
+                  onCheckedChange={() => toggleSelect(skill.id)}
+                  className="flex-shrink-0"
                   aria-label={`Select ${skill.name}`}
                 />
                 <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
@@ -502,6 +498,19 @@ export default function SkillsTab({
                     {skill.source_type && (
                       <span className="flex-shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded border text-gray-500 border-gray-300 bg-gray-50">
                         from {skill.source_type}
+                      </span>
+                    )}
+                    {skill.review_status && (
+                      /* The requirement is real but its source never spelled
+                         out how to execute it. Surfaced so it can be
+                         clarified — never silently presented as runnable. */
+                      <span
+                        title={skill.review_reason || undefined}
+                        className="flex-shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded border text-amber-700 border-amber-300 bg-amber-50"
+                      >
+                        {skill.review_status === "needs_design_flow"
+                          ? "needs design flow"
+                          : "needs review"}
                       </span>
                     )}
                     <span className="flex-shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded border text-purple-600 border-purple-300 bg-purple-50">
@@ -561,14 +570,11 @@ export default function SkillsTab({
                     ? "Replay"
                     : "Run"}
                 </Button>
-                <Button
+                <DeleteIconButton
                   onClick={() => handleDelete(skill)}
-                  variant="outline"
-                  size="sm"
-                  className="flex-shrink-0 text-gray-500 hover:text-red-600 hover:border-red-300"
-                >
-                  Delete
-                </Button>
+                  className="flex-shrink-0"
+                  aria-label={`Delete skill ${skill.name}`}
+                />
               </CardContent>
             </Card>
           ))}

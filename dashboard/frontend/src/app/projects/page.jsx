@@ -2,7 +2,16 @@
 import { useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import GlobalLoader from "../../components/GlobalLoader";
 import PageContainer from "../../components/PageContainer";
+import ScriptRunTabs from "../../components/ScriptRunTabs";
+import { toastSuccess } from "../../lib/toast";
+import { Button } from "../../components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../../components/ui/tooltip";
 import { apiGet, apiPost, apiPatch } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
 
@@ -42,6 +51,7 @@ export default function ProjectsPage() {
       qc.invalidateQueries(["projects"]);
       setEditingProject(null);
       setEditError("");
+      toastSuccess("Project updated");
     },
     onError: (e) => setEditError(e.message),
   });
@@ -92,6 +102,7 @@ export default function ProjectsPage() {
   return (
     <AppShell noPadding>
       <PageContainer>
+        <ScriptRunTabs />
         {/* Header */}
         <div
           style={{
@@ -118,24 +129,15 @@ export default function ProjectsPage() {
               RevOps, LMS
             </p>
           </div>
-          <button
+          <Button
+            variant="invert"
+            size="lg"
             onClick={handleDiscoverProjects}
             disabled={isDiscovering}
-            style={{
-              padding: "7px 16px",
-              fontSize: 12,
-              fontWeight: 600,
-              background: isDiscovering ? "#D1D5DB" : "#F3F4F6",
-              color: "#374151",
-              border: "1px solid #E5E7EB",
-              borderRadius: 8,
-              cursor: isDiscovering ? "not-allowed" : "pointer",
-              whiteSpace: "nowrap",
-              transition: "background 0.15s",
-            }}
+            className="whitespace-nowrap"
           >
             {isDiscovering ? "Scanning…" : "Discover Project"}
-          </button>
+          </Button>
         </div>
 
         {/* Discovery result banner */}
@@ -240,16 +242,7 @@ export default function ProjectsPage() {
           </div>
 
           {isLoading ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: "center",
-                color: "#9CA3AF",
-                fontSize: 13,
-              }}
-            >
-              Loading…
-            </div>
+            <GlobalLoader />
           ) : !projects.length ? (
             <div
               style={{
@@ -364,30 +357,43 @@ export default function ProjectsPage() {
                     style={{ position: "relative" }}
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <button
-                      onClick={() =>
-                        setOpenMenuId(openMenuId === p.id ? null : p.id)
-                      }
-                      aria-label="Project actions"
-                      style={{
-                        width: 28,
-                        height: 28,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: openMenuId === p.id ? "#F3F4F6" : "transparent",
-                        border: "none",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        color: "#6B7280",
-                      }}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <circle cx="12" cy="5" r="1.8" />
-                        <circle cx="12" cy="12" r="1.8" />
-                        <circle cx="12" cy="19" r="1.8" />
-                      </svg>
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            onClick={() =>
+                              setOpenMenuId(openMenuId === p.id ? null : p.id)
+                            }
+                            aria-label="Project actions"
+                            style={{
+                              width: 28,
+                              height: 28,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              background:
+                                openMenuId === p.id ? "#F3F4F6" : "transparent",
+                              border: "none",
+                              borderRadius: 6,
+                              cursor: "pointer",
+                              color: "#6B7280",
+                            }}
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="currentColor"
+                            >
+                              <circle cx="12" cy="5" r="1.8" />
+                              <circle cx="12" cy="12" r="1.8" />
+                              <circle cx="12" cy="19" r="1.8" />
+                            </svg>
+                          </button>
+                        }
+                      />
+                      <TooltipContent>Project actions</TooltipContent>
+                    </Tooltip>
                     {openMenuId === p.id && (
                       <div
                         style={{

@@ -24,6 +24,7 @@ import { apiGet, apiPost } from "@/utils/apiClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface Frame {
   node_id: string;
@@ -217,11 +218,9 @@ export default function FigmaImportSection({
                   key={f.node_id}
                   className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50"
                 >
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected.has(f.node_id)}
-                    onChange={() => toggleFrame(f.node_id)}
-                    className="rounded border-gray-300"
+                    onCheckedChange={() => toggleFrame(f.node_id)}
                   />
                   <span className="text-sm text-gray-800 truncate">{f.name}</span>
                   {f.page && (

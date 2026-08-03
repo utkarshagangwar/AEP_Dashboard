@@ -341,6 +341,13 @@ class AISkillResponse(BaseModel):
     # edit from being overwritten the next time its source SOW/video part
     # is re-analyzed.
     manually_edited: bool = False
+    # None = fully specified by its source and runnable as written.
+    # "needs_review" / "needs_design_flow" mean the source document named
+    # this requirement without specifying it well enough to execute; the
+    # skill exists so the gap is visible and assignable, not so it can be
+    # run as-is. review_reason says what specifically is missing.
+    review_status: Optional[str] = None
+    review_reason: Optional[str] = None
     step_count: int = 0
     times_replayed: int = 0
     last_replay_status: Optional[str] = None

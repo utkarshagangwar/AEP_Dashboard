@@ -1,11 +1,11 @@
 "use client";
 import { useState, useEffect } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  FolderOpen,
   Bug,
-  PlayCircle,
-  FileBarChart,
+  Workflow,
   Bot,
   FileText,
   Users,
@@ -25,33 +25,17 @@ const NAV = [
     icon: <LayoutDashboard size={16} />,
   },
   {
-    label: "Projects",
-    href: "/projects",
-    permission: "projects",
-    icon: <FolderOpen size={16} />,
+    label: "Script Runs",
+    href: "/script-run",
+    permissions: ["projects", "execute"],
+    activePaths: ["/script-run", "/projects", "/execute", "/reports"],
+    icon: <Workflow size={16} />,
   },
   {
     label: "Defects",
     href: "/defects",
     permission: "defects",
     icon: <Bug size={16} />,
-  },
-  {
-    label: "Execute",
-    href: "/execute",
-    permission: "execute",
-    icon: <PlayCircle size={16} />,
-  },
-  {
-    label: "Reports",
-    href: "/reports",
-    // No permission key — the backend never actually gated /api/v1/reports/*
-    // behind a "reports" permission (it only required being logged in), and
-    // "reports" was a grantable-but-never-enforced key; removed 2026-07-15
-    // along with the equally dead "test_runs" key. Keeping a UI-only gate on
-    // a permission nobody can be granted anymore would just hide this link
-    // from every non-admin user, so this now matches actual backend access.
-    icon: <FileBarChart size={16} />,
   },
   {
     label: "Vibe Testing",
@@ -86,11 +70,14 @@ const ADMIN_NAV = [
   },
 ];
 
-function NavLink({ href, icon, label }) {
-  const active =
-    typeof window !== "undefined" && window.location.pathname === href;
+function NavLink({ href, icon, label, activePaths }) {
+  // usePathname, not window.location: with client-side routing the URL changes
+  // without a remount, so reading window.location here would leave the active
+  // highlight stuck on whichever page happened to be loaded first.
+  const pathname = usePathname();
+  const active = (activePaths || [href]).includes(pathname);
   return (
-    <a
+    <Link
       href={href}
       style={{
         display: "flex",
@@ -125,7 +112,7 @@ function NavLink({ href, icon, label }) {
         {icon}
       </span>
       {label}
-    </a>
+    </Link>
   );
 }
 
@@ -163,9 +150,11 @@ export default function AppShell({ children, noPadding = false }) {
   // user.permissions. Users/Audit Logs stay admin-only, matching the
   // backend (they're the access-control mechanism itself).
   const isAdmin = user.role === "admin";
-  const visibleNav = NAV.filter(
-    (n) => isAdmin || !n.permission || (user.permissions || []).includes(n.permission),
-  );
+  const visibleNav = NAV.filter((n) => {
+    if (isAdmin || (!n.permission && !n.permissions)) return true;
+    if (n.permission) return (user.permissions || []).includes(n.permission);
+    return n.permissions.some((permission) => (user.permissions || []).includes(permission));
+  });
 
   return (
     <div

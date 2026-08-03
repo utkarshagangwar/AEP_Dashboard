@@ -1,9 +1,13 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
+import { toastSuccess } from "../../../lib/toast";
+import { Checkbox } from "../../../components/ui/checkbox";
+import { DeleteIconButton } from "../../../components/ui/delete-icon-button";
+import { ErrorAlert } from "../../../components/ui/error-state";
 import { apiGet, apiFetch, apiPost, apiDelete } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -42,19 +46,142 @@ const NON_PATCHABLE_SECTION_KEYS = new Set([
   "sign-off-acceptance-criteria",
 ]);
 
+// done_with_errors: some parts of a chunked document extracted and some did
+// not. Deliberately amber rather than green — partial results ARE saved now,
+// and the only thing that makes that safe is that a partial source can never
+// be mistaken at a glance for a complete one. error_message names the
+// failing parts.
 const SOURCE_STATUS_COLORS = {
   pending: "#6B7280",
   processing: "#2563EB",
   done: "#16A34A",
+  done_with_errors: "#B45309",
   error: "#DC2626",
 };
 const SOURCE_STATUS_BG = {
   pending: "#F3F4F6",
   processing: "#DBEAFE",
   done: "#DCFCE7",
+  done_with_errors: "#FEF3C7",
   error: "#FEE2E2",
 };
+const SOURCE_STATUS_LABELS = {
+  done_with_errors: "Done with errors",
+};
 const ACTIVE_SOURCE_STATUSES = new Set(["pending", "processing"]);
+
+// Progress stage tokens written by the ledger workers
+// (backend/app/models/sow.py::SOW_SOURCE_PROGRESS_STAGES). Any value not
+// listed here falls back to "Working" rather than rendering a raw token --
+// a newer worker introducing a stage this build doesn't know about must
+// degrade, never show machine text to the user.
+const SOURCE_STAGE_LABELS = {
+  reading: "Reading file",
+  chunking: "Splitting into parts",
+  extracting: "Extracting facts",
+  saving: "Saving to ledger",
+};
+
+// Live progress cell for the Attached sources table.
+//
+// Replaces a status badge that could only ever read "Processing", with no
+// way to tell a working extraction from a dead worker. Three render modes,
+// picked by what the backend can honestly report:
+//   1. not processing            -> the plain badge, exactly as before.
+//   2. processing, total > 1     -> real bar + percentage + "part N of M".
+//   3. processing, no total      -> stage label only (single indivisible
+//                                   LLM call: a recording, a design image,
+//                                   or file-read before chunking). No fake
+//                                   percentage is invented for these.
+// A source mid-flight when this shipped, or one whose worker never reported,
+// has progress_stage === null and lands in mode 3 with a generic label.
+function SourceProgressCell({ source }) {
+  const isActive = ACTIVE_SOURCE_STATUSES.has(source.status);
+  if (!isActive) {
+    return (
+      <Badge
+        status={source.status}
+        colors={SOURCE_STATUS_COLORS}
+        bg={SOURCE_STATUS_BG}
+        labels={SOURCE_STATUS_LABELS}
+      />
+    );
+  }
+
+  const stageLabel =
+    SOURCE_STAGE_LABELS[source.progress_stage] ||
+    (source.status === "pending" ? "Queued" : "Working");
+
+  const total = Number(source.progress_total) || 0;
+  const current = Number(source.progress_current) || 0;
+  // Only a total above 1 is a real denominator -- 0/null means "no divisible
+  // unit", and 1 means a single chunk, where a bar jumping 0->100 says less
+  // than the stage name does.
+  const hasBar = total > 1;
+  // Clamped both ends: a retry racing a stale poll could momentarily yield
+  // current > total, which would otherwise overflow the bar track.
+  const pct = hasBar ? Math.min(100, Math.max(0, Math.round((current / total) * 100))) : null;
+
+  return (
+    <div style={{ minWidth: 150 }}>
+      {hasBar ? (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              role="progressbar"
+              aria-valuenow={pct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`${stageLabel}: ${pct}% complete`}
+              style={{
+                flex: 1,
+                height: 5,
+                background: "#F3F4F6",
+                borderRadius: 999,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${pct}%`,
+                  height: "100%",
+                  background: "#2563EB",
+                  transition: "width 300ms ease",
+                }}
+              />
+            </div>
+            <span
+              style={{ fontSize: 12, fontWeight: 600, color: "#1D4ED8", minWidth: 34, textAlign: "right" }}
+            >
+              {pct}%
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 4 }}>
+            {stageLabel} · part {Math.min(current + 1, total)} of {total}
+          </div>
+        </>
+      ) : (
+        <>
+          <span
+            style={{
+              display: "inline-block",
+              fontSize: 11,
+              fontWeight: 600,
+              color: SOURCE_STATUS_COLORS[source.status] || "#6B7280",
+              background: SOURCE_STATUS_BG[source.status] || "#F3F4F6",
+              borderRadius: 999,
+              padding: "2px 9px",
+              textTransform: "capitalize",
+            }}
+          >
+            {source.status}
+          </span>
+          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 4 }}>{stageLabel}…</div>
+        </>
+      )}
+    </div>
+  );
+}
 
 const FACT_TYPE_LABELS = {
   feature: "Feature",
@@ -119,7 +246,11 @@ function CoverageBadge({ score }) {
   );
 }
 
-function Badge({ status, colors, bg }) {
+function Badge({ status, colors, bg, labels }) {
+  // A label overrides the raw token so a machine value like
+  // "done_with_errors" reads as "Done with errors" instead of relying on
+  // capitalize, which would leave the underscores visible.
+  const label = labels?.[status];
   return (
     <span
       style={{
@@ -130,10 +261,10 @@ function Badge({ status, colors, bg }) {
         background: bg[status] || "#F3F4F6",
         borderRadius: 999,
         padding: "2px 9px",
-        textTransform: "capitalize",
+        textTransform: label ? "none" : "capitalize",
       }}
     >
-      {status}
+      {label || status}
     </span>
   );
 }
@@ -154,6 +285,83 @@ function Section({ title, description, children }) {
         <p style={{ margin: "4px 0 16px", fontSize: 12, color: "#6B7280" }}>{description}</p>
       )}
       {children}
+    </div>
+  );
+}
+
+// Same chrome as Section, plus a click-to-toggle header and an optional
+// count pill. Kept as a separate component rather than a flag on Section so
+// every existing Section call site keeps its exact current markup and
+// behaviour -- nothing else on this page becomes collapsible by accident.
+//
+// `open`/`onToggle` are controlled by the parent so collapse state survives
+// re-renders driven by the 3s polling queries.
+function CollapsibleSection({ title, description, badge, open, onToggle, children }) {
+  return (
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid #E5E7EB",
+        borderRadius: 10,
+        padding: 20,
+        marginBottom: 20,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%",
+          padding: 0,
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            fontSize: 11,
+            color: "#6B7280",
+            display: "inline-block",
+            transform: open ? "rotate(90deg)" : "none",
+            transition: "transform 150ms ease",
+          }}
+        >
+          ▶
+        </span>
+        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#111827" }}>{title}</h2>
+        {badge != null && (
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: "#374151",
+              background: "#F3F4F6",
+              borderRadius: 999,
+              padding: "2px 9px",
+            }}
+          >
+            {badge}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "#2563EB" }}>
+          {open ? "Collapse" : "Expand"}
+        </span>
+      </button>
+      {open && (
+        <>
+          {description && (
+            <p style={{ margin: "8px 0 16px", fontSize: 12, color: "#6B7280" }}>{description}</p>
+          )}
+          {children}
+        </>
+      )}
     </div>
   );
 }
@@ -648,6 +856,19 @@ export default function SowDocumentPage() {
   const [designError, setDesignError] = useState("");
   const [existingSowError, setExistingSowError] = useState("");
   const [factFilter, setFactFilter] = useState("");
+  // Requirements ledger collapse state. Starts open so a small ledger reads
+  // exactly as it did before; the effect below closes it once for a large
+  // one. Once the user touches the toggle their choice is final for the
+  // session -- see ledgerAutoCollapsedRef.
+  const [ledgerOpen, setLedgerOpen] = useState(true);
+  // Guards the auto-collapse so it fires at most once per document. Without
+  // it, every 3s poll that re-reports a large ledger would slam the section
+  // shut again the moment the user opened it.
+  const ledgerAutoCollapsedRef = useRef(false);
+  // Imported documents can be long. Keep the document immediately available
+  // after the ledger without forcing every downstream control below it off
+  // screen; the user explicitly opens it when they want the complete source.
+  const [importedSowOpen, setImportedSowOpen] = useState(false);
   const [generateError, setGenerateError] = useState("");
   const [selectedVersionId, setSelectedVersionId] = useState(null);
 
@@ -730,6 +951,7 @@ export default function SowDocumentPage() {
       qc.invalidateQueries({ queryKey: ["sow-generation", id] });
       qc.invalidateQueries({ queryKey: ["sow-document", id] });
       qc.invalidateQueries({ queryKey: ["sow-versions", id] });
+      toastSuccess("Generation started");
     },
     onError: (e) => setGenerateError(e.message),
   });
@@ -854,17 +1076,51 @@ export default function SowDocumentPage() {
   });
 
   const ledgerQueryKey = ["sow-ledger", id, factFilter];
-  const { data: ledger, isLoading: ledgerLoading } = useQuery({
+  // Read through apiFetch rather than apiGet so the X-Total-Count header is
+  // available: the badge below must report how many facts EXIST, not how many
+  // this response happened to carry. Counting the array made a document with
+  // more facts than the page limit report the limit as its total, which read
+  // as "extraction lost the rest of my document" when nothing had been lost.
+  const { data: ledgerPage, isLoading: ledgerLoading } = useQuery({
     queryKey: ledgerQueryKey,
-    queryFn: () =>
-      apiGet(
+    queryFn: async () => {
+      const res = await apiFetch(
         `/api/v1/sow/documents/${id}/ledger${factFilter ? `?fact_type=${factFilter}` : ""}`
-      ),
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          typeof body?.detail === "string" ? body.detail : "Could not load the requirements ledger"
+        );
+      }
+      const facts = await res.json();
+      const header = res.headers.get("X-Total-Count");
+      const parsed = Number(header);
+      return {
+        facts,
+        // Fall back to the array length if the header is missing (an older
+        // backend, or a proxy that stripped it) -- never render "undefined".
+        total: Number.isFinite(parsed) && parsed >= 0 ? parsed : facts.length,
+      };
+    },
     refetchInterval: (query) => {
       const sourceList = sources || [];
       return sourceList.some((s) => ACTIVE_SOURCE_STATUSES.has(s.status)) ? 3000 : false;
     },
   });
+
+  // Collapse the ledger once, the first time it is observed to be large.
+  // 40 rows is roughly one screenful at this row height -- below that the
+  // section is easier to read open, above it the sections underneath
+  // (Generate SOW, versions, section editor) get pushed out of reach.
+  const LEDGER_AUTO_COLLAPSE_THRESHOLD = 40;
+  useEffect(() => {
+    if (ledgerAutoCollapsedRef.current) return;
+    if ((ledgerPage?.facts || []).length > LEDGER_AUTO_COLLAPSE_THRESHOLD) {
+      ledgerAutoCollapsedRef.current = true;
+      setLedgerOpen(false);
+    }
+  }, [ledgerPage]);
 
   function invalidateAll() {
     qc.invalidateQueries({ queryKey: ["sow-sources", id] });
@@ -993,9 +1249,32 @@ export default function SowDocumentPage() {
   }
 
   const sourceList = sources || [];
-  const ledgerList = ledger || [];
-  const hasReadySource = sourceList.some((s) => s.status === "done");
+  const ledgerList = ledgerPage?.facts || [];
+  // How many facts EXIST for the current filter, from the server, vs how many
+  // this page carries. These differ only when a document exceeds the page
+  // limit; when they do, the UI says so rather than quietly showing fewer.
+  const ledgerTotal = ledgerPage?.total ?? ledgerList.length;
+  const ledgerTruncated = ledgerTotal > ledgerList.length;
+  // A partially extracted source still produced facts, so it can still be
+  // generated from — the user is told it was partial, and blocking Generate
+  // on it would strand them with a ledger they cannot use.
+  const hasReadySource = sourceList.some(
+    (s) => s.status === "done" || s.status === "done_with_errors"
+  );
+  // Sections a newly attached source affects, computed by the backend after
+  // extraction. Advisory: it pre-ticks the Rewrite dialog, nothing more.
+  const pendingSectionKeys = doc?.pending_section_keys || [];
+  // Generate is offered before the first version, and afterwards only once
+  // new source material has arrived — regenerating an unchanged document
+  // redrafts every section from the same ledger and discards hand edits.
+  const canGenerate = doc?.can_generate !== false;
+  // An imported SOW that nothing new has been added to. Its version was built
+  // verbatim from the uploaded file, so there is nothing to "generate" — the
+  // document already exists and the useful next step is extracting skills
+  // from it. Derived from data the page already has rather than a new field:
+  // a version exists, and no source has landed since it was built.
   const hasCurrentVersion = !!doc.current_version_id;
+  const isImportedBaseline = hasCurrentVersion && !canGenerate;
   const selectedVersion = versionList.find((v) => v.id === selectedVersionId) || null;
   // The PATCH endpoint always edits document.current_version_id regardless
   // of which version_id is in the URL -- editing while viewing an older
@@ -1237,7 +1516,7 @@ export default function SowDocumentPage() {
                       {(s.artifact_type || "").replace(/_/g, " ")}
                     </td>
                     <td style={{ padding: "8px 12px" }}>
-                      <Badge status={s.status} colors={SOURCE_STATUS_COLORS} bg={SOURCE_STATUS_BG} />
+                      <SourceProgressCell source={s} />
                       {s.status === "error" && s.error_message && (
                         <div style={{ fontSize: 11, color: "#DC2626", marginTop: 4, maxWidth: 260 }}>
                           {s.error_message}
@@ -1249,20 +1528,12 @@ export default function SowDocumentPage() {
                     </td>
                     <td style={{ padding: "8px 12px", textAlign: "right" }}>
                       {canWrite && (
-                        <button
+                        <DeleteIconButton
                           onClick={() => deleteSourceMutation.mutate(s.id)}
                           disabled={deleteSourceMutation.isPending}
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 500,
-                            color: "#DC2626",
-                            background: "transparent",
-                            border: "none",
-                            cursor: "pointer",
-                          }}
-                        >
-                          Remove
-                        </button>
+                          label="Remove"
+                          aria-label="Remove attached source"
+                        />
                       )}
                     </td>
                   </tr>
@@ -1272,9 +1543,12 @@ export default function SowDocumentPage() {
           )}
         </Section>
 
-        <Section
+        <CollapsibleSection
           title="Requirements ledger (raw)"
-          description="Every extracted fact across all sources — unstructured on purpose at this phase, so extraction quality can be checked directly before anything is drafted from it."
+          description="A searchable index of every requirement and UI control found across all sources — it does not replace your document. It exists so you can check nothing was missed, and it is what lets a later transcript or design update only the sections it actually affects."
+          badge={ledgerLoading ? null : `${ledgerTotal} fact${ledgerTotal === 1 ? "" : "s"}`}
+          open={ledgerOpen}
+          onToggle={() => setLedgerOpen((v) => !v)}
         >
           <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
             {[["", "All"], ...Object.entries(FACT_TYPE_LABELS)].map(([val, label]) => (
@@ -1297,6 +1571,27 @@ export default function SowDocumentPage() {
             ))}
           </div>
 
+          {/* Only ever shown when the server really did return fewer rows than
+              exist. Silence here is a positive assertion that the table below
+              is the complete ledger. */}
+          {ledgerTruncated && (
+            <p
+              style={{
+                fontSize: 12,
+                color: "#B45309",
+                background: "#FEF3C7",
+                border: "1px solid #FCD34D",
+                borderRadius: 6,
+                padding: "8px 12px",
+                marginBottom: 12,
+              }}
+            >
+              Showing the first {ledgerList.length} of {ledgerTotal} facts. All{" "}
+              {ledgerTotal} are stored and every one of them is used for
+              generation and rewrites — only this preview table is capped.
+            </p>
+          )}
+
           {ledgerLoading && <p style={{ fontSize: 13, color: "#6B7280" }}>Loading…</p>}
           {!ledgerLoading && ledgerList.length === 0 && (
             <p style={{ fontSize: 13, color: "#6B7280" }}>
@@ -1304,6 +1599,20 @@ export default function SowDocumentPage() {
             </p>
           )}
           {!ledgerLoading && ledgerList.length > 0 && (
+            // Scroll container, not page growth: a 360-fact ledger otherwise
+            // pushes Generate SOW and every version/section panel below it
+            // several screens down. maxHeight is capped in px rather than vh
+            // so the box is a predictable size regardless of viewport.
+            // The header row is sticky inside it so column meaning survives
+            // scrolling.
+            <div
+              style={{
+                maxHeight: 420,
+                overflowY: "auto",
+                border: "1px solid #F3F4F6",
+                borderRadius: 8,
+              }}
+            >
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #E5E7EB" }}>
@@ -1318,6 +1627,10 @@ export default function SowDocumentPage() {
                         color: "#6B7280",
                         textTransform: "uppercase",
                         letterSpacing: "0.05em",
+                        position: "sticky",
+                        top: 0,
+                        background: "#fff",
+                        zIndex: 1,
                       }}
                     >
                       {h}
@@ -1347,14 +1660,95 @@ export default function SowDocumentPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
-        </Section>
+        </CollapsibleSection>
+
+        {isImportedBaseline && (
+          <CollapsibleSection
+            title="Imported SOW"
+            description="The original imported document, preserved verbatim. This is the source used for Skills/TDD extraction; it has not been regenerated or rewritten."
+            badge={versionDetail ? `${versionDetail.sections.length} section${versionDetail.sections.length === 1 ? "" : "s"}` : null}
+            open={importedSowOpen}
+            onToggle={() => setImportedSowOpen((open) => !open)}
+          >
+            {versionDetailLoading && (
+              <p style={{ fontSize: 13, color: "#6B7280", margin: 0 }}>Loading imported SOW…</p>
+            )}
+            {!versionDetailLoading && !versionDetail && (
+              <ErrorAlert
+                title="Couldn’t show the imported SOW"
+                message="The imported document is still available, but its display version could not be loaded. Try again in a moment."
+                action={{ label: "Reload", onClick: () => qc.invalidateQueries({ queryKey: ["sow-version-detail", id, selectedVersionId] }) }}
+              />
+            )}
+            {!versionDetailLoading && versionDetail && (
+              <pre
+                style={{
+                  maxHeight: 620,
+                  overflow: "auto",
+                  margin: 0,
+                  padding: "14px 16px",
+                  background: "#F9FAFB",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  fontFamily: "inherit",
+                  fontSize: 13,
+                  lineHeight: 1.65,
+                  color: "#1F2937",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {versionDetail.sections.map((section) => section.rendered_markdown).join("\n\n")}
+              </pre>
+            )}
+          </CollapsibleSection>
+        )}
 
         <Section
-          title="Generate SOW"
-          description="Groups the ledger into sections and drafts the full document. A partial failure (some sections done, some errored) still produces a usable version — errored sections are flagged individually below, never silently dropped."
+          title={isImportedBaseline ? "Skills & TDDs" : "Generate SOW"}
+          description={
+            isImportedBaseline
+              ? "This SOW was imported and is shown below exactly as you wrote it — no AI rewrote it. Extract Skills/TDDs turns it into runnable Vibe Testing skills. Attach a meeting transcript, recording or design reference to unlock Generate SOW, which rewrites only the sections that new material affects."
+              : "Groups the ledger into sections and drafts the full document. A partial failure (some sections done, some errored) still produces a usable version — errored sections are flagged individually below, never silently dropped."
+          }
         >
-          {canWrite && (
+          {/* The primary action for an imported SOW is extracting skills, not
+              generating a document that already exists. Generate only earns
+              its place once new source material arrives to fold in. */}
+          {canWrite && isImportedBaseline && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+              <button
+                onClick={() => sendToCheckpointsMutation.mutate()}
+                disabled={sendToCheckpointsMutation.isPending}
+                style={sendToCheckpointsMutation.isPending ? btnDisabledStyle : btnStyle}
+              >
+                {sendToCheckpointsMutation.isPending
+                  ? "Extracting…"
+                  : "Extract Skills / TDDs"}
+              </button>
+              <span style={{ fontSize: 12, color: "#6B7280" }}>
+                Sends this document to Vibe Testing and extracts a runnable skill per
+                feature. Ambiguous, incomplete, or conflicting requirements stay in
+                review and are never saved as runnable Skills/TDDs.
+              </span>
+              {sendToCheckpointsMutation.isSuccess && (
+                <span style={{ fontSize: 12, color: "#166534" }}>
+                  {sendToCheckpointsMutation.data?.message}
+                </span>
+              )}
+              {sendToCheckpointsMutation.isError && (
+                <ErrorAlert
+                  title="Skills/TDD extraction could not start"
+                  message={sendToCheckpointsMutation.error?.message || "Try again after checking the document."}
+                  action={{ label: "Try again", onClick: () => sendToCheckpointsMutation.mutate() }}
+                />
+              )}
+            </div>
+          )}
+
+          {canWrite && !isImportedBaseline && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
               <button
                 onClick={() => {
@@ -1376,9 +1770,17 @@ export default function SowDocumentPage() {
                   }
                   generateMutation.mutate();
                 }}
-                disabled={!hasReadySource || generationActive || generateMutation.isPending}
+                disabled={
+                  !hasReadySource ||
+                  !canGenerate ||
+                  generationActive ||
+                  generateMutation.isPending
+                }
                 style={
-                  !hasReadySource || generationActive || generateMutation.isPending
+                  !hasReadySource ||
+                  !canGenerate ||
+                  generationActive ||
+                  generateMutation.isPending
                     ? btnDisabledStyle
                     : btnStyle
                 }
@@ -1388,6 +1790,12 @@ export default function SowDocumentPage() {
               {!hasReadySource && (
                 <span style={{ fontSize: 12, color: "#6B7280" }}>
                   Attach at least one source and wait for extraction to finish first.
+                </span>
+              )}
+              {hasReadySource && !canGenerate && (
+                <span style={{ fontSize: 12, color: "#6B7280" }}>
+                  Already generated. Attach a new source to regenerate, or use Rewrite
+                  to redo individual sections.
                 </span>
               )}
               {generateError && (
@@ -1439,7 +1847,9 @@ export default function SowDocumentPage() {
                         : smallBtnStyle
                     }
                   >
-                    {sendToCheckpointsMutation.isPending ? "Sending…" : "Send to Vibe Testing"}
+                    {sendToCheckpointsMutation.isPending
+                      ? "Extracting…"
+                      : "Extract Skills / TDDs"}
                   </button>
                   {sendToCheckpointsMutation.isSuccess && (
                     <span style={{ fontSize: 12, color: "#166534" }}>
@@ -1447,17 +1857,66 @@ export default function SowDocumentPage() {
                     </span>
                   )}
                   {sendToCheckpointsMutation.isError && (
-                    <span style={{ fontSize: 12, color: "#DC2626" }}>
-                      {sendToCheckpointsMutation.error?.message}
-                    </span>
+                    <ErrorAlert
+                      title="Skills/TDD extraction could not start"
+                      message={sendToCheckpointsMutation.error?.message || "Try again after checking the document."}
+                      action={{ label: "Try again", onClick: () => sendToCheckpointsMutation.mutate() }}
+                    />
                   )}
                 </>
               )}
             </div>
           )}
 
+          {/* A newly attached source lands facts in the ledger, but nothing
+              connects them to the sections that already exist. The backend
+              works that out after extraction and reports the affected keys
+              here. Pressing the button only PRE-TICKS them below — no tokens
+              are spent until the user runs the rewrite themselves. */}
+          {canWrite && isViewingCurrentVersion && pendingSectionKeys.length > 0 && (
+            <div
+              style={{
+                marginBottom: 18,
+                padding: "12px 14px",
+                background: "#FEF3C7",
+                border: "1px solid #FCD34D",
+                borderRadius: 8,
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ fontSize: 13, color: "#78350F" }}>
+                New source material affects{" "}
+                <strong>
+                  {pendingSectionKeys.length} section
+                  {pendingSectionKeys.length === 1 ? "" : "s"}
+                </strong>
+                {doc?.pending_new_fact_count
+                  ? ` (${doc.pending_new_fact_count} new requirement${
+                      doc.pending_new_fact_count === 1 ? "" : "s"
+                    })`
+                  : ""}
+                . Everything else stays exactly as it is.
+              </span>
+              <button
+                onClick={() => {
+                  setRewriteTargets(new Set(pendingSectionKeys));
+                  document
+                    .getElementById("sow-rewrite-panel")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+                style={smallBtnStyle}
+              >
+                Review affected sections
+              </button>
+            </div>
+          )}
+
           {canWrite && isViewingCurrentVersion && versionDetail && (
             <div
+              id="sow-rewrite-panel"
               style={{
                 marginBottom: 18,
                 padding: "12px 14px",
@@ -1481,22 +1940,25 @@ export default function SowDocumentPage() {
                       style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}
                     >
                       <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#111827" }}>
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={isTarget}
-                          onChange={() => toggleRewriteTarget(s.section_key)}
+                          onCheckedChange={() => toggleRewriteTarget(s.section_key)}
                         />
                         {s.heading}
                       </label>
+                      {pendingSectionKeys.includes(s.section_key) && (
+                        <span style={{ fontSize: 11, color: "#B45309" }}>
+                          affected by new source
+                        </span>
+                      )}
                       {s.edited_by_human && (
                         <span style={{ fontSize: 11, color: "#6B21A8" }}>hand-edited</span>
                       )}
                       {s.edited_by_human && isTarget && (
                         <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#B45309" }}>
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={isOverridden}
-                            onChange={() => toggleRewriteOverride(s.section_key)}
+                            onCheckedChange={() => toggleRewriteOverride(s.section_key)}
                           />
                           force-regenerate anyway
                         </label>

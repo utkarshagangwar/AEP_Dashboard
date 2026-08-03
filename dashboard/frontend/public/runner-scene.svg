@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" width="100%" height="100%" role="img" aria-label="A runner in motion">
+  <title>Runner</title>
+  <!--
+    Higher-quality replacement for runner.gif / runner.json, which were low
+    resolution and off-brand.
+
+    Vector + SMIL rather than a raster GIF or a Lottie JSON: it stays sharp at
+    any size, weighs a few KB, needs no animation runtime, and its palette is
+    driven by currentColor plus the CSS custom properties below, so it inherits
+    whatever context it is dropped into.
+
+    Not wired into any page — the user places it.
+
+    Colour hooks (all optional, with fallbacks):
+      --runner-accent   figure + motion lines   (default: app blue #2563EB)
+      --runner-ink      ground line             (default: slate #94A3B8)
+  -->
+  <defs>
+    <style>
+      .runner-accent { stroke: var(--runner-accent, #2563EB); }
+      .runner-fill   { fill:   var(--runner-accent, #2563EB); }
+      .runner-ground { stroke: var(--runner-ink, #94A3B8); }
+
+      .stroke {
+        fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* prefers-reduced-motion is honoured inside the SVG itself, so the file
+         is safe to drop in anywhere without extra JS to pause it. The figure
+         settles into a neutral mid-stride and only the ground keeps a gentle,
+         non-vestibular drift. */
+      @media (prefers-reduced-motion: reduce) {
+        .anim { animation: none !important; }
+        #runner-group { transform: translateY(0); }
+      }
+    </style>
+
+    <!-- One stride cycle, reused by both legs and both arms with a phase
+         offset so the limbs stay in opposition. -->
+    <path id="ground-dash" d="M0 0 H60" />
+  </defs>
+
+  <!-- ── Ground ─────────────────────────────────────────────────────────── -->
+  <g class="runner-ground stroke" stroke-width="3" opacity="0.35">
+    <line x1="20" y1="132" x2="220" y2="132" />
+  </g>
+
+  <!-- Ground streaks travelling right-to-left, which is what actually sells
+       forward motion; the figure itself only bobs. -->
+  <g class="runner-ground stroke" stroke-width="3" stroke-dasharray="18 26" opacity="0.5">
+    <line x1="20" y1="132" x2="220" y2="132">
+      <animate attributeName="stroke-dashoffset" from="44" to="0"
+               dur="0.62s" repeatCount="indefinite" />
+    </line>
+  </g>
+
+  <!-- ── Motion lines ───────────────────────────────────────────────────── -->
+  <g class="runner-accent stroke" stroke-width="3" opacity="0.45">
+    <line x1="30" y1="62" x2="62" y2="62">
+      <animate attributeName="x1" values="46;22;46" dur="0.62s" repeatCount="indefinite" />
+      <animate attributeName="opacity" values="0;0.55;0" dur="0.62s" repeatCount="indefinite" />
+    </line>
+    <line x1="24" y1="86" x2="56" y2="86">
+      <animate attributeName="x1" values="42;16;42" dur="0.62s" begin="0.16s" repeatCount="indefinite" />
+      <animate attributeName="opacity" values="0;0.5;0" dur="0.62s" begin="0.16s" repeatCount="indefinite" />
+    </line>
+    <line x1="34" y1="106" x2="60" y2="106">
+      <animate attributeName="x1" values="50;28;50" dur="0.62s" begin="0.31s" repeatCount="indefinite" />
+      <animate attributeName="opacity" values="0;0.4;0" dur="0.62s" begin="0.31s" repeatCount="indefinite" />
+    </line>
+  </g>
+
+  <!-- ── Runner ─────────────────────────────────────────────────────────── -->
+  <!-- Vertical bob: two bounces per stride, since each footfall lifts the
+       centre of mass once. -->
+  <g id="runner-group">
+    <animateTransform attributeName="transform" type="translate"
+                      values="0 0; 0 -5; 0 0; 0 -5; 0 0"
+                      keyTimes="0; 0.25; 0.5; 0.75; 1"
+                      dur="0.62s" repeatCount="indefinite"
+                      calcMode="spline"
+                      keySplines="0.33 0 0.67 1; 0.33 0 0.67 1; 0.33 0 0.67 1; 0.33 0 0.67 1" />
+
+    <!-- Head -->
+    <circle class="runner-fill" cx="146" cy="44" r="11" />
+
+    <!-- Torso, leaning into the run -->
+    <line class="runner-accent stroke" x1="142" y1="56" x2="130" y2="92" stroke-width="7" />
+
+    <!-- Rear arm -->
+    <g transform="translate(138,64)">
+      <path class="runner-accent stroke" stroke-width="6" d="M0 0 L-16 12 L-6 26">
+        <animateTransform attributeName="transform" type="rotate"
+                          values="-24; 26; -24" dur="0.62s" repeatCount="indefinite"
+                          calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1" />
+      </path>
+    </g>
+
+    <!-- Lead arm -->
+    <g transform="translate(139,63)">
+      <path class="runner-accent stroke" stroke-width="6" d="M0 0 L18 10 L12 26">
+        <animateTransform attributeName="transform" type="rotate"
+                          values="26; -24; 26" dur="0.62s" repeatCount="indefinite"
+                          calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1" />
+      </path>
+    </g>
+
+    <!-- Rear leg -->
+    <g transform="translate(130,92)">
+      <path class="runner-accent stroke" stroke-width="7" d="M0 0 L-14 20 L-22 40">
+        <animateTransform attributeName="transform" type="rotate"
+                          values="28; -30; 28" dur="0.62s" repeatCount="indefinite"
+                          calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1" />
+      </path>
+    </g>
+
+    <!-- Lead leg -->
+    <g transform="translate(131,92)">
+      <path class="runner-accent stroke" stroke-width="7" d="M0 0 L16 18 L14 40">
+        <animateTransform attributeName="transform" type="rotate"
+                          values="-30; 28; -30" dur="0.62s" repeatCount="indefinite"
+                          calcMode="spline" keySplines="0.4 0 0.6 1; 0.4 0 0.6 1" />
+      </path>
+    </g>
+  </g>
+</svg>

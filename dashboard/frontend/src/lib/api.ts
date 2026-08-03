@@ -8,7 +8,9 @@
  * On 401: calls /api/auth/refresh (Next.js proxy reads cookie, rotates it,
  * returns new access_token), then retries the original request.
  *
- * All API calls throughout the app must use this instance.
+ * This module also owns the ONE shared refresh promise used by every HTTP
+ * client in the app — see the single-flight section below. All API calls
+ * throughout the app must go through this instance or utils/apiClient.js.
  */
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
 
@@ -24,7 +26,7 @@ export function getAccessToken(): string | null {
   return _accessToken;
 }
 
-function clearAllAuth() {
+export function clearAllAuth() {
   _accessToken = null;
   // Clear any legacy localStorage entries from old implementation
   if (typeof window !== "undefined") {
@@ -34,10 +36,81 @@ function clearAllAuth() {
   }
 }
 
-function redirectToLogin() {
+export function redirectToLogin() {
   if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
     window.location.href = "/login";
   }
+}
+
+// ─── Shared single-flight refresh ─────────────────────────────────────────────
+//
+// The backend ROTATES the refresh token on every /auth/refresh call and revokes
+// the previous one immediately (see backend/app/api/v1/auth.py::refresh). That
+// makes two concurrent refreshes fatal, not merely wasteful: the second one
+// presents an already-revoked token, gets a 401, and the caller hard-logs-out a
+// session that was perfectly valid.
+//
+// That is exactly what used to happen. This module owned one deduped refresh
+// (isRefreshing + failedQueue) for axios callers, while utils/apiClient.js owned
+// a second, independent one (_refreshPromise) for fetch callers. Each deduped
+// correctly *on its own*, but nothing deduped ACROSS them — so any page using
+// both clients could fire two refreshes a few hundred ms apart. Observed in the
+// backend log as:
+//     Access token refreshed: <uid>          POST /auth/refresh 200
+//     Refresh token already revoked (<uid>)  POST /auth/refresh 401
+//     GET /api/v1/projects                                      401  → logout
+//
+// Both clients now share the single promise below, so rotation can never race
+// itself regardless of which client triggered the refresh.
+
+let _refreshPromise: Promise<boolean> | null = null;
+
+async function _doRefresh(): Promise<boolean> {
+  try {
+    // Bare fetch rather than the `api` instance below: routing this through
+    // `api` would re-enter its own 401 response interceptor and recurse.
+    // No body needed — /api/auth/refresh reads the httpOnly cookie itself.
+    const res = await fetch("/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      clearAllAuth();
+      return false;
+    }
+    const data = await res.json();
+    if (!data?.access_token) {
+      clearAllAuth();
+      return false;
+    }
+    setAccessToken(data.access_token);
+    // Keep middleware's routing cookie in sync with the rotated token. This
+    // used to live only in apiClient's copy of the refresh, so an axios-driven
+    // refresh left the cookie holding a superseded token.
+    if (typeof document !== "undefined") {
+      document.cookie = `aep_token=${data.access_token}; path=/; max-age=${24 * 60 * 60}; SameSite=Lax`;
+    }
+    return true;
+  } catch {
+    clearAllAuth();
+    return false;
+  }
+}
+
+/** Redeem the httpOnly refresh cookie. Safe to call concurrently. */
+export function refreshAccessToken(): Promise<boolean> {
+  if (!_refreshPromise) {
+    _refreshPromise = _doRefresh().finally(() => {
+      _refreshPromise = null;
+    });
+  }
+  return _refreshPromise;
+}
+
+/** The in-flight refresh, if one is running — so callers can await it. */
+export function getInFlightRefresh(): Promise<boolean> | null {
+  return _refreshPromise;
 }
 
 // ─── Axios instance ───────────────────────────────────────────────────────────
@@ -51,7 +124,13 @@ const api = axios.create({
 
 // ─── Request interceptor: inject access token ─────────────────────────────────
 
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+  // If a refresh is already in flight, wait for it rather than racing it —
+  // racing means this request goes out with a stale/absent token, 401s, and
+  // only then queues behind a refresh it could simply have waited for.
+  const inFlight = getInFlightRefresh();
+  if (inFlight) await inFlight;
+
   const token = getAccessToken();
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -61,25 +140,17 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 // ─── Response interceptor: auto-refresh on 401 ────────────────────────────────
 
-let isRefreshing = false;
-let failedQueue: Array<{
-  resolve: (token: string) => void;
-  reject: (error: unknown) => void;
-}> = [];
-
-function processQueue(error: unknown, token: string | null) {
-  failedQueue.forEach((p) => (error || !token ? p.reject(error) : p.resolve(token!)));
-  failedQueue = [];
-}
-
 api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
-    const original = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+    const original = error.config as
+      | (InternalAxiosRequestConfig & { _retry?: boolean })
+      | undefined;
 
     // Don't retry on non-401, already-retried, or auth endpoints
     if (
       error.response?.status !== 401 ||
+      !original ||
       original._retry ||
       original.url?.includes("/auth/refresh") ||
       original.url?.includes("/auth/login")
@@ -87,42 +158,22 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    if (isRefreshing) {
-      // Park this request until the ongoing refresh finishes
-      return new Promise<string>((resolve, reject) => {
-        failedQueue.push({ resolve, reject });
-      }).then((token) => {
-        if (original.headers) original.headers.Authorization = `Bearer ${token}`;
-        return api(original);
-      });
-    }
-
     original._retry = true;
-    isRefreshing = true;
 
-    try {
-      // /api/auth/refresh is our Next.js proxy — it reads the httpOnly cookie
-      // automatically (withCredentials=true) and rotates it server-side.
-      const { data } = await axios.post(
-        "/api/auth/refresh",
-        {},
-        { withCredentials: true },
-      );
-
-      const newAccessToken: string = data.access_token;
-      setAccessToken(newAccessToken);
-      processQueue(null, newAccessToken);
-
-      if (original.headers) original.headers.Authorization = `Bearer ${newAccessToken}`;
-      return api(original);
-    } catch (refreshError) {
-      processQueue(refreshError, null);
+    // Shared with utils/apiClient.js — concurrent callers all await the same
+    // rotation instead of each starting their own.
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) {
       clearAllAuth();
       redirectToLogin();
-      return Promise.reject(refreshError);
-    } finally {
-      isRefreshing = false;
+      return Promise.reject(error);
     }
+
+    const newAccessToken = getAccessToken();
+    if (original.headers && newAccessToken) {
+      original.headers.Authorization = `Bearer ${newAccessToken}`;
+    }
+    return api(original);
   },
 );
 

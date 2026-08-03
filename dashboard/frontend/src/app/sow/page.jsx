@@ -3,7 +3,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import GlobalLoader from "../../components/GlobalLoader";
 import PageContainer from "../../components/PageContainer";
+import { toastSuccess } from "../../lib/toast";
+import { Button } from "../../components/ui/button";
+import { DeleteIconButton } from "../../components/ui/delete-icon-button";
 import { apiGet, apiPost, apiPatch, apiDelete, apiFetch } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
 import {
@@ -151,6 +155,7 @@ export default function SowPage() {
       setShowModal(false);
       setForm({ title: "", project_id: "" });
       setFormError("");
+      toastSuccess("SOW created");
     },
     onError: (e) => setFormError(e.message),
   });
@@ -161,6 +166,7 @@ export default function SowPage() {
       qc.invalidateQueries(["sow-documents"]);
       setRenamingId(null);
       setRenameError("");
+      toastSuccess("SOW renamed");
     },
     onError: (e) => setRenameError(e.message),
   });
@@ -170,6 +176,7 @@ export default function SowPage() {
     onSuccess: () => {
       qc.invalidateQueries(["sow-documents"]);
       setDeleteTarget(null);
+      toastSuccess("SOW deleted");
     },
   });
 
@@ -211,49 +218,35 @@ export default function SowPage() {
           </div>
           {canWrite && (
             <div style={{ display: "flex", gap: 8 }}>
-              <button
+              {/* Outline rather than invert: this sits directly beside
+                  "+ New SOW", and two identical dark pills would flatten the
+                  primary/secondary distinction between them. Still moved onto
+                  the shared Button so the vocabulary matches. */}
+              <Button
+                variant="outline"
+                size="lg"
                 onClick={() => {
                   resetImportModal();
                   setShowImportModal(true);
                 }}
-                style={{
-                  padding: "9px 16px",
-                  background: "#fff",
-                  color: "#374151",
-                  border: "1px solid #D1D5DB",
-                  borderRadius: 8,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
               >
                 Import SOW
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="invert"
+                size="lg"
                 onClick={() => {
                   setShowModal(true);
                   setFormError("");
                 }}
-                style={{
-                  padding: "9px 16px",
-                  background: "#2563EB",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
               >
                 + New SOW
-              </button>
+              </Button>
             </div>
           )}
         </div>
 
-        {isLoading && (
-          <p style={{ fontSize: 13, color: "#6B7280" }}>Loading…</p>
-        )}
+        {isLoading && <GlobalLoader />}
         {error && (
           <p style={{ fontSize: 13, color: "#DC2626" }}>{error.message}</p>
         )}
@@ -402,19 +395,10 @@ export default function SowPage() {
                           >
                             Rename
                           </button>
-                          <button
+                          <DeleteIconButton
                             onClick={() => setDeleteTarget(doc)}
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 500,
-                              color: "#DC2626",
-                              background: "transparent",
-                              border: "none",
-                              cursor: "pointer",
-                            }}
-                          >
-                            Delete
-                          </button>
+                            aria-label={`Delete ${doc.title || "document"}`}
+                          />
                         </div>
                       )}
                     </td>

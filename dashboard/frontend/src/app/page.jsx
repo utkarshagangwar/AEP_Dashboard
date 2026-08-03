@@ -1,5 +1,6 @@
 "use client";
 import { useEffect } from "react";
+import GlobalLoader from "../components/GlobalLoader";
 import { getStoredUser } from "../utils/authStore";
 
 export default function RootPage() {
@@ -12,38 +13,7 @@ export default function RootPage() {
     window.location.href = user ? "/dashboard" : "/login";
   }, []);
 
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        height: "100vh",
-        background: "#F9FAFB",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div
-          style={{
-            width: 24,
-            height: 24,
-            border: "2px solid #2563EB",
-            borderTopColor: "transparent",
-            borderRadius: "50%",
-            animation: "spin 0.8s linear infinite",
-          }}
-        />
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            color: "#6B7280",
-            fontSize: 14,
-          }}
-        >
-          Loading…
-        </span>
-      </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
+  // The redirect above fires on mount, so this is usually never painted —
+  // GlobalLoader's own 180ms show-delay keeps it from flashing on the way out.
+  return <GlobalLoader />;
 }

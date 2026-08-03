@@ -26,11 +26,38 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 
 from app.core.logging import get_logger
-from app.services.design_ingest import IngestError, chunk_text
+from app.services.design_ingest import IngestError
+from app.services.doc_blocks import Block
+from app.services.doc_chunking import Chunk, chunk_document
+from app.services.ledger_dedup import dedupe_facts
 
 logger = get_logger(__name__)
+
+# Per-chunk retry policy (SOW_CHUNKING_PLAN Phase 4, defect D4). Transient
+# provider failures are common enough that failing a whole source on the
+# first one would make imports flaky; three attempts with backoff separates
+# "the provider blipped" from "this chunk cannot be extracted".
+_CHUNK_ATTEMPTS = 3
+_CHUNK_BACKOFF_SECONDS = (1, 4)
+
+# Output budget for one extraction call. Env-overridable because it trades
+# directly against spend. 8192 (the previous hardcoded value) was the single
+# biggest source of silent content loss on large documents: a dense chunk
+# routinely produced more facts than fit, the response was cut mid-array, and
+# llm_router's JSON repair pass turned the truncated array into a valid
+# shorter one. See doc_chunking.MAX_CHARS_BY_DOC_KIND for the input side of
+# the same budget.
+_LEDGER_MAX_TOKENS = int(os.environ.get("SOW_LEDGER_MAX_TOKENS", "").strip() or 16384)
+
+# How many times a truncated chunk may be halved and re-extracted before we
+# give up and record the gap explicitly. Two levels turns one 8,000-char
+# chunk into at most four 2,000-char ones, which is far below anything that
+# can overflow the raised token budget; a third level would cost more calls
+# than it could plausibly recover.
+_MAX_SPLIT_DEPTH = 2
 
 _VALID_FACT_TYPES = {"feature", "decision", "ui_element", "open_question"}
 _VALID_ELEMENT_TYPES = {
@@ -41,9 +68,14 @@ _MAX_LABEL_CHARS = 500
 _MAX_LOCATION_CHARS = 500
 _MAX_NOTES_CHARS = 2000
 _MAX_SOURCE_REF_CHARS = 300
-_MAX_FACTS_PER_CALL = 200  # sanity ceiling — a single call returning more than
+_MAX_FACTS_PER_CALL = 400  # sanity ceiling — a single call returning more than
                             # this is almost certainly a degenerate/repeating
-                            # response, not a genuinely huge screen.
+                            # response, not a genuinely huge screen. Raised
+                            # from 200: with the larger token budget a dense
+                            # 8,000-char SOW chunk can legitimately produce a
+                            # couple hundred facts, and the old ceiling was
+                            # failing real extractions as if they were
+                            # degenerate ones.
 
 # ── Shared ledger-fact JSON contract ─────────────────────────────────────────
 #
@@ -106,6 +138,17 @@ _LEDGER_RULES = (
 ) + _SOURCE_REF_RULE
 
 
+class _NeedsSplit(IngestError):
+    """This chunk could not be extracted whole — retry it in smaller pieces.
+
+    Raised for the two failure modes that a smaller input actually fixes:
+    the model's response was cut off by max_tokens, or it returned an
+    implausible number of facts. Deliberately an IngestError subclass so the
+    existing retry/failure plumbing in _extract_chunks treats it as a chunk
+    failure if it ever escapes the splitter.
+    """
+
+
 def _validate_ledger_fact(item: object) -> dict | None:
     """Return a normalized ledger-fact dict, or None if schema-invalid.
     Never raises — invalid entries are dropped by the caller, which logs
@@ -142,8 +185,51 @@ def _validate_ledger_fact(item: object) -> dict | None:
     }
 
 
-def _validate_facts(raw_items: list, *, source_label: str) -> list[dict]:
-    items = raw_items[:_MAX_FACTS_PER_CALL] if isinstance(raw_items, list) else []
+def _validate_facts(
+    raw_items: list, *, source_label: str, on_overflow: str = "raise"
+) -> list[dict]:
+    """Validate and normalize the LLM's fact list.
+
+    on_overflow controls what happens when the model returns more than
+    _MAX_FACTS_PER_CALL facts:
+
+      "split"     -- raise _NeedsSplit so the caller re-extracts this chunk in
+                     smaller pieces. Correct for the chunked document paths,
+                     where a smaller input genuinely fixes the problem.
+      "raise"     -- fail loudly (SOW_CHUNKING_PLAN Phase 4, D5). Correct for
+                     the single-shot image/recording paths, which have nothing
+                     to split. The original behaviour silently sliced the list,
+                     so a dense screen returning 240 facts lost 40 with no log
+                     line distinguishing it from a genuine 200 — silent
+                     truncation of a ledger whose entire purpose is
+                     exhaustiveness is the exact failure mode this pipeline
+                     claims not to have.
+      "truncate"  -- legacy behaviour, kept for callers where a hard ceiling
+                     is genuinely the right answer.
+    """
+    items = raw_items if isinstance(raw_items, list) else []
+
+    if len(items) > _MAX_FACTS_PER_CALL:
+        if on_overflow == "split":
+            raise _NeedsSplit(
+                f"Extraction from {source_label} returned {len(items)} facts, "
+                f"over the {_MAX_FACTS_PER_CALL} ceiling — re-extracting in "
+                "smaller pieces."
+            )
+        if on_overflow == "raise":
+            raise IngestError(
+                f"Extraction from {source_label} returned {len(items)} facts, "
+                f"over the {_MAX_FACTS_PER_CALL} ceiling. This is usually a "
+                "degenerate/repeating model response rather than a genuinely "
+                "huge screen. Retry this source; if it persists, split the "
+                "document."
+            )
+        logger.warning(
+            "SOW ledger: truncating %d fact(s) to %d from %s",
+            len(items), _MAX_FACTS_PER_CALL, source_label,
+        )
+        items = items[:_MAX_FACTS_PER_CALL]
+
     facts = [f for f in (_validate_ledger_fact(i) for i in items) if f]
     dropped = len(items) - len(facts)
     if dropped:
@@ -153,12 +239,304 @@ def _validate_facts(raw_items: list, *, source_label: str) -> list[dict]:
     return facts
 
 
+# ── Shared chunk-loop machinery ──────────────────────────────────────────────
+
+
+def _chunk_label(chunk: Chunk) -> str:
+    """Human-readable identification of a chunk for error messages -- part
+    number plus section, so a failure tells the user WHERE it failed rather
+    than just that something did."""
+    if chunk.total == 1:
+        return "the document"
+    section = " > ".join(chunk.heading_path)
+    return f"part {chunk.index} of {chunk.total}" + (f" ('{section}')" if section else "")
+
+
+def _report(on_progress, stage: str, current: int, total: int) -> None:
+    """Fire a progress callback without ever letting it break extraction.
+
+    Progress reporting is display-only: it commits a row in the worker's DB
+    session. A failure there (dropped connection, poisoned session) must not
+    lose an LLM pass that has already been paid for -- so it is logged and
+    swallowed, and the source simply keeps rendering its last known
+    progress until the terminal done/error write.
+    """
+    if on_progress is None:
+        return
+    try:
+        on_progress(stage, current, total)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "SOW ledger: progress callback failed at %s %d/%d (ignored)",
+            stage, current, total, exc_info=True,
+        )
+
+
+def _subdivide(chunk: Chunk) -> list[Chunk]:
+    """Split one chunk's text roughly in half, preserving its framing.
+
+    The halves inherit the parent's heading_path, locator and context_header
+    so the model keeps the same "where am I in the document" framing it had
+    before — losing that is what the SOW_CHUNKING_PLAN Phase 3 work existed
+    to prevent, and a truncation retry must not quietly undo it. Only `text`
+    and the part numbering differ.
+
+    Returns [] when the chunk is already too small to split usefully; the
+    caller treats that as "cannot recover by splitting".
+    """
+    text = chunk.text
+    if len(text) < 400:
+        return []
+
+    target = len(text) // 2
+    # Prefer a paragraph boundary near the midpoint so a split never lands
+    # mid-sentence; fall back to the exact midpoint if there is none.
+    split_at = text.rfind("\n\n", 0, target)
+    if split_at <= 0:
+        split_at = text.find("\n\n", target)
+    if split_at <= 0:
+        split_at = target
+
+    halves = [text[:split_at].strip(), text[split_at:].strip()]
+    halves = [h for h in halves if h]
+    if len(halves) < 2:
+        return []
+
+    return [
+        Chunk(
+            index=chunk.index,
+            total=chunk.total,
+            text=half,
+            heading_path=list(chunk.heading_path),
+            locator=chunk.locator,
+            strategy=chunk.strategy,
+            context_header=chunk.context_header,
+        )
+        for half in halves
+    ]
+
+
+def _incomplete_marker_fact(chunk: Chunk, reason: str) -> dict:
+    """A synthetic open_question recording that extraction could not finish.
+
+    A gap the ledger cannot see is a gap nobody reviews. Rather than return
+    a quietly short fact list, the unrecoverable case leaves a visible row
+    that flows into the drafted SOW as a warning callout and into review as
+    an explicit open question.
+    """
+    section = " > ".join(chunk.heading_path) or "an unnamed section"
+    return {
+        "fact_type": "open_question",
+        "element_type": None,
+        "label": f"Extraction incomplete for {section}"[:_MAX_LABEL_CHARS],
+        "location": section[:_MAX_LOCATION_CHARS],
+        "behavior_notes": (
+            f"Automated extraction of this part of the document did not complete "
+            f"({reason}). Requirements from this section may be missing from the "
+            "ledger — review the source document for this section manually."
+        )[:_MAX_NOTES_CHARS],
+        "source_ref": (chunk.locator or _chunk_label(chunk))[:_MAX_SOURCE_REF_CHARS],
+    }
+
+
+def _extract_with_split(
+    chunk: Chunk, extractor, *, source_kind: str, depth: int = 0
+) -> tuple[list[dict], list[str]]:
+    """Extract one chunk, halving and recursing if it could not be done whole.
+
+    Returns (facts, models_used). Raises IngestError for genuine extraction
+    failures (provider down, unparseable response) — only _NeedsSplit, which
+    means "the answer didn't fit", is handled here.
+
+    This is the structural half of the truncation fix. Raising max_tokens and
+    shrinking the default chunk budget make truncation rare;
+    llm_router.complete_json_complete escalates the budget once when it
+    happens anyway; and this splits the input when even that is not enough.
+    Between them, an over-long section is re-asked in pieces instead of
+    returning a silently shortened answer.
+    """
+    try:
+        facts, model_used = extractor(chunk)
+        return facts, [model_used]
+    except _NeedsSplit as exc:
+        if depth >= _MAX_SPLIT_DEPTH:
+            logger.error(
+                "SOW ledger: %s %s still incomplete at split depth %d — recording "
+                "the gap explicitly: %s",
+                source_kind, _chunk_label(chunk), depth, exc,
+            )
+            return [_incomplete_marker_fact(chunk, str(exc))], []
+
+        halves = _subdivide(chunk)
+        if not halves:
+            logger.error(
+                "SOW ledger: %s %s cannot be split further — recording the gap: %s",
+                source_kind, _chunk_label(chunk), exc,
+            )
+            return [_incomplete_marker_fact(chunk, str(exc))], []
+
+        logger.warning(
+            "SOW ledger: %s %s did not fit in one response (%s) — re-extracting "
+            "as %d smaller piece(s) at depth %d",
+            source_kind, _chunk_label(chunk), exc, len(halves), depth + 1,
+        )
+        facts: list[dict] = []
+        models: list[str] = []
+        for half in halves:
+            half_facts, half_models = _extract_with_split(
+                half, extractor, source_kind=source_kind, depth=depth + 1
+            )
+            facts.extend(half_facts)
+            for m in half_models:
+                if m not in models:
+                    models.append(m)
+        return facts, models
+
+
+def _extract_chunks(
+    chunks: list[Chunk], extractor, *, source_kind: str, on_progress=None
+) -> tuple[list[dict], str, list[str]]:
+    """Run `extractor` over every chunk, retrying transient failures.
+
+    Returns (facts, models_used, failures). `failures` is a list of
+    human-readable "part N of M ('Section'): reason" strings — empty on a
+    fully clean run. The caller's task layer maps a non-empty `failures` to
+    SowSourceStatus.done_with_errors and surfaces the list.
+
+    `on_progress(stage, current, total)` is called once before the first
+    chunk and once after each chunk finishes (successfully or not), so the
+    UI can show real "part N of M" progress instead of a static badge. It is
+    optional and best-effort -- see _report.
+
+    Partial-result policy. SOW_CHUNKING_PLAN Phase 4 (defect D4) made this
+    all-or-nothing: one failed chunk discarded every other chunk's facts,
+    because "an incomplete ledger silently becoming a SOW baseline" is a
+    business-impact failure. The reasoning was right; the remedy was too
+    blunt once documents routinely split into ~18 parts, where a single
+    provider blip threw away seventeen successful extractions and the user's
+    only recourse was to re-upload and re-pay for all of them.
+
+    The fix keeps the reasoning and changes the remedy: partial results are
+    saved, but never *silently* — the source lands in done_with_errors (not
+    done), the failing parts are named, and the UI offers a retry. The
+    invariant that matters is "no incomplete ledger is mistaken for a
+    complete one", and a distinct terminal status enforces that as well as
+    discarding the work did, without the collateral damage. Only a run where
+    EVERY chunk failed still raises: that has nothing worth keeping and no
+    partial state worth explaining.
+    """
+    all_facts: list[dict] = []
+    models_used: list[str] = []
+    failures: list[str] = []
+
+    total = len(chunks)
+    _report(on_progress, "extracting", 0, total)
+
+    for index, chunk in enumerate(chunks, start=1):
+        last_error: Exception | None = None
+        for attempt in range(1, _CHUNK_ATTEMPTS + 1):
+            try:
+                facts, chunk_models = _extract_with_split(
+                    chunk, extractor, source_kind=source_kind
+                )
+                all_facts.extend(facts)
+                for model_used in chunk_models:
+                    if model_used not in models_used:
+                        models_used.append(model_used)
+                last_error = None
+                break
+            except IngestError as exc:
+                last_error = exc
+                if attempt < _CHUNK_ATTEMPTS:
+                    delay = _CHUNK_BACKOFF_SECONDS[attempt - 1]
+                    logger.warning(
+                        "SOW ledger: %s %s failed (attempt %d/%d), retrying in %ds: %s",
+                        source_kind, _chunk_label(chunk), attempt, _CHUNK_ATTEMPTS,
+                        delay, exc,
+                    )
+                    time.sleep(delay)
+        if last_error is not None:
+            logger.error(
+                "SOW ledger: %s %s failed after %d attempts: %s",
+                source_kind, _chunk_label(chunk), _CHUNK_ATTEMPTS, last_error,
+            )
+            failures.append(f"{_chunk_label(chunk)}: {last_error}")
+        # Reported for failed chunks too: the loop continues in order to
+        # collect every failure for one message, and freezing the bar on the
+        # first failure would look like a hang rather than a run that is
+        # still working.
+        _report(on_progress, "extracting", index, total)
+
+    if failures and len(failures) == len(chunks):
+        _report(on_progress, "extracting", total, total)
+        raise IngestError(
+            f"Extraction failed for all {len(chunks)} part(s) after "
+            f"{_CHUNK_ATTEMPTS} attempts each — {'; '.join(failures[:5])}"
+            + (" …" if len(failures) > 5 else "")
+            + ". No facts were saved; retry this source."
+        )
+
+    _report(on_progress, "saving", total, total)
+    facts, merged = dedupe_facts(all_facts)
+    if merged:
+        logger.info(
+            "SOW ledger: %s dedup merged %d duplicate fact(s) across %d chunk(s)",
+            source_kind, merged, len(chunks),
+        )
+    if failures:
+        logger.warning(
+            "SOW ledger: %s completed with %d of %d part(s) failed — %d fact(s) saved",
+            source_kind, len(failures), len(chunks), len(facts),
+        )
+    return facts, ", ".join(models_used), failures
+
+
 # ── Text transcript extraction ───────────────────────────────────────────────
 
-def extract_ledger_from_text(text: str, *, part_label: str | None = None) -> tuple[list[dict], str]:
-    """Extract ledger facts from a meeting transcript (or an excerpt of a
-    large one — see extract_ledger_from_transcript for chunking). Returns
-    (facts, model_used). Raises IngestError on total provider failure."""
+_EXCERPT_RULE = (
+    "\n\nThis is ONE PART of a larger document. Extract only what appears "
+    "in the <content> block. If a <preceding_context> block is present, it "
+    "is there ONLY so you can resolve references like \"the button above\" "
+    "— never extract a fact whose evidence appears solely in that block; "
+    "the part that owns it has already extracted it, and doing so again "
+    "creates a duplicate requirement."
+)
+
+_LOCATION_RULE = (
+    "\n\nUse the 'Section path' in <document_context> as the default "
+    "'location' for ui_element facts when the text itself does not state "
+    "one — it is the section this content genuinely sits in, not a guess. "
+    "This is the one case where filling 'location' without an explicit "
+    "statement is correct rather than invention."
+)
+
+
+def _chunk_rules(chunk: Chunk) -> str:
+    """Prompt rules that depend on the chunk's position in the document.
+
+    Kept separate because they answer different questions: the excerpt rule
+    only matters when there IS a neighbouring part to double-extract from,
+    while the location rule applies to any chunk that knows its section --
+    including a single-chunk document, which is the common case for a small
+    SOW and exactly where a null `location` is most avoidable.
+    """
+    rules = ""
+    if chunk.total > 1:
+        rules += _EXCERPT_RULE
+    if chunk.heading_path:
+        rules += _LOCATION_RULE
+    return rules
+
+
+def extract_ledger_from_text(chunk: Chunk) -> tuple[list[dict], str]:
+    """Extract ledger facts from one chunk of a meeting transcript. Returns
+    (facts, model_used). Raises IngestError on total provider failure.
+
+    Takes a Chunk rather than (text, part_label) since
+    SOW_CHUNKING_PLAN Phase 3: the chunk carries its section path, locator
+    and preceding-context framing, which is what replaced the bare
+    "part 3 of 7" label the model used to get (defect D2).
+    """
     from app.services import llm_router
 
     system = (
@@ -169,55 +547,95 @@ def extract_ledger_from_text(text: str, *, part_label: str | None = None) -> tup
         "omit here will be MISSING from both, which has real business "
         "impact. Respond with JSON only:\n"
         f"{_LEDGER_RESPONSE_SHAPE}\n\n{_LEDGER_RULES}"
+        + _chunk_rules(chunk)
     )
-    prompt = "Extract a requirements ledger from this meeting transcript"
-    if part_label:
-        prompt += (
-            f" ({part_label} of a larger transcript — this is an excerpt; "
-            "extract only what appears in this excerpt)"
-        )
-    prompt += ":\n\n" + text
+    prompt = (
+        "Extract a requirements ledger from this meeting transcript:\n\n"
+        + chunk.prompt_text()
+    )
 
     try:
-        result = llm_router.complete(prompt, system=system, expect_json=True, max_tokens=8192)
+        result = llm_router.complete_json_complete(
+            prompt, system=system, max_tokens=_LEDGER_MAX_TOKENS
+        )
     except llm_router.LLMRouterError as exc:
         raise IngestError(f"All LLM providers failed: {exc}") from exc
 
+    if result.truncated:
+        raise _NeedsSplit(
+            f"the response for {_chunk_label(chunk)} was cut off at the token "
+            "limit even after escalation"
+        )
+
     raw = result.parsed_json or {}
     items = raw.get("facts", []) if isinstance(raw, dict) else []
-    facts = _validate_facts(items, source_label=part_label or "transcript")
+    facts = _validate_facts(
+        items, source_label=_chunk_label(chunk), on_overflow="split"
+    )
     logger.info(
-        "SOW ledger: %d fact(s) extracted from transcript via %s", len(facts), result.model_used
+        "SOW ledger: %d fact(s) extracted from transcript %s via %s",
+        len(facts), _chunk_label(chunk), result.model_used,
     )
     return facts, result.model_used
 
 
-def extract_ledger_from_transcript(text: str) -> tuple[list[dict], str]:
-    """Chunk a (possibly large) transcript with design_ingest.chunk_text and
-    concatenate facts across chunks — same chunking mechanism the SOW
-    Checkpoints pipeline already uses, so a long transcript never silently
-    truncates. Simple concatenation, no cross-chunk dedup (Phase 1 scope;
-    Phase 2's constrained regrouping is where cross-source consolidation
-    belongs). Raises IngestError only if EVERY chunk fails."""
-    chunks = chunk_text(text)
-    all_facts: list[dict] = []
-    models_used: list[str] = []
-    errors: list[str] = []
+def extract_ledger_from_transcript(
+    text: str,
+    *,
+    document_title: str | None = None,
+    max_chars: int | None = None,
+    on_progress=None,
+) -> tuple[list[dict], str, list[str]]:
+    """Chunk a (possibly large) transcript on SPEAKER TURNS and extract facts
+    from every part. Returns (facts, models_used, failures).
 
-    for i, chunk in enumerate(chunks, start=1):
-        part_label = f"part {i} of {len(chunks)}" if len(chunks) > 1 else None
-        try:
-            facts, model_used = extract_ledger_from_text(chunk, part_label=part_label)
-            all_facts.extend(facts)
-            if model_used not in models_used:
-                models_used.append(model_used)
-        except IngestError as exc:
-            logger.warning("SOW ledger: transcript chunk %d/%d failed: %s", i, len(chunks), exc)
-            errors.append(str(exc))
+    Chunking moved from design_ingest.chunk_text (fixed character windows)
+    to doc_chunking (SOW_CHUNKING_PLAN Phase 3): a turn is the atomic unit
+    of a meeting, and cutting one in half separates a decision from the
+    person who made it and from the qualifier that followed.
 
-    if not models_used:
-        raise IngestError(f"All transcript chunks failed: {'; '.join(errors)}")
-    return all_facts, ", ".join(models_used)
+    max_chars=None resolves the budget from doc_chunking.max_chars_for.
+    Duplicate facts are merged across chunks, and a partially failed run
+    returns its successful facts alongside a non-empty `failures` list rather
+    than discarding everything — see _extract_chunks.
+    """
+    _report(on_progress, "chunking", 0, 0)
+    chunks = chunk_document(
+        text,
+        file_name="transcript.txt",
+        doc_kind="transcript",
+        document_title=document_title,
+        max_chars=max_chars,
+    )
+    return _extract_chunks(
+        chunks,
+        extract_ledger_from_text,
+        source_kind="transcript",
+        on_progress=on_progress,
+    )
+
+
+def _outline_from_chunks(chunks: list[Chunk]) -> list[dict]:
+    """The document's own heading structure, in its original order.
+
+    One entry per distinct heading path, first-seen order preserved. This is
+    the imported document's table of contents as the chunker actually saw it
+    — recorded so "keep the original format" is a property of stored data
+    rather than something the drafting model has to be trusted to remember.
+    """
+    outline: list[dict] = []
+    seen: set[tuple[str, ...]] = set()
+    for chunk in chunks:
+        key = tuple(chunk.heading_path)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        outline.append({
+            "heading_path": list(chunk.heading_path),
+            "heading": chunk.heading_path[-1],
+            "locator": chunk.locator,
+        })
+    return outline
 
 
 # ── Existing SOW document extraction (Import SOW, SOW tab) ──────────────────
@@ -233,11 +651,10 @@ def extract_ledger_from_transcript(text: str) -> tuple[list[dict], str]:
 # "here is a conversation" -- conflating them risks quietly degrading
 # whichever framing loses out.
 
-def extract_ledger_from_sow_document(text: str, *, part_label: str | None = None) -> tuple[list[dict], str]:
-    """Extract ledger facts from an uploaded pre-existing SOW/requirements
-    document (or an excerpt of a large one — see
-    extract_ledger_from_sow_document_full for chunking). Returns
-    (facts, model_used). Raises IngestError on total provider failure."""
+def extract_ledger_from_sow_document(chunk: Chunk) -> tuple[list[dict], str]:
+    """Extract ledger facts from one chunk of an uploaded pre-existing
+    SOW/requirements document. Returns (facts, model_used). Raises
+    IngestError on total provider failure."""
     from app.services import llm_router
 
     system = (
@@ -250,58 +667,86 @@ def extract_ledger_from_sow_document(text: str, *, part_label: str | None = None
         "be MISSING from both, which has real business impact. Respond "
         "with JSON only:\n"
         f"{_LEDGER_RESPONSE_SHAPE}\n\n{_LEDGER_RULES}"
+        + _chunk_rules(chunk)
     )
-    prompt = "Extract a requirements ledger from this existing SOW/requirements document"
-    if part_label:
-        prompt += (
-            f" ({part_label} of a larger document — this is an excerpt; "
-            "extract only what appears in this excerpt)"
-        )
-    prompt += ":\n\n" + text
+    prompt = (
+        "Extract a requirements ledger from this existing SOW/requirements "
+        "document:\n\n" + chunk.prompt_text()
+    )
 
     try:
-        result = llm_router.complete(prompt, system=system, expect_json=True, max_tokens=8192)
+        result = llm_router.complete_json_complete(
+            prompt, system=system, max_tokens=_LEDGER_MAX_TOKENS
+        )
     except llm_router.LLMRouterError as exc:
         raise IngestError(f"All LLM providers failed: {exc}") from exc
 
+    if result.truncated:
+        raise _NeedsSplit(
+            f"the response for {_chunk_label(chunk)} was cut off at the token "
+            "limit even after escalation"
+        )
+
     raw = result.parsed_json or {}
     items = raw.get("facts", []) if isinstance(raw, dict) else []
-    facts = _validate_facts(items, source_label=part_label or "existing SOW document")
+    facts = _validate_facts(
+        items, source_label=_chunk_label(chunk), on_overflow="split"
+    )
+    # Stamp each fact with the heading it physically came from. The model is
+    # never asked for this -- it is the chunker's own structural knowledge,
+    # so it cannot be hallucinated -- and it is what lets a regenerated SOW
+    # reproduce the imported document's section order instead of inventing a
+    # fresh outline. See sow_drafting.group_ledger_into_sections.
+    if chunk.heading_path:
+        for fact in facts:
+            fact["source_heading_path"] = list(chunk.heading_path)
     logger.info(
-        "SOW ledger: %d fact(s) extracted from existing SOW document via %s",
-        len(facts), result.model_used,
+        "SOW ledger: %d fact(s) extracted from existing SOW document %s via %s",
+        len(facts), _chunk_label(chunk), result.model_used,
     )
     return facts, result.model_used
 
 
-def extract_ledger_from_sow_document_full(text: str) -> tuple[list[dict], str]:
-    """Chunk a (possibly large) existing-SOW document with
-    design_ingest.chunk_text and concatenate facts across chunks — same
-    chunking mechanism extract_ledger_from_transcript already uses, so a
-    long document never silently truncates. Simple concatenation, no
-    cross-chunk dedup (matches the transcript path's Phase 1 scope). Raises
-    IngestError only if EVERY chunk fails."""
-    chunks = chunk_text(text)
-    all_facts: list[dict] = []
-    models_used: list[str] = []
-    errors: list[str] = []
+def extract_ledger_from_sow_document_full(
+    source: str | list[Block],
+    *,
+    file_name: str = "document.txt",
+    document_title: str | None = None,
+    max_chars: int | None = None,
+    on_progress=None,
+) -> tuple[list[dict], str, list[str], list[dict]]:
+    """Chunk a (possibly large) existing-SOW document on its real structure
+    and extract facts from every part.
 
-    for i, chunk in enumerate(chunks, start=1):
-        part_label = f"part {i} of {len(chunks)}" if len(chunks) > 1 else None
-        try:
-            facts, model_used = extract_ledger_from_sow_document(chunk, part_label=part_label)
-            all_facts.extend(facts)
-            if model_used not in models_used:
-                models_used.append(model_used)
-        except IngestError as exc:
-            logger.warning(
-                "SOW ledger: existing SOW document chunk %d/%d failed: %s", i, len(chunks), exc
-            )
-            errors.append(str(exc))
+    Returns (facts, models_used, failures, outline). `outline` is the
+    document's own heading structure in its original order — see
+    `_outline_from_chunks`; it is what lets a regenerated SOW mirror the
+    imported document instead of inventing a fresh set of headings.
 
-    if not models_used:
-        raise IngestError(f"All document chunks failed: {'; '.join(errors)}")
-    return all_facts, ", ".join(models_used)
+    `source` should be the block list from
+    sow_import.extract_existing_sow_blocks() so headings, tables and page
+    markers are available to the chunker — a plain string still works but
+    falls back to paragraph splitting, which is what this plan replaced.
+
+    Duplicate facts are merged across chunks; a partially failed run returns
+    its successful facts with a non-empty `failures` list. See
+    _extract_chunks.
+    """
+    _report(on_progress, "chunking", 0, 0)
+    chunks = chunk_document(
+        source,
+        file_name=file_name,
+        doc_kind="sow_document",
+        document_title=document_title,
+        max_chars=max_chars,
+    )
+    facts, models, failures = _extract_chunks(
+        chunks,
+        extract_ledger_from_sow_document,
+        source_kind="existing SOW document",
+        on_progress=on_progress,
+    )
+    return facts, models, failures, _outline_from_chunks(chunks)
 
 
 # ── Meeting recording extraction (extends video_ingest.py) ──────────────────
@@ -483,15 +928,22 @@ def extract_ledger_from_image(
     prompt = "Extract a requirements ledger from this design reference image."
 
     try:
-        result = llm_router.complete(
+        result = llm_router.complete_json_complete(
             prompt,
             system=system,
             images_b64=[base64.b64encode(image_bytes).decode("ascii")],
-            expect_json=True,
-            max_tokens=8192,
+            max_tokens=_LEDGER_MAX_TOKENS,
         )
     except llm_router.LLMRouterError as exc:
         raise IngestError(f"All LLM providers failed: {exc}") from exc
+
+    if result.truncated:
+        # A single image cannot be "split into smaller pieces" the way a
+        # document chunk can, so this is reported rather than recovered.
+        logger.warning(
+            "SOW ledger: design image %s produced a truncated response even after "
+            "escalation — some on-screen controls may be missing", file_name,
+        )
 
     raw = result.parsed_json or {}
     items = raw.get("facts", []) if isinstance(raw, dict) else []

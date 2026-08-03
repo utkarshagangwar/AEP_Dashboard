@@ -38,6 +38,10 @@ _OVERVIEW_BLOCK_SHAPE = (
     '{"type": "callout", "tone": "info"|"warning", "text": str}]'
 )
 
+# Facts the overview pass reads. Unlike every other cap in this pipeline
+# this one is deliberate and non-lossy — see draft_overview.
+_MAX_OVERVIEW_FACTS = 150
+
 _OVERVIEW_SYSTEM = (
     "You are a senior technical writer drafting the opening sections of a "
     "Statement of Work, from requirement facts gathered across meetings, "
@@ -75,12 +79,28 @@ def draft_overview(document_title: str, facts: list) -> tuple[list[dict], list[d
 
     relevant = [f for f in facts if (f.fact_type.value if hasattr(f.fact_type, "value") else str(f.fact_type)) in ("feature", "decision")]
     source = relevant or facts  # fall back to everything if nothing is tagged feature/decision
+
+    # The one place in this pipeline where capping the INPUT is correct
+    # rather than lossy: an overview is a summary by definition, so it does
+    # not need every fact, and no requirement lives only here — each one is
+    # also drafted into its own section by sow_drafting. Logged anyway, so
+    # "the overview only saw part of the ledger" is never a silent fact.
+    if len(source) > _MAX_OVERVIEW_FACTS:
+        logger.info(
+            "SOW assembly: overview drafted from the first %d of %d fact(s) "
+            "(summary pass — full detail lives in the per-section drafts)",
+            _MAX_OVERVIEW_FACTS, len(source),
+        )
+        source = source[:_MAX_OVERVIEW_FACTS]
+
     indexed = [_fact_summary(f, i) for i, f in enumerate(source)]
 
     prompt = f"Document title: {document_title}\n\nRequirement facts:\n{indexed}"
 
     try:
-        result = llm_router.complete(prompt, system=_OVERVIEW_SYSTEM, expect_json=True, max_tokens=4096)
+        result = llm_router.complete_json_complete(
+            prompt, system=_OVERVIEW_SYSTEM, max_tokens=8192
+        )
     except llm_router.LLMRouterError as exc:
         raise IngestError(f"All LLM providers failed while drafting the overview: {exc}") from exc
 

@@ -2,7 +2,9 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import GlobalLoader from "../../components/GlobalLoader";
 import PageContainer from "../../components/PageContainer";
+import { toastSuccess } from "../../lib/toast";
 import { apiGet, apiPost, apiPatch } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
 import {
@@ -91,6 +93,7 @@ export default function DefectsPage() {
         severity: "medium",
         project_id: "",
       });
+      toastSuccess("Defect created");
     },
     onError: (e) => setFormError(e.message),
   });
@@ -103,6 +106,7 @@ export default function DefectsPage() {
       qc.invalidateQueries(["defects"]);
       setEditDefect(null);
       setEditError("");
+      toastSuccess("Defect updated");
     },
     onError: (e) =>
       setEditError(typeof e.message === "string" ? e.message : "Failed to update defect"),
@@ -298,16 +302,7 @@ export default function DefectsPage() {
             ))}
           </div>
           {isLoading ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: "center",
-                color: "#9CA3AF",
-                fontSize: 13,
-              }}
-            >
-              Loading…
-            </div>
+            <GlobalLoader />
           ) : !defects.length ? (
             <div
               style={{

@@ -2,13 +2,12 @@
 
 /**
  * Mode selector for the Vibe Testing "New test" tab — replaces the old
- * stacked-cards layout (Vibe UI test card, Autonomous QA card, SOW
- * Checkpoints card, Video Walkthrough card, Visual Audit card, Figma Import
- * card all rendered one after another) with a single "choose how to test"
+ * stacked-cards layout (UI test, Functional Test, and Visual and design QA)
+ * with a single "choose how to test"
  * step. Picking a mode just toggles which panel is visible in page.tsx —
  * this component owns no data/API logic of its own, it's purely the picker.
  *
- * Five modes map 1:1 to five distinct existing backend-backed features:
+ * Three modes map 1:1 to existing backend-backed features:
  *  - ui         → VisualAuditSection (reference design + target URL,
  *                 backed by visual_judge.judge() / visual_runs). Replaces
  *                 the old single free-text "quick" goal box's UI-testing
@@ -23,18 +22,16 @@
  *  - visual     → AutonomousQASection (URL + Figma + video + SOW + saved
  *                 reference + credentials, all submitted together as one
  *                 run) — unchanged.
- *  - sow        → SowCheckpointsSection variant="sow" — unchanged.
- *  - video      → SowCheckpointsSection variant="video" — unchanged.
  * Figma Import (standalone) is intentionally not represented here — removed
  * from the Vibe Testing page per product decision; still reachable inside
  * the "ui" mode's reference picker via VisualAuditSection.
  */
 
 import type { ReactNode } from "react";
-import { Clapperboard, FileText, LayoutTemplate, ListChecks, ScanEye } from "lucide-react";
+import { LayoutTemplate, ListChecks, ScanEye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type TestMode = "ui" | "functional" | "visual" | "sow" | "video";
+export type TestMode = "ui" | "functional" | "visual";
 
 interface ModeCardConfig {
   id: TestMode;
@@ -77,26 +74,6 @@ const CARDS: ModeCardConfig[] = [
     accentClasses: "bg-violet-600",
     iconClasses: "bg-violet-100 text-violet-700",
     focusClasses: "focus-visible:ring-violet-500",
-  },
-  {
-    id: "sow",
-    title: "SOW checkpoints",
-    desc: "Parse a spec document into reusable functional and visual test skills.",
-    icon: <FileText className="h-4 w-4" />,
-    selectedClasses: "border-teal-200 bg-teal-50/80",
-    accentClasses: "bg-teal-600",
-    iconClasses: "bg-teal-100 text-teal-700",
-    focusClasses: "focus-visible:ring-teal-500",
-  },
-  {
-    id: "video",
-    title: "Video walkthrough",
-    desc: "Extract testable steps from a recorded product walkthrough.",
-    icon: <Clapperboard className="h-4 w-4" />,
-    selectedClasses: "border-amber-200 bg-amber-50/80",
-    accentClasses: "bg-amber-500",
-    iconClasses: "bg-amber-100 text-amber-700",
-    focusClasses: "focus-visible:ring-amber-500",
   },
 ];
 

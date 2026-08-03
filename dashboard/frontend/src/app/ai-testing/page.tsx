@@ -7,7 +7,6 @@ import { getAccessToken } from "@/lib/api";
 import AppShell from "@/components/AppShell";
 import PageContainer from "@/components/PageContainer";
 import AutonomousQASection from "@/components/AutonomousQASection";
-import SowCheckpointsSection from "@/components/SowCheckpointsSection";
 import VisualAuditSection from "@/components/VisualAuditSection";
 import CoverageTab from "@/components/ai-testing/CoverageTab";
 import ResultsTab from "@/components/ai-testing/ResultsTab";
@@ -31,6 +30,13 @@ import {
 import AndroidNewTestPanel from "@/components/ai-testing/AndroidNewTestPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PasswordRevealSwitch } from "@/components/ui/password-reveal-switch";
+import {
+  SegmentedTabs,
+  SegmentedTabsIndicator,
+  SegmentedTabsList,
+  SegmentedTabsTab,
+} from "@/components/ui/segmented-tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -109,21 +115,26 @@ function PageTabBar({
   onChange: (tab: PageTab) => void;
 }) {
   return (
-    <div className="flex border-b border-gray-200 gap-6 mb-8">
-      {PAGE_TABS.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => onChange(tab.id)}
-          className={`pb-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
-            active === tab.id
-              ? "border-gray-900 text-gray-900"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
+    <SegmentedTabs
+      value={active}
+      onValueChange={(value) => onChange(value as PageTab)}
+      className="mb-8"
+    >
+      <SegmentedTabsList>
+        <SegmentedTabsIndicator />
+        {PAGE_TABS.map((tab) => (
+          // w-auto px-4 overrides the component's fixed 50px tab width, which
+          // only fits very short labels ("New Test" and "Coverage" would clip).
+          <SegmentedTabsTab
+            key={tab.id}
+            value={tab.id}
+            className="w-auto px-4"
+          >
+            {tab.label}
+          </SegmentedTabsTab>
+        ))}
+      </SegmentedTabsList>
+    </SegmentedTabs>
   );
 }
 
@@ -142,6 +153,7 @@ export default function AITestingPage() {
   const [adhocUrl, setAdhocUrl] = useState("");
   const [adhocLoginId, setAdhocLoginId] = useState("");
   const [adhocPassword, setAdhocPassword] = useState("");
+  const [showAdhocPassword, setShowAdhocPassword] = useState(false);
   const [bypassDialogOpen, setBypassDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
@@ -154,11 +166,9 @@ export default function AITestingPage() {
   const [defectDescription, setDefectDescription] = useState("");
   const [defectLogged, setDefectLogged] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  // New-test mode picker (UI-only grouping — each mode maps to an existing,
-  // independently-functioning section; switching modes never unmounts a
-  // section, it only toggles visibility, so an in-flight upload/poll/run in
-  // a non-active mode keeps running untouched. "android" is a placeholder
-  // surface with no backend behind it yet.
+  // New-test mode picker for the three Vibe Testing surfaces. Switching
+  // modes only toggles visibility, so an in-flight visual audit remains
+  // intact while another web-test mode is selected.
   const [testMode, setTestMode] = useState<TestMode>("functional");
   const [testType, setTestType] = useState<"web" | "android">("web");
   // Structured Functional Test authoring state (New Vibe Test Phase 1) —
@@ -679,7 +689,7 @@ export default function AITestingPage() {
                     reference upload/Figma-imported picker, target URL, run,
                     poll, and findings display) and doesn't participate in
                     the goal/runId/SSE state machine below at all — same
-                    pattern as AutonomousQASection/SowCheckpointsSection. */}
+                    pattern as AutonomousQASection. */}
                 <div className={testMode === "ui" ? "" : "hidden"}>
                   <VisualAuditSection />
                 </div>
@@ -858,11 +868,15 @@ export default function AITestingPage() {
                           className="flex-1 min-w-[160px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
                         />
                         <input
-                          type="password"
+                          type={showAdhocPassword ? "text" : "password"}
                           value={adhocPassword}
                           onChange={(e) => setAdhocPassword(e.target.value)}
                           placeholder="Password"
                           className="flex-1 min-w-[160px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                        />
+                        <PasswordRevealSwitch
+                          revealed={showAdhocPassword}
+                          onRevealedChange={setShowAdhocPassword}
                         />
                       </>
                     )}
@@ -877,6 +891,7 @@ export default function AITestingPage() {
 
                 <div className="pt-1">
                   <Button
+                    variant="invert"
                     onClick={handleSubmit}
                     disabled={!functionalPayload?.isValid || !adhocValid || submitting}
                     className="w-full h-11 text-base font-medium"
@@ -915,36 +930,10 @@ export default function AITestingPage() {
 
                 </div>
 
-                {/* AutonomousQASection and SowCheckpointsSection are each
-                    feature-detected server-side and render null on their own
-                    when the backend flag is off — unchanged from before. */}
+                {/* AutonomousQASection remains feature-detected server-side
+                    and renders null when its backend flag is off. */}
                 <div className={testMode === "visual" ? "" : "hidden"}>
                   <AutonomousQASection />
-                </div>
-
-                <div className={testMode === "sow" ? "" : "hidden"}>
-                  <SowCheckpointsSection
-                    onUseGoal={(g) => {
-                      setGoal(g);
-                      setSubmitError(null);
-                      if (typeof window !== "undefined") {
-                        window.scrollTo({ top: 0, behavior: "smooth" });
-                      }
-                    }}
-                  />
-                </div>
-
-                <div className={testMode === "video" ? "" : "hidden"}>
-                  <SowCheckpointsSection
-                    variant="video"
-                    onUseGoal={(g) => {
-                      setGoal(g);
-                      setSubmitError(null);
-                      if (typeof window !== "undefined") {
-                        window.scrollTo({ top: 0, behavior: "smooth" });
-                      }
-                    }}
-                  />
                 </div>
               </>
             )}

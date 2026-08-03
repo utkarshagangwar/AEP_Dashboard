@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
 import { apiGet, apiPost, apiFetch } from "../../../utils/apiClient";
+import { toastSuccess } from "../../../lib/toast";
 import { getStoredUser } from "../../../utils/authStore";
 
 const STATUS_COLORS = {
@@ -157,6 +158,7 @@ export default function ReportDetailPage() {
       apiPost(`/api/reports/${runId}/ai-suggestions/${filename}/approve`, {}),
     onSuccess: () => {
       qc.invalidateQueries(["report-ai-suggestions", runId]);
+      toastSuccess("Suggestion approved");
     },
   });
 
@@ -166,6 +168,7 @@ export default function ReportDetailPage() {
       qc.invalidateQueries(["report-detail", runId]);
       setLogDefectFor(null);
       setDefectForm({ title: "", description: "", severity: "medium" });
+      toastSuccess("Defect logged");
     },
     onError: (e) => setDefectError(e.message),
   });

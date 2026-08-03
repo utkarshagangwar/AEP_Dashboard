@@ -3,6 +3,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
 import PageContainer from "../../components/PageContainer";
+import ScriptRunTabs from "../../components/ScriptRunTabs";
+import { Button } from "../../components/ui/button";
 import { apiGet, apiPost, apiDelete, refreshAccessToken } from "../../utils/apiClient";
 import { getAccessToken } from "../../lib/api";
 import {
@@ -292,6 +294,7 @@ export default function ExecutePage() {
   return (
     <AppShell noPadding>
       <PageContainer>
+        <ScriptRunTabs />
         {/* Header */}
         <div style={{ marginBottom: 28, display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
@@ -464,21 +467,12 @@ export default function ExecutePage() {
             </div>
 
             {/* Run Button */}
-            <button
+            <Button
+              variant="invert"
+              size="lg"
               onClick={handleTrigger}
               disabled={!selectedSuite || isRunActive}
-              style={{
-                padding: "9px 24px",
-                fontSize: 13,
-                fontWeight: 600,
-                background: isRunActive || !selectedSuite ? "#93C5FD" : "#2563EB",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: isRunActive || !selectedSuite ? "not-allowed" : "pointer",
-                whiteSpace: "nowrap",
-                transition: "background 0.15s",
-              }}
+              className="whitespace-nowrap px-6"
             >
               {isRunActive ? (
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -497,7 +491,7 @@ export default function ExecutePage() {
               ) : (
                 "▶ Run Tests"
               )}
-            </button>
+            </Button>
           </div>
 
           {triggerError && (

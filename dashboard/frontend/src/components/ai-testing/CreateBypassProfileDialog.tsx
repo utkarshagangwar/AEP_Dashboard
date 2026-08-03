@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { apiPost } from "@/utils/apiClient";
 import { Button } from "@/components/ui/button";
+import { PasswordRevealSwitch } from "@/components/ui/password-reveal-switch";
 import { CredentialProfile } from "@/components/ai-testing/shared";
 
 /**
@@ -191,18 +192,31 @@ function Field({
   type?: string;
   help?: string;
 }) {
+  // Handled here rather than at each call site so any Field marked
+  // type="password" gets the reveal control automatically.
+  const isPassword = type === "password";
+  const [revealed, setRevealed] = useState(false);
+
   return (
     <div>
       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">
         {label}
       </label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-      />
+      <div className="flex items-center gap-2">
+        <input
+          type={isPassword && revealed ? "text" : type}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+        />
+        {isPassword && (
+          <PasswordRevealSwitch
+            revealed={revealed}
+            onRevealedChange={setRevealed}
+          />
+        )}
+      </div>
       {help && <p className="text-xs text-gray-400 mt-1">{help}</p>}
     </div>
   );

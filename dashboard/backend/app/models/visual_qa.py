@@ -147,6 +147,31 @@ class SowPart(Base):
     error = mapped_column(Text, nullable=True)
     checkpoints = mapped_column(JSONB, nullable=True)
     parsed_by_model = mapped_column(String(200), nullable=True)
+
+    # ── Chunk provenance (SOW_CHUNKING_PLAN Phase 3, migration 0038) ──
+    # All nullable with no backfill: parts are created once at ingest and
+    # never re-chunked, so rows written by the old character-window
+    # splitter simply carry NULLs and are left alone. Re-ingesting an
+    # artifact is the migration path.
+    #
+    # heading_path: JSON array, the section breadcrumb this part sits in,
+    #   e.g. ["2. Functional Requirements", "2.1 Candidate List"]. This is
+    #   what replaced the bare "part 3 of 7" the LLM used to receive.
+    heading_path = mapped_column(JSONB, nullable=True)
+    # locator: "p.12" / "§4.3.2" / "00:14:32" -- traceability back to the
+    #   exact place in the source this part came from.
+    locator = mapped_column(String(200), nullable=True)
+    # strategy: which chunking strategy produced this part. The value
+    #   "hard_split" is the DEGRADATION SIGNAL -- it means the part had to
+    #   be cut at an arbitrary point because a single unit exceeded the
+    #   budget. Surfaced in the UI (plan §5) so it is assertable from a
+    #   vibe test rather than visible only in worker logs.
+    strategy = mapped_column(String(40), nullable=True)
+    # context_header: the exact framing block sent to the LLM alongside
+    #   this part's content. Stored for reproducibility -- without it, a
+    #   bad extraction cannot be diagnosed after the fact.
+    context_header = mapped_column(Text, nullable=True)
+
     created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

@@ -77,6 +77,23 @@ class RouterResult:
     # vision pass) can detect and retry a truncated response instead of
     # silently persisting a findings array that stops mid-object.
     finish_reason: Optional[str] = field(default=None)
+    # True if ANY response in this call (the original OR the repair pass)
+    # reported finish_reason == "length".
+    #
+    # `finish_reason` alone is NOT a reliable truncation signal for JSON
+    # callers, and that gap was silently losing content: the common failure
+    # is that the ORIGINAL response is cut off mid-array ("length"), its JSON
+    # therefore doesn't parse, and the repair pass -- whose prompt is much
+    # shorter than the original -- finishes cleanly ("stop") while quietly
+    # dropping the incomplete tail. Reporting only the repair's reason turns
+    # a truncated 200-item array into a clean-looking 140-item one. This flag
+    # is latched across both calls so a caller can never miss that.
+    truncated: bool = field(default=False)
+    # True if the JSON repair pass ran at all. For array-shaped payloads a
+    # repair is itself a content-loss signal (the repairer can only rebuild
+    # what survived), so callers that care about exhaustiveness can treat it
+    # as a weaker sibling of `truncated`.
+    repaired: bool = field(default=False)
 
 
 def _model_chain() -> list[str]:
@@ -372,6 +389,11 @@ def complete(
                 if not text:
                     raise ValueError("Empty response from model")
                 finish_reason = getattr(response.choices[0], "finish_reason", None)
+                # Latch the ORIGINAL response's truncation before the repair
+                # pass below can overwrite `finish_reason` -- see
+                # RouterResult.truncated for why this must not be lost.
+                truncated = finish_reason == "length"
+                repaired = False
 
                 parsed = None
                 if expect_json:
@@ -408,6 +430,12 @@ def complete(
                         # cleanly ("stop"), or vice versa. Report the one that
                         # actually produced the `text`/`parsed` being returned.
                         finish_reason = getattr(repair.choices[0], "finish_reason", None)
+                        # `truncated`, unlike `finish_reason`, is OR-ed rather
+                        # than replaced: the original being cut off is exactly
+                        # what the caller needs to know, and a clean repair
+                        # does not undo that loss.
+                        truncated = truncated or finish_reason == "length"
+                        repaired = True
 
                 duration_ms = int((time.monotonic() - start) * 1000)
                 logger.info(
@@ -421,6 +449,13 @@ def complete(
                     key=usage_key, status="ok", response=response,
                     duration_ms=duration_ms, attempts=attempts,
                 )
+                if truncated:
+                    logger.warning(
+                        "LLM router: response from %s was truncated at max_tokens=%d "
+                        "(repair_pass=%s) — the caller is responsible for recovering "
+                        "the lost tail",
+                        model, max_tokens, repaired,
+                    )
                 return RouterResult(
                     text=text,
                     model_used=model,
@@ -428,6 +463,8 @@ def complete(
                     duration_ms=duration_ms,
                     parsed_json=parsed,
                     finish_reason=finish_reason,
+                    truncated=truncated,
+                    repaired=repaired,
                 )
 
             except transient_errors as exc:
@@ -468,6 +505,62 @@ def complete(
         f"All models failed after {attempts} attempts in {duration_ms}ms: "
         + "; ".join(errors[-len(chain) * 2 :])
     )
+
+
+_MAX_TOKENS_CEILING = 65536  # do not escalate past this regardless of config
+
+
+def complete_json_complete(
+    prompt: str,
+    *,
+    system: Optional[str] = None,
+    max_tokens: int = 4096,
+    escalations: int = 1,
+    **kwargs: Any,
+) -> RouterResult:
+    """complete(expect_json=True) that fights back against output truncation.
+
+    A structured-JSON call whose response is cut off by max_tokens does not
+    fail loudly — complete()'s repair pass rewrites the truncated text into
+    *valid* JSON by discarding the incomplete tail, so the caller receives a
+    well-formed but silently shortened list. For an exhaustiveness-critical
+    payload (a requirements ledger, a checkpoint list) that is a business
+    failure, not a formatting one.
+
+    This helper retries the same call at double the token budget while the
+    result still reports truncation, up to `escalations` times. The returned
+    RouterResult keeps `truncated=True` if the ceiling was reached without
+    resolving it, so the caller can still take a structural remedy (splitting
+    its input, flagging the gap) rather than assuming completeness. It never
+    raises for truncation alone — LLMRouterError propagation is unchanged.
+
+    Generalized from visual_judge.py's inline retry (New Vibe Test Phase 5,
+    E.23) so every structured-JSON caller gets the same protection instead of
+    each one re-implementing it.
+    """
+    budget = max_tokens
+    result = complete(prompt, system=system, expect_json=True, max_tokens=budget, **kwargs)
+
+    for _ in range(max(0, escalations)):
+        if not result.truncated:
+            return result
+        next_budget = min(budget * 2, _MAX_TOKENS_CEILING)
+        if next_budget <= budget:
+            break  # already at the ceiling — nothing left to escalate to
+        logger.warning(
+            "LLM router: retrying truncated JSON call at max_tokens=%d (was %d)",
+            next_budget, budget,
+        )
+        budget = next_budget
+        result = complete(prompt, system=system, expect_json=True, max_tokens=budget, **kwargs)
+
+    if result.truncated:
+        logger.error(
+            "LLM router: JSON response still truncated after escalating to "
+            "max_tokens=%d — caller must recover the lost content structurally",
+            budget,
+        )
+    return result
 
 
 def encode_image_file(path: str) -> str:

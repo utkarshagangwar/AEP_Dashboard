@@ -1,0 +1,23 @@
+# Dev-only test dependencies. NOT installed in the Docker image or on Render
+# (see docker/ and start.sh -- both install requirements.txt only), so nothing
+# here reaches production.
+#
+# Added by SOW_CHUNKING_PLAN.md Phase 1. Before this file, the repo had no
+# test runner at all (golden_tests/run_golden_set.py is a standalone argparse
+# script and stays that way -- it needs real API keys and a browser, which is
+# exactly what a unit-test suite must never need).
+#
+# Install:
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+pytest==8.3.4
+
+# Property-based testing. Used for the chunker's lossless invariant
+# (T-C-001): a hand-written example set cannot credibly assert "no character
+# of any input is ever dropped" -- that claim needs generated inputs.
+hypothesis==6.122.3
+
+# PDF fixture generation only (golden_tests/references/chunking/make_fixtures.py).
+# The app itself READS pdfs via pypdf (a real dependency); nothing in app/
+# writes them, so this stays dev-only.
+reportlab==4.2.5

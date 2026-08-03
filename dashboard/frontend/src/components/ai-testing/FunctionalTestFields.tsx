@@ -18,6 +18,11 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -94,14 +99,21 @@ function ListEditor({
               className="flex-1 rounded-md border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
             />
             {rows.length > minRows && (
-              <button
-                type="button"
-                onClick={() => onChange(rows.filter((_, j) => j !== i))}
-                className="text-gray-400 hover:text-red-600 text-sm flex-shrink-0 px-1"
-                aria-label={`Remove ${label.toLowerCase()} ${i + 1}`}
-              >
-                ✕
-              </button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={() => onChange(rows.filter((_, j) => j !== i))}
+                      className="text-gray-400 hover:text-red-600 text-sm flex-shrink-0 px-1"
+                      aria-label={`Remove ${label.toLowerCase()} ${i + 1}`}
+                    >
+                      ✕
+                    </button>
+                  }
+                />
+                <TooltipContent>Remove {label.toLowerCase()}</TooltipContent>
+              </Tooltip>
             )}
           </div>
         ))}
@@ -276,14 +288,23 @@ export default function FunctionalTestFields({
                     placeholder="Data set name"
                     className="flex-1 rounded-md border border-gray-200 px-2.5 py-1.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-900"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setDataSets(dataSets.filter((_, j) => j !== i))}
-                    className="text-gray-400 hover:text-red-600 text-sm px-1"
-                    aria-label={`Remove data set ${i + 1}`}
-                  >
-                    ✕
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDataSets(dataSets.filter((_, j) => j !== i))
+                          }
+                          className="text-gray-400 hover:text-red-600 text-sm px-1"
+                          aria-label={`Remove data set ${i + 1}`}
+                        >
+                          ✕
+                        </button>
+                      }
+                    />
+                    <TooltipContent>Remove data set</TooltipContent>
+                  </Tooltip>
                 </div>
                 {Object.entries(ds.values).map(([k, v], kvI) => (
                   <div key={kvI} className="flex items-center gap-2 pl-2">

@@ -63,6 +63,11 @@ export interface Skill {
   project_name?: string | null;
   environment?: string | null;
   source_type?: "sow" | "video" | null;
+  // null/absent = fully specified by its source and runnable as written.
+  // Set when the source document named this requirement without specifying
+  // it well enough to execute; review_reason says what is missing.
+  review_status?: "needs_review" | "needs_design_flow" | null;
+  review_reason?: string | null;
   has_recording: boolean;
   manually_edited: boolean;
   step_count: number;

@@ -116,6 +116,8 @@ def upsert_prompt_skill(
     artifact_id,
     project_id=None,
     created_by=None,
+    review_status=None,
+    review_reason=None,
 ):
     """Create or refresh a prompt-only skill extracted from a parsed SOW/video
     checkpoint (no recorded browser actions — just a detailed instruction).
@@ -129,7 +131,10 @@ def upsert_prompt_skill(
     If a human has since edited this skill by hand (manually_edited=True),
     its name/goal/project are left untouched — re-parsing must never
     silently clobber a deliberate manual edit. Provenance (source_type/
-    source_artifact_id) is still refreshed either way.
+    source_artifact_id) and the review flags are still refreshed either way:
+    they describe what the SOURCE document says, not what the human wrote,
+    so a re-parse that finds the requirement now fully specified must be
+    able to clear the flag (and vice versa) on a hand-edited skill too.
     """
     from app.models.ai_runs import AISkill
 
@@ -147,6 +152,8 @@ def upsert_prompt_skill(
     if skill is not None:
         skill.source_type = source_type
         skill.source_artifact_id = artifact_id
+        skill.review_status = review_status
+        skill.review_reason = review_reason
         if not skill.manually_edited:
             skill.name = name
             skill.goal = instruction
@@ -166,6 +173,8 @@ def upsert_prompt_skill(
             history_json=None,
             step_count=0,
             created_by=created_by,
+            review_status=review_status,
+            review_reason=review_reason,
         )
         db.add(skill)
     return skill

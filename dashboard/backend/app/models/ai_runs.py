@@ -72,6 +72,21 @@ class AICredentialProfile(Base):
     )
 
 
+# Values for AISkill.review_status (migration 0040). Plain constants rather
+# than a DB Enum, matching the SOW_SOURCE_STAGE_* convention in
+# app/models/sow.py: this vocabulary is expected to grow, and Postgres enum
+# values cannot be removed once added (see migration 0036's downgrade note).
+# An unrecognised value degrades to "flagged" in the UI, never breaks it.
+SKILL_REVIEW_READY = None            # fully specified — runnable as written
+SKILL_REVIEW_NEEDS_REVIEW = "needs_review"
+# The document implies a user flow it never actually describes (names a
+# screen but no route to it, an outcome but no trigger). Distinct from
+# needs_review because the fix is a design decision, not a clarification.
+SKILL_REVIEW_NEEDS_DESIGN_FLOW = "needs_design_flow"
+
+SKILL_REVIEW_STATUSES = (SKILL_REVIEW_NEEDS_REVIEW, SKILL_REVIEW_NEEDS_DESIGN_FLOW)
+
+
 class AISkill(Base):
     """A reusable skill in the Vibe Testing "Skills" tab — either a recorded
     action replay or a prompt-only instruction, distinguished by whether
@@ -143,6 +158,20 @@ class AISkill(Base):
     # Protects that edit from being silently clobbered the next time the
     # source SOW/video part is re-analyzed (see skill_store.upsert_prompt_skill).
     manually_edited = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Whether this skill is actually runnable as written, or needs a human to
+    # fill in something the source document never specified (migration 0040).
+    # One of the SKILL_REVIEW_* constants below; NULL/"ready" means runnable.
+    #
+    # This exists because the alternative was worse: a requirement the source
+    # described but did not specify well enough to write steps for used to be
+    # dropped silently, so it produced no skill and no trace. Nothing is
+    # marked ready by default — an under-specified requirement is captured
+    # and flagged, never quietly omitted and never quietly passed off as
+    # complete.
+    review_status = mapped_column(String(30), nullable=True, index=True)
+    # What specifically is missing, in the model's own words, e.g. "the
+    # document names the Export button but never states what it produces".
+    review_reason = mapped_column(Text, nullable=True)
     created_by = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

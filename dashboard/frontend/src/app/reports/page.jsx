@@ -2,7 +2,11 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
+import GlobalLoader from "../../components/GlobalLoader";
 import PageContainer from "../../components/PageContainer";
+import ScriptRunTabs from "../../components/ScriptRunTabs";
+import { toastSuccess } from "../../lib/toast";
+import { DeleteIconButton } from "../../components/ui/delete-icon-button";
 import { apiGet, apiDelete } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
 import {
@@ -131,12 +135,16 @@ export default function ReportsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id) => apiDelete(`/api/test-runs/${id}?action=delete`),
-    onSuccess: () => qc.invalidateQueries(["reports"]),
+    onSuccess: () => {
+      qc.invalidateQueries(["reports"]);
+      toastSuccess("Test run deleted");
+    },
   });
 
   return (
     <AppShell noPadding>
       <PageContainer>
+        <ScriptRunTabs />
         <div
           style={{
             display: "flex",
@@ -404,16 +412,7 @@ export default function ReportsPage() {
             ))}
           </div>
           {isLoading ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: "center",
-                color: "#9CA3AF",
-                fontSize: 13,
-              }}
-            >
-              Loading…
-            </div>
+            <GlobalLoader />
           ) : !runs.length ? (
             <div
               style={{
@@ -524,26 +523,17 @@ export default function ReportsPage() {
                 <div>
                   {canWrite &&
                     !["running", "queued", "pending"].includes(run.status) && (
-                      <button
+                      <DeleteIconButton
                         onClick={(e) => {
+                          // The whole row is an <a> — stop it navigating.
                           e.preventDefault();
                           e.stopPropagation();
                           if (window.confirm("Delete this test run permanently?")) {
                             deleteMutation.mutate(run.id);
                           }
                         }}
-                        style={{
-                          fontSize: 11,
-                          padding: "4px 8px",
-                          border: "1px solid #FECACA",
-                          borderRadius: 6,
-                          background: "#FEF2F2",
-                          color: "#DC2626",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Delete
-                      </button>
+                        aria-label="Delete test run"
+                      />
                     )}
                 </div>
               </a>
