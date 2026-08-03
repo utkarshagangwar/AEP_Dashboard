@@ -10,7 +10,7 @@
 # Install:
 #   pip install -r requirements.txt -r requirements-dev.txt
 
-pytest==8.3.4
+pytest==9.0.3
 
 # Property-based testing. Used for the chunker's lossless invariant
 # (T-C-001): a hand-written example set cannot credibly assert "no character
