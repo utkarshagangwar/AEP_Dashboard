@@ -35,7 +35,7 @@ requests==2.34.2
 # 0.1.40->0.1.45 (diffed both wheels directly).
 browser-use==0.1.45
 playwright==1.49.0
-cryptography==48.0.1
+cryptography==50.0.0
 # Pinned to 2.1.2 (down from 2.1.12) because browser-use==0.1.45 hard-pins
 # langchain-google-genai==2.1.2 as a core dependency (was dev-only under
 # 0.1.40). Verified _generate/_agenerate signatures used by the
