@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FindingCard, RunResult, formatDuration } from "./shared";
 
@@ -105,12 +106,13 @@ export default function OrchestratorRunDetail({
               <p className="text-sm text-red-600">{result.error_message}</p>
             )}
             {result.ai_test_run_id && onNavigateToRun && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => onNavigateToRun(result.ai_test_run_id!)}
-                className="text-sm text-blue-600 hover:underline"
               >
                 View the AI agent's step-by-step run →
-              </button>
+              </Button>
             )}
           </CardContent>
         </Card>

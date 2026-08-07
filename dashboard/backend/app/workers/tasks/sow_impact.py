@@ -82,6 +82,37 @@ def analyze_source_impact_task(self, source_id: str) -> None:
         if not new_facts:
             return
 
+        # A source cannot be "new material" for a version that was built from
+        # it. The import path builds version 1 verbatim from the very document
+        # it just extracted facts from; if this source is the ONLY source with
+        # live facts on the document, the current version can only have come
+        # from it, so there is nothing pre-existing for it to affect. Without
+        # this, a fresh import diffs against itself and every section comes
+        # back "affected by new source". Checked here as well as at the call
+        # site so a re-queue, a manual replay, or a future caller cannot
+        # reintroduce the same self-comparison.
+        other_source_facts = (
+            session.query(SowRequirementsLedger.id)
+            .filter(
+                SowRequirementsLedger.document_id == document.id,
+                SowRequirementsLedger.source_artifact_id != source.artifact_id,
+                SowRequirementsLedger.superseded.is_(False),
+            )
+            .first()
+        )
+        if other_source_facts is None:
+            logger.info(
+                "SOW impact: source %s is the document's only source — the current "
+                "version was built from it, so there is nothing to affect", source_id,
+            )
+            # Clear any stale flags a previous run of this bug may have left,
+            # so an already-imported document heals on its next extraction.
+            if document.pending_section_keys or document.pending_new_fact_count:
+                document.pending_section_keys = None
+                document.pending_new_fact_count = None
+                session.commit()
+            return
+
         # Retire what this source restates BEFORE assigning, so a superseded
         # older fact can't keep a section on the affected list on its own.
         sow_impact.mark_superseded(session, document.id, new_facts)

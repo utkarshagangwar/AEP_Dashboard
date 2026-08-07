@@ -3,6 +3,7 @@ import { useState, use } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
+import { Button } from "../../../components/ui/button";
 import { toastSuccess } from "../../../lib/toast";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
@@ -362,22 +363,9 @@ export default function ProjectDetailPage({ params }) {
               </div>
             </div>
             {canWrite && (
-              <button
-                onClick={openEditProjectModal}
-                style={{
-                  padding: "8px 16px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  background: "#fff",
-                  color: "#374151",
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <Button variant="outline" size="lg" onClick={openEditProjectModal}>
                 Edit
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -397,21 +385,9 @@ export default function ProjectDetailPage({ params }) {
               Environments
             </h2>
             {canWrite && (
-              <button
-                onClick={openEnvModal}
-                style={{
-                  padding: "6px 14px",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  background: "#fff",
-                  color: "#374151",
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
+              <Button variant="outline" size="sm" onClick={openEnvModal}>
                 Edit
-              </button>
+              </Button>
             )}
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -463,24 +439,16 @@ export default function ProjectDetailPage({ params }) {
             Test Suites
           </h2>
           {canWrite && (
-            <button
+            <Button
+              variant="invert"
+              size="lg"
               onClick={() => {
                 setShowModal(true);
                 setFormError("");
               }}
-              style={{
-                padding: "9px 16px",
-                background: "#2563EB",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
             >
               + Add Suite
-            </button>
+            </Button>
           )}
         </div>
 
@@ -535,6 +503,7 @@ export default function ProjectDetailPage({ params }) {
             suites.map((suite, i) => (
               <div
                 key={suite.id}
+                className="row-interactive"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "1.6fr 110px 2fr 100px 40px",
@@ -543,14 +512,7 @@ export default function ProjectDetailPage({ params }) {
                   borderBottom:
                     i < suites.length - 1 ? "1px solid #F3F4F6" : "none",
                   alignItems: "center",
-                  transition: "background 0.1s",
                 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "#F9FAFB")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "transparent")
-                }
               >
                 <p
                   style={{
@@ -589,30 +551,21 @@ export default function ProjectDetailPage({ params }) {
                     <Tooltip>
                     <TooltipTrigger
                       render={
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() =>
                         setOpenSuiteMenuId(openSuiteMenuId === suite.id ? null : suite.id)
                       }
                       aria-label="Suite actions"
-                      style={{
-                        width: 28,
-                        height: 28,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: openSuiteMenuId === suite.id ? "#F3F4F6" : "transparent",
-                        border: "none",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        color: "#6B7280",
-                      }}
+                      aria-expanded={openSuiteMenuId === suite.id}
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                         <circle cx="12" cy="5" r="1.8" />
                         <circle cx="12" cy="12" r="1.8" />
                         <circle cx="12" cy="19" r="1.8" />
                       </svg>
-                    </button>
+                    </Button>
                       }
                     />
                     <TooltipContent>Suite actions</TooltipContent>
@@ -632,24 +585,15 @@ export default function ProjectDetailPage({ params }) {
                           overflow: "hidden",
                         }}
                       >
-                        <button
+                        <Button
+                          variant="ghost"
+                          size="lg"
                           onClick={() => openEditSuiteModal(suite)}
-                          style={{
-                            display: "block",
-                            width: "100%",
-                            textAlign: "left",
-                            padding: "8px 14px",
-                            fontSize: 13,
-                            color: "#374151",
-                            background: "none",
-                            border: "none",
-                            cursor: "pointer",
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
-                          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                          className="menu-item"
+                          className="w-full"
                         >
                           Edit
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -730,6 +674,8 @@ export default function ProjectDetailPage({ params }) {
                       key={t}
                       type="button"
                       onClick={() => setForm((f) => ({ ...f, suite_type: t }))}
+                      className="chip-toggle"
+                      aria-pressed={isSelected}
                       style={{
                         padding: "6px 14px",
                         fontSize: 12,
@@ -737,7 +683,7 @@ export default function ProjectDetailPage({ params }) {
                         textTransform: "capitalize",
                         border: `1.5px solid ${isSelected ? colors.color : colors.border}`,
                         borderRadius: 999,
-                        background: isSelected ? colors.bg : "#fff",
+                        background: isSelected ? colors.bg : undefined,
                         color: isSelected ? colors.color : "#6B7280",
                         cursor: "pointer",
                         transition: "all 0.15s",
@@ -780,38 +726,17 @@ export default function ProjectDetailPage({ params }) {
               )}
 
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => setShowModal(false)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
+                <Button variant="outline" size="lg" onClick={() => setShowModal(false)}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() => createSuiteMutation.mutate(form)}
                   disabled={createSuiteMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    opacity: createSuiteMutation.isPending ? 0.7 : 1,
-                  }}
                 >
                   {createSuiteMutation.isPending ? "Creating…" : "Add Suite"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -906,6 +831,8 @@ export default function ProjectDetailPage({ params }) {
                       key={s}
                       type="button"
                       onClick={() => setProjectForm((f) => ({ ...f, is_active: s === "active" }))}
+                      className="chip-toggle"
+                      aria-pressed={isSelected}
                       style={{
                         padding: "6px 14px",
                         fontSize: 12,
@@ -913,7 +840,7 @@ export default function ProjectDetailPage({ params }) {
                         textTransform: "capitalize",
                         border: `1.5px solid ${isSelected ? STATUS_COLORS[s] : "#E5E7EB"}`,
                         borderRadius: 999,
-                        background: isSelected ? STATUS_BG[s] : "#fff",
+                        background: isSelected ? STATUS_BG[s] : undefined,
                         color: isSelected ? STATUS_COLORS[s] : "#6B7280",
                         cursor: "pointer",
                         transition: "all 0.15s",
@@ -932,22 +859,12 @@ export default function ProjectDetailPage({ params }) {
               )}
 
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => setShowEditProject(false)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
+                <Button variant="outline" size="lg" onClick={() => setShowEditProject(false)}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() =>
                     updateProjectMutation.mutate({
                       name: projectForm.name,
@@ -956,20 +873,9 @@ export default function ProjectDetailPage({ params }) {
                     })
                   }
                   disabled={updateProjectMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    opacity: updateProjectMutation.isPending ? 0.7 : 1,
-                  }}
                 >
                   {updateProjectMutation.isPending ? "Saving…" : "Save"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -1038,38 +944,17 @@ export default function ProjectDetailPage({ params }) {
               )}
 
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => setShowEnvModal(false)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
+                <Button variant="outline" size="lg" onClick={() => setShowEnvModal(false)}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() => updateProjectMutation.mutate({ environments: envForm })}
                   disabled={updateProjectMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    opacity: updateProjectMutation.isPending ? 0.7 : 1,
-                  }}
                 >
                   {updateProjectMutation.isPending ? "Saving…" : "Save"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -1134,6 +1019,8 @@ export default function ProjectDetailPage({ params }) {
                       key={t}
                       type="button"
                       onClick={() => setSuiteEditForm((f) => ({ ...f, suite_type: t }))}
+                      className="chip-toggle"
+                      aria-pressed={isSelected}
                       style={{
                         padding: "6px 14px",
                         fontSize: 12,
@@ -1141,7 +1028,7 @@ export default function ProjectDetailPage({ params }) {
                         textTransform: "capitalize",
                         border: `1.5px solid ${isSelected ? colors.color : colors.border}`,
                         borderRadius: 999,
-                        background: isSelected ? colors.bg : "#fff",
+                        background: isSelected ? colors.bg : undefined,
                         color: isSelected ? colors.color : "#6B7280",
                         cursor: "pointer",
                         transition: "all 0.15s",
@@ -1183,22 +1070,12 @@ export default function ProjectDetailPage({ params }) {
               )}
 
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button
-                  onClick={() => setEditingSuite(null)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
+                <Button variant="outline" size="lg" onClick={() => setEditingSuite(null)}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() =>
                     updateSuiteMutation.mutate({
                       suiteId: editingSuite.id,
@@ -1210,20 +1087,9 @@ export default function ProjectDetailPage({ params }) {
                     })
                   }
                   disabled={updateSuiteMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    opacity: updateSuiteMutation.isPending ? 0.7 : 1,
-                  }}
                 >
                   {updateSuiteMutation.isPending ? "Saving…" : "Save"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

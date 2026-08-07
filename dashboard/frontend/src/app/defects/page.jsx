@@ -7,6 +7,7 @@ import PageContainer from "../../components/PageContainer";
 import { toastSuccess } from "../../lib/toast";
 import { apiGet, apiPost, apiPatch } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
+import { Button } from "../../components/ui/button";
 import {
   Select,
   SelectContent,
@@ -144,24 +145,16 @@ export default function DefectsPage() {
             </p>
           </div>
           {canWrite && (
-            <button
+            <Button
+              variant="invert"
+              size="lg"
               onClick={() => {
                 setShowModal(true);
                 setFormError("");
               }}
-              style={{
-                padding: "9px 16px",
-                background: "#2563EB",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
             >
               + Log Defect
-            </button>
+            </Button>
           )}
         </div>
 
@@ -182,22 +175,15 @@ export default function DefectsPage() {
               ["resolved", "Resolved"],
               ["closed", "Closed"],
             ].map(([val, label]) => (
-              <button
+              <Button
+                variant={statusFilter === val ? "invert" : "outline"}
+                size="sm"
                 key={val}
+                aria-pressed={statusFilter === val}
                 onClick={() => setStatusFilter(val)}
-                style={{
-                  padding: "6px 11px",
-                  fontSize: 12,
-                  fontWeight: statusFilter === val ? 600 : 400,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 999,
-                  background: statusFilter === val ? "#111827" : "#fff",
-                  color: statusFilter === val ? "#fff" : "#6B7280",
-                  cursor: "pointer",
-                }}
               >
                 {label}
-              </button>
+              </Button>
             ))}
           </div>
           <Select
@@ -302,7 +288,7 @@ export default function DefectsPage() {
             ))}
           </div>
           {isLoading ? (
-            <GlobalLoader />
+            <GlobalLoader fullscreen={false} />
           ) : !defects.length ? (
             <div
               style={{
@@ -318,6 +304,7 @@ export default function DefectsPage() {
             defects.map((d, i) => (
               <div
                 key={d.id}
+                className="row-interactive"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "minmax(0, 3fr) minmax(80px, 1fr) minmax(80px, 0.8fr) minmax(80px, 0.8fr) minmax(80px, 1fr) minmax(80px, 1fr) 90px",
@@ -327,12 +314,6 @@ export default function DefectsPage() {
                     i < defects.length - 1 ? "1px solid #F3F4F6" : "none",
                   alignItems: "center",
                 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "#F9FAFB")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "transparent")
-                }
               >
                 <div>
                   <p
@@ -429,41 +410,27 @@ export default function DefectsPage() {
                 </span>
                 <div style={{ display: "flex", gap: 6 }}>
                   {canWrite && d.status !== "closed" && (
-                    <button
+                    <Button
+                      variant="outline"
+                      size="xs"
                       onClick={() => setEditDefect(d)}
-                      style={{
-                        fontSize: 11,
-                        padding: "4px 8px",
-                        border: "1px solid #E5E7EB",
-                        borderRadius: 6,
-                        background: "#fff",
-                        color: "#374151",
-                        cursor: "pointer",
-                      }}
                     >
                       Edit
-                    </button>
+                    </Button>
                   )}
                   {canWrite && d.status === "open" && (
-                    <button
+                    <Button
+                      variant="invert"
+                      size="xs"
                       onClick={() =>
                         updateMutation.mutate({
                           id: d.id,
                           status: "in_progress",
                         })
                       }
-                      style={{
-                        fontSize: 11,
-                        padding: "4px 8px",
-                        border: "1px solid #BFDBFE",
-                        borderRadius: 6,
-                        background: "#EFF6FF",
-                        color: "#2563EB",
-                        cursor: "pointer",
-                      }}
                     >
                       Start
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -650,22 +617,16 @@ export default function DefectsPage() {
               <div
                 style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
               >
-                <button
+                <Button
+                  variant="outline"
+                  size="lg"
                   onClick={() => setShowModal(false)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() => {
                     if (!form.title.trim()) {
                       setFormError("Title is required");
@@ -679,19 +640,9 @@ export default function DefectsPage() {
                     createMutation.mutate(form);
                   }}
                   disabled={createMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                  }}
                 >
                   {createMutation.isPending ? "Logging…" : "Log Defect"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -744,25 +695,16 @@ export default function DefectsPage() {
                 </label>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {["open", "in_progress", "resolved", "closed"].map((s) => (
-                    <button
+                    <Button
+                      variant="invert"
+                      size="sm"
                       key={s}
                       onClick={() =>
                         setEditDefect((d) => ({ ...d, status: s }))
                       }
-                      style={{
-                        padding: "6px 12px",
-                        fontSize: 12,
-                        fontWeight: editDefect.status === s ? 600 : 400,
-                        border: `1px solid ${editDefect.status === s ? "#2563EB" : "#E5E7EB"}`,
-                        borderRadius: 8,
-                        background:
-                          editDefect.status === s ? "#EFF6FF" : "#fff",
-                        color: editDefect.status === s ? "#2563EB" : "#374151",
-                        cursor: "pointer",
-                      }}
                     >
                       {s.replace("_", " ")}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -861,25 +803,19 @@ export default function DefectsPage() {
               <div
                 style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
               >
-                <button
+                <Button
+                  variant="outline"
+                  size="lg"
                   onClick={() => {
                     setEditDefect(null);
                     setEditError("");
                   }}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() =>
                     updateMutation.mutate({
                       id: editDefect.id,
@@ -891,19 +827,9 @@ export default function DefectsPage() {
                     })
                   }
                   disabled={updateMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                  }}
                 >
                   {updateMutation.isPending ? "Saving…" : "Save Changes"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

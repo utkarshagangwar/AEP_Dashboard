@@ -838,13 +838,15 @@ export default function AITestingPage() {
                           </SelectContent>
                         </Select>
                         {isIgAutomation && (
-                          <button
+                          <Button
                             type="button"
+                            variant="ghost"
+                            size="xs"
                             onClick={() => setBypassDialogOpen(true)}
-                            className="text-xs text-blue-600 hover:underline whitespace-nowrap"
+                            className="whitespace-nowrap"
                           >
                             + Create bypass profile
-                          </button>
+                          </Button>
                         )}
                       </div>
                     )
@@ -992,13 +994,15 @@ export default function AITestingPage() {
               </span>
               <span className="text-gray-700 truncate">{goal}</span>
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={handleStop}
-              className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-900 px-3 py-1.5 rounded-md hover:bg-gray-100 transition-colors flex-shrink-0 ml-4"
+              className="ml-4 shrink-0 text-gray-500"
             >
               <span className="w-3 h-3 bg-gray-600 rounded-sm inline-block" />
               Stop Test
-            </button>
+            </Button>
           </div>
 
           {/* Two-panel layout */}
@@ -1560,9 +1564,11 @@ export default function AITestingPage() {
           <div className="flex items-center justify-between pt-4 border-t border-gray-100">
             <div className="flex items-center gap-3">
               {!isInconclusive && (
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={handleEditGoal}
-                  className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors"
+                  className="text-gray-500"
                 >
                   <svg
                     className="w-4 h-4"
@@ -1577,7 +1583,7 @@ export default function AITestingPage() {
                     />
                   </svg>
                   Edit Goal
-                </button>
+                </Button>
               )}
               {isInconclusive && (
                 <>
@@ -1608,9 +1614,11 @@ export default function AITestingPage() {
                     </svg>
                     {submitting ? "Rerunning…" : "Rerun"}
                   </Button>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={handleEditGoal}
-                    className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-800 transition-colors"
+                    className="text-gray-500"
                   >
                     <svg
                       className="w-4 h-4"
@@ -1625,7 +1633,7 @@ export default function AITestingPage() {
                       />
                     </svg>
                     Edit Goal
-                  </button>
+                  </Button>
                 </>
               )}
             </div>

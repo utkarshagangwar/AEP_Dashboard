@@ -164,9 +164,11 @@ export default function SkillDetailModal({
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
                   onClick={onClose}
-                  className="text-gray-400 hover:text-gray-700 flex-shrink-0"
+                  className="shrink-0 text-gray-400"
                   aria-label="Close"
                 >
                   <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
@@ -176,7 +178,7 @@ export default function SkillDetailModal({
                       clipRule="evenodd"
                     />
                   </svg>
-                </button>
+                </Button>
               }
             />
             <TooltipContent>Close</TooltipContent>

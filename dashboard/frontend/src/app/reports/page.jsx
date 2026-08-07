@@ -9,6 +9,7 @@ import { toastSuccess } from "../../lib/toast";
 import { DeleteIconButton } from "../../components/ui/delete-icon-button";
 import { apiGet, apiDelete } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
+import { Button } from "../../components/ui/button";
 import {
   Select,
   SelectContent,
@@ -246,25 +247,18 @@ export default function ReportsPage() {
               ["queued", "Queued"],
               ["cancelled", "Cancelled"],
             ].map(([val, label]) => (
-              <button
+              <Button
+                variant={statusFilter === val ? "invert" : "outline"}
+                size="sm"
                 key={val}
+                aria-pressed={statusFilter === val}
                 onClick={() => {
                   setStatusFilter(val);
                   setPage(1);
                 }}
-                style={{
-                  padding: "6px 11px",
-                  fontSize: 12,
-                  fontWeight: statusFilter === val ? 600 : 400,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 999,
-                  background: statusFilter === val ? "#111827" : "#fff",
-                  color: statusFilter === val ? "#fff" : "#6B7280",
-                  cursor: "pointer",
-                }}
               >
                 {label}
-              </button>
+              </Button>
             ))}
           </div>
           <Select
@@ -412,7 +406,7 @@ export default function ReportsPage() {
             ))}
           </div>
           {isLoading ? (
-            <GlobalLoader />
+            <GlobalLoader fullscreen={false} />
           ) : !runs.length ? (
             <div
               style={{
@@ -429,6 +423,7 @@ export default function ReportsPage() {
               <a
                 key={run.id}
                 href={`/reports/${run.id}`}
+                className="row-interactive"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "2fr 1.2fr minmax(80px, 0.8fr) 0.6fr 0.6fr 0.8fr 80px 90px",
@@ -440,14 +435,7 @@ export default function ReportsPage() {
                   textDecoration: "none",
                   color: "inherit",
                   cursor: "pointer",
-                  transition: "background 0.1s",
                 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "#F9FAFB")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "transparent")
-                }
               >
                 <div>
                   <p
@@ -551,21 +539,14 @@ export default function ReportsPage() {
               marginTop: 20,
             }}
           >
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
-              style={{
-                padding: "6px 14px",
-                fontSize: 12,
-                border: "1px solid #E5E7EB",
-                borderRadius: 8,
-                background: "#fff",
-                color: page === 1 ? "#D1D5DB" : "#374151",
-                cursor: page === 1 ? "default" : "pointer",
-              }}
             >
               ← Previous
-            </button>
+            </Button>
             <span
               style={{
                 padding: "6px 12px",
@@ -575,23 +556,14 @@ export default function ReportsPage() {
             >
               Page {page} of {Math.ceil(total / 20)}
             </span>
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setPage((p) => p + 1)}
               disabled={page >= Math.ceil(total / 20)}
-              style={{
-                padding: "6px 14px",
-                fontSize: 12,
-                border: "1px solid #E5E7EB",
-                borderRadius: 8,
-                background: "#fff",
-                color:
-                  page >= Math.ceil(total / 20) ? "#D1D5DB" : "#374151",
-                cursor:
-                  page >= Math.ceil(total / 20) ? "default" : "pointer",
-              }}
             >
               Next →
-            </button>
+            </Button>
           </div>
         )}
       </PageContainer>

@@ -46,6 +46,7 @@ from app.schemas.ai_runs import (
     VisualFindingResponse,
 )
 from app.services.audit_service import write_audit_log
+from app.services.start_context import resolve_start_context
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/ai-testing", tags=["ai-testing-runs"])
@@ -171,12 +172,28 @@ def list_environments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return active projects as selectable test environments."""
+    """Return active projects as selectable test environments.
+
+    `environments` (the project's own environment labels) is included so
+    the Skills tab can offer per-environment URL configuration without a
+    second round-trip per project. Purely additive to the response —
+    existing consumers read only id/name and are unaffected.
+    """
     try:
         rows = db.execute(
-            text("SELECT id, name FROM projects WHERE is_active = true ORDER BY name")
+            text(
+                "SELECT id, name, environments FROM projects "
+                "WHERE is_active = true ORDER BY name"
+            )
         ).fetchall()
-        return [{"id": str(r.id), "name": r.name} for r in rows]
+        return [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "environments": list(r.environments or []),
+            }
+            for r in rows
+        ]
     except SQLAlchemyError as exc:
         logger.error("List environments error: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
@@ -303,6 +320,48 @@ def submit_run(
             status=AIRunStatus.pending,
             created_by=current_user.id,
         )
+
+        # ── Fail fast: a web run with nowhere to go must not be queued ──
+        #
+        # Same gate as replay_skill below, and the same shared resolver the
+        # Celery worker uses, so the API and the worker can never disagree
+        # about whether a run is runnable. Without this, a run with no
+        # profile, no target URL and no project environment was accepted,
+        # queued, and handed environment_url="about:blank" — ai_runner
+        # skipped page.goto() and the agent reported a blank page minutes
+        # later, having spent a browser session and LLM tokens.
+        #
+        # Android runs are exempt: they launch an APK on a device farm
+        # (app.services.android_runner) and have no start URL by design.
+        # Goals that embed their own http(s) address are also exempt —
+        # resolve_start_context leaves `reason` None for those, preserving
+        # the long-standing free-text "go to https://... and do X" flow.
+        if payload.platform != "android":
+            # For a structured Functional Test the goal is compiled
+            # server-side, so scan the authored fields the compilation
+            # draws from rather than payload.goal (which is ignored there).
+            goal_text_for_url_check = payload.goal or " ".join(
+                filter(
+                    None,
+                    [
+                        payload.preconditions or "",
+                        " ".join(s.text for s in (payload.steps or [])),
+                        " ".join(payload.expected_results or []),
+                    ],
+                )
+            )
+            start_ctx = resolve_start_context(
+                db,
+                project_id=payload.project_id,
+                environment=environment,
+                credential_profile_id=payload.credential_profile_id,
+                adhoc_target_url=payload.target_url,
+                goal=goal_text_for_url_check,
+            )
+            # Raised before any db.add() below, so there is no partial run
+            # state to unwind.
+            if not start_ctx.has_url and start_ctx.reason:
+                raise HTTPException(status_code=400, detail=start_ctx.reason)
 
         from app.workers.tasks.ai_execution import run_ai_test_task
 
@@ -1296,6 +1355,50 @@ def replay_skill(
                     status_code=404, detail="Credential profile not found"
                 )
             profile_name = profile.name
+
+        # ── Fail fast: a run with nowhere to go must not be queued ──────
+        #
+        # A skill extracted from a SOW is saved under a project but carries
+        # no credential profile, and its instruction text ("click Add Job
+        # in the Jobs module...") names no URL. Such a run used to be
+        # accepted, queued, and handed environment_url="about:blank";
+        # ai_runner skipped page.goto() and the agent reported "the browser
+        # encountered a blank page" — after spending a browser session and
+        # LLM tokens, and without ever saying that no navigation had been
+        # attempted or which project setting was missing.
+        #
+        # Resolve the same way the worker will (app.services.start_context
+        # is the shared implementation, so the two can never disagree) and
+        # reject up front with the specific missing configuration named.
+        # Goals that embed their own http(s) URL navigate themselves and
+        # are exempt — resolve_start_context leaves `reason` None for them.
+        start_ctx = resolve_start_context(
+            db,
+            project_id=skill.project_id,
+            environment=skill.environment,
+            credential_profile_id=profile_id,
+            goal=skill.goal,
+        )
+        if not start_ctx.has_url and start_ctx.reason:
+            raise HTTPException(status_code=400, detail=start_ctx.reason)
+
+        # ── Pin the resolved login onto the run ─────────────────────────
+        #
+        # A skill carries no credential profile of its own, so the login
+        # used to be left NULL on the run and re-derived inside the worker
+        # from the project default. Functionally that mostly worked, but
+        # the run row — and therefore the Results view, the run detail
+        # header and the audit log — recorded "no credential profile",
+        # which is why a Skills run looked like it was ignoring the login
+        # a New Functional Test uses, even when both ended up on the same
+        # profile. Persisting what resolve_start_context already worked
+        # out makes the two paths produce identical rows, and pins the run
+        # to the profile that was configured at the moment it was
+        # submitted rather than whatever the project default happens to be
+        # by the time the worker picks it up.
+        if not profile_id and start_ctx.profile is not None:
+            profile_id = start_ctx.profile.id
+            profile_name = start_ctx.profile.name
 
         if skill.history_json:
             run = AITestRun(

@@ -434,19 +434,24 @@ export default function SowCheckpointsSection({
                     >
                       {statusLabel(sow.parse_status, cfg.activeLabel)}
                     </Badge>
-                    <button
+                    {/* Chromeless at rest so a row of these doesn't read as a
+                        toolbar; the danger tone's hue vars carry the intent on
+                        approach. */}
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-xs"
                       aria-label={`Delete ${sow.file_name}`}
                       title="Delete"
                       disabled={deletingId === sow.id}
-                      className="text-gray-400 hover:text-red-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="text-gray-400 hover:text-destructive [--btn-rim-a:var(--destructive)] [--btn-rim-b:oklch(0.72_0.16_35)] [--btn-bloom:var(--destructive)]"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDelete(sow);
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
-                    </button>
+                    </Button>
                   </span>
                 </div>
 

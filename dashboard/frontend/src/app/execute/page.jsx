@@ -313,24 +313,14 @@ export default function ExecutePage() {
               Trigger a test suite and watch results stream in real time
             </p>
           </div>
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleDiscoverSuites}
             disabled={isDiscovering}
-            style={{
-              padding: "7px 16px",
-              fontSize: 12,
-              fontWeight: 600,
-              background: isDiscovering ? "#D1D5DB" : "#F3F4F6",
-              color: "#374151",
-              border: "1px solid #E5E7EB",
-              borderRadius: 8,
-              cursor: isDiscovering ? "not-allowed" : "pointer",
-              whiteSpace: "nowrap",
-              transition: "background 0.15s",
-            }}
           >
             {isDiscovering ? "Scanning…" : "Discover Suites"}
-          </button>
+          </Button>
         </div>
 
         {/* Discovery result banner */}
@@ -354,12 +344,13 @@ export default function ExecutePage() {
                 ? `Error: ${discoveryResult.errors[0]}`
                 : `Found ${discoveryResult.discovered?.length || 0} suites, registered ${discoveryResult.registered?.length || 0} new`}
             </span>
-            <button
+            <Button
+              variant="ghost"
+              size="lg"
               onClick={() => setDiscoveryResult(null)}
-              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "inherit" }}
             >
               ×
-            </button>
+            </Button>
           </div>
         )}
 
@@ -591,24 +582,14 @@ export default function ExecutePage() {
             )}
             {isRunActive && (
               <div style={{ marginLeft: "auto" }}>
-                <button
+                <Button
+                  variant="destructive"
+                  size="sm"
                   onClick={handleCancel}
                   disabled={isCancelling}
-                  style={{
-                    padding: "7px 18px",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    background: isCancelling ? "#F3F4F6" : "#FEF2F2",
-                    color: isCancelling ? "#9CA3AF" : "#DC2626",
-                    border: `1px solid ${isCancelling ? "#E5E7EB" : "#FECACA"}`,
-                    borderRadius: 8,
-                    cursor: isCancelling ? "not-allowed" : "pointer",
-                    whiteSpace: "nowrap",
-                    transition: "background 0.15s",
-                  }}
                 >
                   {isCancelling ? "Cancelling…" : "Cancel"}
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -746,6 +727,7 @@ export default function ExecutePage() {
               results.map((r, i) => (
                 <div
                   key={r.id}
+                  className="row-interactive"
                   style={{
                     display: "grid",
                     gridTemplateColumns: "3fr minmax(70px, 0.8fr) minmax(60px, 0.6fr) 3fr",
@@ -754,14 +736,7 @@ export default function ExecutePage() {
                     borderBottom:
                       i < results.length - 1 ? "1px solid #F3F4F6" : "none",
                     alignItems: "center",
-                    transition: "background 0.1s",
                   }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.background = "#F9FAFB")
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = "transparent")
-                  }
                 >
                   <span
                     style={{

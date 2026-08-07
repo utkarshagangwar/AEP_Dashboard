@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiFetch } from "@/utils/apiClient";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { RunStatusBadge, type Skill } from "./shared";
 import SkillDetailModal from "./SkillDetailModal";
+import ProjectTestSetupDialog from "./ProjectTestSetupDialog";
 
 interface Project {
   id: string;
   name: string;
+  /** The project's environment labels. Added to the environments endpoint
+   *  so per-environment URLs can be configured without another request. */
+  environments?: string[];
 }
 
 interface SkillListResponse {
@@ -31,8 +41,21 @@ interface SkillListResponse {
 }
 
 const LIMIT = 20;
-const ALL_PROJECTS_VALUE = "__all__";
 const NO_PROJECT_VALUE = "__none__";
+
+// Page size used only when collecting every id for "Select all" — the
+// backend caps `limit` at 100, so the ids are gathered in 100-row pages
+// rather than one unbounded request.
+const ID_FETCH_LIMIT = 100;
+
+// Sentinel for "the filter hasn't been resolved yet". The stored/default
+// project can only be worked out once the project list has arrived and
+// localStorage is readable (i.e. after mount, never during SSR), and the
+// skills query must not fire before then: with "All projects" removed
+// there is no valid unscoped request to send.
+const UNRESOLVED_PROJECT = "";
+
+const PROJECT_FILTER_STORAGE_KEY = "aep.vibe.skills.projectFilter";
 
 // Combined sort_by:sort_dir key for a single friendly dropdown — the API
 // takes the two as separate query params, split back out in the query fn.
@@ -54,10 +77,13 @@ const DEFAULT_SORT = SORT_OPTIONS[0].value;
  *     upgraded in place with a real recording.
  * Either way the run streams live using the same view as a goal-based run.
  *
- * Skills are scoped per project (via the same filter used everywhere else
- * in Vibe Testing) so that with multiple projects in play, a skill written
- * for one app is never confused with — or accidentally run against —
- * another.
+ * Skills are ALWAYS scoped to exactly one project (or to "No project", for
+ * skills that arrived unassigned). There is deliberately no "All projects"
+ * view: a skill's login and start URL come from its project's Test setup,
+ * so a mixed list invited running a skill written for one app against
+ * another's configuration, and left the Test setup button with no single
+ * project to act on. The chosen project is remembered in localStorage so
+ * the tab reopens where the user left it.
  */
 export default function SkillsTab({
   onReplayStarted,
@@ -65,48 +91,114 @@ export default function SkillsTab({
   onReplayStarted: (runId: string, goal: string) => void;
 }) {
   const [page, setPage] = useState(1);
-  const [projectFilter, setProjectFilter] = useState<string>(ALL_PROJECTS_VALUE);
+  const [projectFilter, setProjectFilter] = useState<string>(UNRESOLVED_PROJECT);
   const [sortValue, setSortValue] = useState<string>(DEFAULT_SORT);
   const [allowFallback, setAllowFallback] = useState(false);
+  const [envDialogOpen, setEnvDialogOpen] = useState(false);
   const [replayingId, setReplayingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detailSkill, setDetailSkill] = useState<Skill | null>(null);
   const [detailEditing, setDetailEditing] = useState(false);
-  // Bulk actions: selection is page-scoped — cleared whenever the visible
-  // set changes (page/filter/sort) so a selection can never silently point
-  // at rows the user can no longer see.
+  // Bulk actions. Selection spans the whole filtered set, not just the
+  // visible page — "Select all" selects every skill for the current
+  // project, which is why paging no longer clears it. Changing the
+  // project or sort still clears, because that is a different set.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectAllPending, setSelectAllPending] = useState(false);
   const [bulkPending, setBulkPending] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: projects = [] } = useQuery<Project[]>({
+  const { data: projects = [], isSuccess: projectsLoaded } = useQuery<Project[]>({
     queryKey: ["ai-environments"],
     queryFn: () => apiGet("/api/ai-testing/environments"),
     staleTime: 60_000,
   });
 
+  // True only for a real project id — "No project" and the unresolved
+  // sentinel both fail it. Gates the per-project Test setup button.
+  const hasSingleProject =
+    projectFilter !== UNRESOLVED_PROJECT && projectFilter !== NO_PROJECT_VALUE;
+
+  // Resolve the initial filter once the project list is in: the project
+  // last used on this machine, falling back to the first project, and to
+  // "No project" only when there are no projects at all. A stored id for
+  // a project that has since been deleted is discarded rather than sent
+  // to the API, which would 404 every skill request.
+  useEffect(() => {
+    if (projectFilter !== UNRESOLVED_PROJECT) return;
+    if (!projectsLoaded) return;
+    // No projects configured at all: "No project" is the only list this
+    // tab can show, and leaving the filter unresolved would strand it on
+    // the loading skeleton forever.
+    if (projects.length === 0) {
+      setProjectFilter(NO_PROJECT_VALUE);
+      return;
+    }
+    let stored: string | null = null;
+    try {
+      stored = window.localStorage.getItem(PROJECT_FILTER_STORAGE_KEY);
+    } catch {
+      // Private mode / storage disabled — fall through to the default.
+      stored = null;
+    }
+    const storedIsValid =
+      stored === NO_PROJECT_VALUE || projects.some((p) => p.id === stored);
+    setProjectFilter(storedIsValid && stored ? stored : projects[0].id);
+  }, [projects, projectsLoaded, projectFilter]);
+
+  // The per-run login override moved into the Test setup popup. Replays
+  // send no credential_profile_id, so the backend resolves it — skill
+  // binding, then the project default. That resolution is the only one
+  // that can attach a bypass profile's auth cookie, which is why it must
+  // not be short-circuited from here.
+  const buildReplayBody = () =>
+    JSON.stringify({ allow_ai_fallback: allowFallback });
+
   const [sortBy, sortDir] = sortValue.split(":");
 
-  const { data, isLoading, isError } = useQuery<SkillListResponse>({
-    queryKey: ["ai-skills", page, projectFilter, sortValue],
-    queryFn: () => {
+  // Every skills request is project-scoped. Built here so the list query
+  // and the "Select all" id sweep can never disagree about which set they
+  // are looking at.
+  const buildSkillsQuery = useCallback(
+    (pageNumber: number, limit: number) => {
       const params = new URLSearchParams({
-        page: String(page),
-        limit: String(LIMIT),
+        page: String(pageNumber),
+        limit: String(limit),
         sort_by: sortBy,
         sort_dir: sortDir,
       });
-      if (projectFilter === NO_PROJECT_VALUE) params.set("project_id", "none");
-      else if (projectFilter !== ALL_PROJECTS_VALUE) params.set("project_id", projectFilter);
-      return apiGet(`/api/ai-testing/skills?${params.toString()}`);
+      params.set(
+        "project_id",
+        projectFilter === NO_PROJECT_VALUE ? "none" : projectFilter
+      );
+      return params.toString();
     },
+    [projectFilter, sortBy, sortDir]
+  );
+
+  const { data, isLoading, isError } = useQuery<SkillListResponse>({
+    queryKey: ["ai-skills", page, projectFilter, sortValue],
+    queryFn: () => apiGet(`/api/ai-testing/skills?${buildSkillsQuery(page, LIMIT)}`),
+    // Never fire before the stored/default project is known — an
+    // unscoped request would list every project's skills, which is the
+    // view this tab deliberately no longer has.
+    enabled: projectFilter !== UNRESOLVED_PROJECT,
   });
 
   const clearSelection = () => setSelectedIds(new Set());
 
-  const handleFilterChange = (value: string) => {
-    setProjectFilter(value ?? ALL_PROJECTS_VALUE);
+  const handleFilterChange = (value: string | null) => {
+    // A null/empty selection would reset the filter to the unresolved
+    // sentinel and disable the list query — ignore it and keep the
+    // current project.
+    if (!value) return;
+    setProjectFilter(value);
+    try {
+      window.localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, value);
+    } catch {
+      // Storage unavailable — the filter still works for this session.
+    }
     setPage(1);
     clearSelection();
   };
@@ -117,9 +209,11 @@ export default function SkillsTab({
     clearSelection();
   };
 
+  // Selection deliberately survives paging now: "Select all" covers the
+  // whole filtered set, so wiping it on the next page would make the
+  // action impossible to use across more than 20 skills.
   const handlePageChange = (next: number) => {
     setPage(next);
-    clearSelection();
   };
 
   const toggleSelect = (id: string) => {
@@ -131,12 +225,47 @@ export default function SkillsTab({
     });
   };
 
-  const toggleSelectAllOnPage = (skills: Skill[]) => {
-    setSelectedIds((prev) => {
-      const allSelected = skills.length > 0 && skills.every((s) => prev.has(s.id));
-      if (allSelected) return new Set();
-      return new Set(skills.map((s) => s.id));
-    });
+  /**
+   * Select every skill matching the current filter — not just the 20 on
+   * screen. The ids are swept page by page at the API's maximum page size
+   * (`limit` is capped at 100 server-side), because the bulk endpoints
+   * take an explicit id list and there is no "apply to filter" form of
+   * them; sending ids keeps bulk delete/assign/run acting on exactly what
+   * was counted here, with no risk of a concurrently-added skill being
+   * swept into a delete the user never saw.
+   */
+  const selectAllMatching = async () => {
+    setError(null);
+    setSelectAllPending(true);
+    try {
+      const ids: string[] = [];
+      let pageNumber = 1;
+      // Bounded by the reported total, so a server that keeps returning
+      // rows can never spin this forever.
+      for (;;) {
+        const resp: SkillListResponse = await apiGet(
+          `/api/ai-testing/skills?${buildSkillsQuery(pageNumber, ID_FETCH_LIMIT)}`
+        );
+        const batch = resp.data ?? [];
+        ids.push(...batch.map((s) => s.id));
+        if (batch.length < ID_FETCH_LIMIT || ids.length >= (resp.total ?? ids.length)) {
+          break;
+        }
+        pageNumber += 1;
+      }
+      setSelectedIds(new Set(ids));
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error ? err.message : "Could not select all skills"
+      );
+    } finally {
+      setSelectAllPending(false);
+    }
+  };
+
+  const toggleSelectAll = (allSelected: boolean) => {
+    if (allSelected) clearSelection();
+    else void selectAllMatching();
   };
 
   const handleReplay = async (skill: Skill) => {
@@ -145,9 +274,12 @@ export default function SkillsTab({
     try {
       const resp = await apiFetch(`/api/ai-testing/skills/${skill.id}/replay`, {
         method: "POST",
-        body: JSON.stringify({ allow_ai_fallback: allowFallback }),
+        body: buildReplayBody(),
       });
       if (!resp.ok) {
+        // A 400 here is the backend saying the run has no start URL and
+        // naming exactly which project/environment setting is missing —
+        // surface it verbatim rather than collapsing it to a status code.
         const err = await resp.json().catch(() => ({}));
         throw new Error(err.detail || `Server error (${resp.status})`);
       }
@@ -256,21 +388,52 @@ export default function SkillsTab({
   const handleBulkRun = async () => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
+    // Select all can now cover the entire project, so this button can
+    // queue hundreds of browser runs from one click. Confirm first — it
+    // spends real LLM tokens and browser sessions, and nothing here is
+    // undoable once queued.
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `Run ${ids.length} skill${ids.length === 1 ? "" : "s"} now? ` +
+          `Each one starts its own browser run.`
+      )
+    ) {
+      return;
+    }
     setError(null);
     setBulkMessage(null);
     setBulkPending(true);
     try {
-      const results = await Promise.allSettled(
-        ids.map((id) =>
-          apiFetch(`/api/ai-testing/skills/${id}/replay`, {
-            method: "POST",
-            body: JSON.stringify({ allow_ai_fallback: allowFallback }),
-          }).then((resp) => {
-            if (!resp.ok) throw new Error(`Server error (${resp.status})`);
-            return resp.json();
-          })
-        )
-      );
+      const startOne = (id: string) =>
+        apiFetch(`/api/ai-testing/skills/${id}/replay`, {
+          method: "POST",
+          body: buildReplayBody(),
+        }).then(async (resp) => {
+          if (!resp.ok) {
+            // Previously this collapsed every failure to "Server error
+            // (400)". The 400 body names the missing project/environment
+            // configuration, which is the whole point of failing fast —
+            // discarding it here would leave the engineer no better off
+            // than the old blank-page failure did.
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `Server error (${resp.status})`);
+          }
+          return resp.json();
+        });
+
+      // Submitted in small batches rather than all at once: with the
+      // whole project selectable, one click could otherwise open several
+      // hundred simultaneous requests, which browsers cap and queue
+      // unpredictably anyway. Every id is still submitted — this only
+      // paces them.
+      const results: PromiseSettledResult<unknown>[] = [];
+      const BATCH = 5;
+      for (let i = 0; i < ids.length; i += BATCH) {
+        results.push(
+          ...(await Promise.allSettled(ids.slice(i, i + BATCH).map(startOne)))
+        );
+      }
       const succeeded = results.filter((r) => r.status === "fulfilled").length;
       const failed = results.length - succeeded;
       clearSelection();
@@ -280,6 +443,17 @@ export default function SkillsTab({
           (failed ? ` — ${failed} failed to start.` : ".") +
           " Check the Results tab for progress."
       );
+      // Surface one representative reason so a wholesale failure (e.g. the
+      // project has no environment URL configured) is actionable rather
+      // than just a count.
+      if (failed > 0) {
+        const firstReason = results.find(
+          (r): r is PromiseRejectedResult => r.status === "rejected"
+        )?.reason;
+        const detail =
+          firstReason instanceof Error ? firstReason.message : String(firstReason ?? "");
+        if (detail) setError(detail);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Bulk run failed");
     } finally {
@@ -287,7 +461,10 @@ export default function SkillsTab({
     }
   };
 
-  if (isLoading) {
+  // The unresolved filter counts as loading: the query is disabled until
+  // the stored/default project is known, and a disabled query reports
+  // "not loading", which would otherwise flash the empty state on mount.
+  if (isLoading || projectFilter === UNRESOLVED_PROJECT) {
     return (
       <div className="space-y-3">
         {[...Array(3)].map((_, i) => (
@@ -308,18 +485,34 @@ export default function SkillsTab({
   const skills = data?.data ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
+  // Compared against the filtered total, not the visible page, so the box
+  // only reads "checked" when the whole set really is selected.
+  const allSelected = total > 0 && selectedIds.size >= total;
 
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <p className="text-sm text-gray-500 max-w-2xl">
-          Skills come from two places: recorded automatically whenever a
-          goal-based test passes, or extracted directly from a parsed SOW/video
-          checkpoint. Replaying a recorded skill re-executes its actions
-          directly — no AI planning, no extra tokens; running a prompt skill
-          starts a fresh AI-planned run and upgrades it to a recorded one if it
-          passes.
-        </p>
+        <div className="text-sm text-gray-500 max-w-2xl space-y-2">
+          <p>
+            Every saved test for one project, from either source: a{" "}
+            <span className="font-medium text-gray-700">Recorded</span> skill is
+            captured automatically when a goal-based test passes, and a{" "}
+            <span className="font-medium text-gray-700">Prompt</span> skill is
+            extracted from a parsed SOW or video checkpoint before it has ever
+            run.
+          </p>
+          <p>
+            Run replays a recorded skill&apos;s browser actions directly — no AI
+            planning, no tokens. Running a prompt skill starts a fresh AI-planned
+            run, and a pass upgrades that same skill into a recorded one. Both
+            sign in using the project&apos;s Test setup login, and both stream
+            live under Results.
+          </p>
+          <p>
+            Select skills to run, reassign or delete them in bulk. Use Edit to
+            rename a skill or rewrite its instructions.
+          </p>
+        </div>
         <label className="flex items-center gap-2 text-sm text-gray-600 flex-shrink-0 cursor-pointer">
           <Checkbox
             checked={allowFallback}
@@ -330,20 +523,53 @@ export default function SkillsTab({
       </div>
 
       <div className="flex items-center gap-4 flex-wrap">
+        {/*
+          One button replaces the old "Login" dropdown + "Configure
+          environments" pair. Those exposed three concepts (environment
+          label, base URL, default login) for what is really a single
+          decision — which login — since a bypass credential profile
+          already carries its own start URL.
+
+          Only meaningful for a real project: setup is per-project, so
+          there is nothing to configure while "No project" is selected.
+        */}
+        {hasSingleProject && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9"
+                    onClick={() => setEnvDialogOpen(true)}
+                  >
+                    Test setup
+                  </Button>
+                }
+              />
+              <TooltipContent className="max-w-xs">
+                Where this project&apos;s tests run and which login they use.
+                Skills created from a SOW have no login of their own, so they
+                use this.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-gray-500">Project</span>
-          <Select value={projectFilter} onValueChange={(v) => handleFilterChange(v ?? ALL_PROJECTS_VALUE)}>
+          <Select value={projectFilter} onValueChange={handleFilterChange}>
             <SelectTrigger className="w-auto min-w-[180px] h-9 text-sm">
-              <SelectValue placeholder="All projects">
+              <SelectValue placeholder="Loading…">
                 {(value: string | null) => {
-                  if (!value || value === ALL_PROJECTS_VALUE) return "All projects";
+                  if (!value) return "Loading…";
                   if (value === NO_PROJECT_VALUE) return "No project";
-                  return projects.find((p) => p.id === value)?.name || "All projects";
+                  return projects.find((p) => p.id === value)?.name || "No project";
                 }}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL_PROJECTS_VALUE}>All projects</SelectItem>
               <SelectItem value={NO_PROJECT_VALUE}>No project</SelectItem>
               {projects.map((p) => (
                 <SelectItem key={p.id} value={p.id}>
@@ -389,19 +615,23 @@ export default function SkillsTab({
 
       {skills.length === 0 ? (
         <div className="text-center py-16 text-gray-400 text-sm">
-          {projectFilter === ALL_PROJECTS_VALUE
-            ? "No skills saved yet. Skills appear here automatically after a goal-based test passes, or as soon as a SOW/video checkpoint is parsed."
-            : "No skills for this project yet."}
+          {projectFilter === NO_PROJECT_VALUE
+            ? "No unassigned skills. Every saved skill belongs to a project — pick one above."
+            : "No skills for this project yet. They appear here automatically once a goal-based test passes, or as soon as a SOW/video checkpoint is parsed."}
         </div>
       ) : (
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer select-none">
               <Checkbox
-                checked={skills.length > 0 && skills.every((s) => selectedIds.has(s.id))}
-                onCheckedChange={() => toggleSelectAllOnPage(skills)}
+                checked={allSelected}
+                disabled={selectAllPending}
+                onCheckedChange={() => toggleSelectAll(allSelected)}
+                aria-label={`Select all ${total} skills`}
               />
-              Select all on this page
+              {selectAllPending
+                ? "Selecting…"
+                : `Select all ${total} skill${total === 1 ? "" : "s"}`}
             </label>
 
             {selectedIds.size > 0 && (
@@ -614,6 +844,19 @@ export default function SkillsTab({
           initialEditing={detailEditing}
           onClose={() => setDetailSkill(null)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {envDialogOpen && hasSingleProject && (
+        <ProjectTestSetupDialog
+          projectId={projectFilter}
+          projectName={
+            projects.find((p) => p.id === projectFilter)?.name ?? "Project"
+          }
+          environments={
+            projects.find((p) => p.id === projectFilter)?.environments ?? []
+          }
+          onClose={() => setEnvDialogOpen(false)}
         />
       )}
     </div>

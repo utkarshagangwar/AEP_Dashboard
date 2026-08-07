@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 
+import { Button } from "./button";
+
 type ErrorAction = {
   label: string;
   onClick: () => void;
@@ -46,26 +48,33 @@ export function ErrorAlert({
         <p className="m-0 text-sm font-semibold text-red-900">{title}</p>
         <div className="mt-0.5 text-sm leading-5 text-red-800">{message}</div>
         {action && (
-          <button
+          /* Sits on the alert's own red tint, so the tonal danger form would
+             be red-on-red. Ink reads as the action against that surface, and
+             the alert's border, icon, and copy already carry the severity. */
+          <Button
             type="button"
+            variant="invert"
+            size="xs"
             onClick={action.onClick}
-            className="mt-2 rounded-md bg-red-700 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700"
+            className="mt-2"
           >
             {action.label}
-          </button>
+          </Button>
         )}
       </div>
       {onDismiss && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           onClick={onDismiss}
           aria-label="Dismiss error"
-          className="-mr-1 -mt-1 rounded p-1 text-red-800 transition-colors hover:bg-red-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700"
+          className="-mr-1 -mt-1 text-red-800"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="size-4" aria-hidden="true">
             <path d="m6 6 12 12M18 6 6 18" />
           </svg>
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -88,13 +97,15 @@ export function ErrorPanel({
         <h1 className="m-0 text-lg font-semibold text-gray-900">{title}</h1>
         <div className="mx-auto mt-2 max-w-sm text-sm leading-6 text-gray-600">{message}</div>
         {action && (
-          <button
+          <Button
             type="button"
+            variant="invert"
+            size="lg"
             onClick={action.onClick}
-            className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+            className="mt-5"
           >
             {action.label}
-          </button>
+          </Button>
         )}
       </div>
     </div>

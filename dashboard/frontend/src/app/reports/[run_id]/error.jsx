@@ -1,5 +1,6 @@
 "use client";
 import AppShell from "../../../components/AppShell";
+import { Button } from "../../../components/ui/button";
 
 export default function ReportDetailError({ error, reset }) {
   return (
@@ -27,21 +28,9 @@ export default function ReportDetailError({ error, reset }) {
           <p style={{ margin: "0 0 16px", fontSize: 13, color: "#7F1D1D" }}>
             {error?.message || "An unexpected error occurred."}
           </p>
-          <button
-            onClick={reset}
-            style={{
-              padding: "8px 20px",
-              background: "#DC2626",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
+          <Button variant="invert" size="lg" onClick={reset}>
             Try again
-          </button>
+          </Button>
         </div>
       </div>
     </AppShell>

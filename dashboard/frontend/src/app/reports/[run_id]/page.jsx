@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
+import { Button } from "../../../components/ui/button";
 import { apiGet, apiPost, apiFetch } from "../../../utils/apiClient";
 import { toastSuccess } from "../../../lib/toast";
 import { getStoredUser } from "../../../utils/authStore";
@@ -306,25 +307,15 @@ export default function ReportDetailPage() {
               {String(report.id).slice(0, 8)}
             </p>
           </div>
-          <button
+          <Button
+            variant="outline"
+            size="lg"
             onClick={handleExport}
             disabled={exporting}
-            style={{
-              padding: "9px 16px",
-              background: "#fff",
-              color: "#374151",
-              border: "1px solid #E5E7EB",
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}
+            className="gap-2"
           >
             {exporting ? "Exporting…" : "↓ Export JSON"}
-          </button>
+          </Button>
         </div>
 
         {/* Summary Cards */}
@@ -520,52 +511,34 @@ export default function ReportDetailPage() {
           </span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             {aiSuggestions.length > 0 && (
-              <button
+              <Button
+                variant={showAiPanel ? "invert" : "outline"}
+                size="sm"
                 onClick={() => { setShowAiPanel(!showAiPanel); setShowVideoPanel(false); }}
-                style={{
-                  padding: "6px 14px",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  border: "1px solid #FBCFE8",
-                  borderRadius: 8,
-                  background: showAiPanel ? "#FDF2F8" : "#fff",
-                  color: "#BE185D",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
+                aria-pressed={showAiPanel}
+                aria-expanded={showAiPanel}
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <circle cx="8" cy="8" r="6" stroke="#BE185D" strokeWidth="1.5" fill="none" />
                   <path d="M8 5v3l2 1.5" stroke="#BE185D" strokeWidth="1.5" strokeLinecap="round" />
                 </svg>
                 AI Suggestions ({aiSuggestions.length})
-              </button>
+              </Button>
             )}
             {videos.length > 0 && (
-              <button
+              <Button
+                variant={showVideoPanel ? "invert" : "outline"}
+                size="sm"
                 onClick={() => { setShowVideoPanel(!showVideoPanel); setShowAiPanel(false); }}
-                style={{
-                  padding: "6px 14px",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  border: "1px solid #C7D2FE",
-                  borderRadius: 8,
-                  background: showVideoPanel ? "#EEF2FF" : "#fff",
-                  color: "#4338CA",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
+                aria-pressed={showVideoPanel}
+                aria-expanded={showVideoPanel}
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <path d="M3 3h6v10H3z" fill="#C7D2FE" rx="1" />
                   <path d="M10 5.5l3.5 2.5-3.5 2.5z" fill="#4338CA" />
                 </svg>
                 Videos ({videos.length})
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -599,18 +572,15 @@ export default function ReportDetailPage() {
               >
                 Test Recordings
               </h3>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Close panel"
                 onClick={() => setShowVideoPanel(false)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  fontSize: 18,
-                  color: "#9CA3AF",
-                  cursor: "pointer",
-                }}
+                className="text-lg text-muted-foreground"
               >
                 ×
-              </button>
+              </Button>
             </div>
             <div
               style={{
@@ -625,25 +595,18 @@ export default function ReportDetailPage() {
                   href={`/api/reports/${runId}/videos/${v.filename}`}
                   target="_blank"
                   rel="noopener noreferrer"
+                  className="tile-interactive"
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 10,
                     padding: "10px 14px",
-                    background: "#F9FAFB",
                     border: "1px solid #E5E7EB",
                     borderRadius: 8,
                     textDecoration: "none",
                     color: "#374151",
                     fontSize: 12,
-                    transition: "background 0.1s",
                   }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.background = "#EEF2FF")
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = "#F9FAFB")
-                  }
                 >
                   <svg
                     width="20"
@@ -719,18 +682,15 @@ export default function ReportDetailPage() {
               >
                 Failed Locators & AI Suggestions
               </h3>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Close panel"
                 onClick={() => setShowAiPanel(false)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  fontSize: 18,
-                  color: "#9CA3AF",
-                  cursor: "pointer",
-                }}
+                className="text-lg text-muted-foreground"
               >
                 ×
-              </button>
+              </Button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {aiSuggestions.map((s) => (
@@ -958,35 +918,24 @@ export default function ReportDetailPage() {
                       }}
                     >
                       {s.status !== "approved" && (
-                        <button
+                        <Button
+                          variant="success"
+                          size="sm"
                           onClick={() => approveMutation.mutate(s.filename)}
                           disabled={approveMutation.isPending}
-                          style={{
-                            padding: "6px 16px",
-                            fontSize: 12,
-                            fontWeight: 600,
-                            background: "#16A34A",
-                            color: "#fff",
-                            border: "none",
-                            borderRadius: 6,
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 5,
-                            opacity: approveMutation.isPending ? 0.6 : 1,
-                          }}
+                          className="gap-1.5"
                         >
                           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
                             <path
                               d="M3 8.5L6.5 12L13 4"
-                              stroke="#fff"
+                              stroke="currentColor"
                               strokeWidth="2"
                               strokeLinecap="round"
                               strokeLinejoin="round"
                             />
                           </svg>
                           Approve
-                        </button>
+                        </Button>
                       )}
                       {s.status === "approved" && (
                         <span
@@ -1076,7 +1025,21 @@ export default function ReportDetailPage() {
                   }}
                 >
                   <div
+                    className="row-interactive"
+                    // Was a bare <div onClick>: unreachable by keyboard.
+                    // It expands a disclosure, so aria-expanded is both the
+                    // announcement and — via [aria-expanded="true"] in
+                    // global.css — what paints the open state.
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
                     onClick={() => toggleRow(result.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        toggleRow(result.id);
+                      }
+                    }}
                     style={{
                       display: "grid",
                       gridTemplateColumns: "28px 1.2fr 2.2fr 0.7fr 0.7fr 90px",
@@ -1085,12 +1048,6 @@ export default function ReportDetailPage() {
                       alignItems: "center",
                       cursor: "pointer",
                       userSelect: "none",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!isExpanded) e.currentTarget.style.background = "#F9FAFB";
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isExpanded) e.currentTarget.style.background = "transparent";
                     }}
                   >
                     <ChevronIcon expanded={isExpanded} />
@@ -1136,7 +1093,9 @@ export default function ReportDetailPage() {
                     </span>
                     <div onClick={(e) => e.stopPropagation()}>
                       {canDefect && isFailed && (
-                        <button
+                        <Button
+                          variant="outline"
+                          size="xs"
                           onClick={() => {
                             setLogDefectFor(result);
                             setDefectForm({
@@ -1145,19 +1104,9 @@ export default function ReportDetailPage() {
                               severity: "medium",
                             });
                           }}
-                          style={{
-                            fontSize: 11,
-                            padding: "4px 10px",
-                            border: "1px solid #BFDBFE",
-                            borderRadius: 6,
-                            background: "#EFF6FF",
-                            color: "#2563EB",
-                            cursor: "pointer",
-                            fontWeight: 500,
-                          }}
                         >
                           + Log Defect
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -1341,18 +1290,15 @@ export default function ReportDetailPage() {
               >
                 Log Defect
               </h2>
-              <button
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Close"
                 onClick={() => setLogDefectFor(null)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  fontSize: 20,
-                  color: "#9CA3AF",
-                  cursor: "pointer",
-                }}
+                className="text-xl text-muted-foreground"
               >
                 ×
-              </button>
+              </Button>
             </div>
 
             <div
@@ -1460,6 +1406,8 @@ export default function ReportDetailPage() {
                 {SEVERITY_OPTIONS.map((s) => (
                   <button
                     key={s}
+                    className="chip-toggle"
+                    aria-pressed={defectForm.severity === s}
                     onClick={() =>
                       setDefectForm((f) => ({ ...f, severity: s }))
                     }
@@ -1469,8 +1417,7 @@ export default function ReportDetailPage() {
                       fontWeight: defectForm.severity === s ? 600 : 400,
                       border: `1px solid ${defectForm.severity === s ? SEV_COLORS[s] : "#E5E7EB"}`,
                       borderRadius: 8,
-                      background:
-                        defectForm.severity === s ? SEV_BG[s] : "#fff",
+                      background: defectForm.severity === s ? SEV_BG[s] : undefined,
                       color:
                         defectForm.severity === s
                           ? SEV_COLORS[s]
@@ -1491,22 +1438,12 @@ export default function ReportDetailPage() {
             <div
               style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
             >
-              <button
-                onClick={() => setLogDefectFor(null)}
-                style={{
-                  padding: "8px 16px",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  background: "#fff",
-                  cursor: "pointer",
-                  color: "#374151",
-                }}
-              >
+              <Button variant="outline" size="lg" onClick={() => setLogDefectFor(null)}>
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="invert"
+                size="lg"
                 onClick={() =>
                   defectMutation.mutate({
                     test_result_id: logDefectFor.id,
@@ -1516,23 +1453,9 @@ export default function ReportDetailPage() {
                   })
                 }
                 disabled={defectMutation.isPending || !defectForm.title.trim()}
-                style={{
-                  padding: "8px 16px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  background: "#2563EB",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  opacity:
-                    defectMutation.isPending || !defectForm.title.trim()
-                      ? 0.6
-                      : 1,
-                }}
               >
                 {defectMutation.isPending ? "Creating…" : "Create Defect"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

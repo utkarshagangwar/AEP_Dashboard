@@ -4,10 +4,12 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
+import GlobalLoader from "../../../components/GlobalLoader";
 import { toastSuccess } from "../../../lib/toast";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { DeleteIconButton } from "../../../components/ui/delete-icon-button";
 import { ErrorAlert } from "../../../components/ui/error-state";
+import { Button } from "../../../components/ui/button";
 import { apiGet, apiFetch, apiPost, apiDelete } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -311,6 +313,7 @@ function CollapsibleSection({ title, description, badge, open, onToggle, childre
         type="button"
         onClick={onToggle}
         aria-expanded={open}
+        className="link-hover-underline"
         style={{
           display: "flex",
           alignItems: "center",
@@ -376,17 +379,6 @@ const inputStyle = {
   boxSizing: "border-box",
   marginBottom: 10,
 };
-const btnStyle = {
-  padding: "8px 14px",
-  fontSize: 13,
-  fontWeight: 600,
-  color: "#fff",
-  background: "#2563EB",
-  border: "none",
-  borderRadius: 8,
-  cursor: "pointer",
-};
-const btnDisabledStyle = { ...btnStyle, background: "#93C5FD", cursor: "default" };
 
 // ── Phase 5: structured block editor ─────────────────────────────────────
 // Mirrors backend/app/services/sow_drafting.py's _validate_block contract
@@ -425,17 +417,6 @@ function defaultBlock(type) {
 }
 
 const editorFieldStyle = { ...inputStyle, marginBottom: 0 };
-const smallBtnStyle = {
-  padding: "3px 8px",
-  fontSize: 11,
-  fontWeight: 600,
-  color: "#374151",
-  background: "#F3F4F6",
-  border: "1px solid #E5E7EB",
-  borderRadius: 6,
-  cursor: "pointer",
-};
-const smallDangerBtnStyle = { ...smallBtnStyle, color: "#DC2626" };
 
 function TableBlockEditor({ block, onChange }) {
   const headers = block.headers || [];
@@ -479,12 +460,14 @@ function TableBlockEditor({ block, onChange }) {
                     onChange={(e) => setHeader(i, e.target.value)}
                     style={{ ...editorFieldStyle, fontWeight: 600, fontSize: 12 }}
                   />
-                  <button
+                  <Button
+                    variant="destructive"
+                    size="xs"
                     onClick={() => removeColumn(i)}
-                    style={{ ...smallDangerBtnStyle, marginTop: 4, width: "100%" }}
+                    className="mt-1 w-full"
                   >
                     Remove column
-                  </button>
+                  </Button>
                 </th>
               ))}
             </tr>
@@ -502,9 +485,9 @@ function TableBlockEditor({ block, onChange }) {
                   </td>
                 ))}
                 <td style={{ padding: 2 }}>
-                  <button onClick={() => removeRow(r)} style={smallDangerBtnStyle}>
+                  <Button variant="destructive" size="xs" onClick={() => removeRow(r)}>
                     Remove row
-                  </button>
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -512,8 +495,8 @@ function TableBlockEditor({ block, onChange }) {
         </table>
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={addRow} style={smallBtnStyle}>+ Row</button>
-        <button onClick={addColumn} style={smallBtnStyle}>+ Column</button>
+        <Button variant="outline" size="xs" onClick={addRow}>+ Row</Button>
+        <Button variant="outline" size="xs" onClick={addColumn}>+ Column</Button>
       </div>
     </div>
   );
@@ -542,15 +525,15 @@ function BlockEditorCard({ block, index, total, onChange, onMove, onRemove }) {
           {BLOCK_TYPE_LABELS[block.type] || block.type}
         </span>
         <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={() => onMove(index, -1)} disabled={index === 0} style={smallBtnStyle}>
+          <Button variant="outline" size="xs" onClick={() => onMove(index, -1)} disabled={index === 0}>
             ↑
-          </button>
-          <button onClick={() => onMove(index, 1)} disabled={index === total - 1} style={smallBtnStyle}>
+          </Button>
+          <Button variant="outline" size="xs" onClick={() => onMove(index, 1)} disabled={index === total - 1}>
             ↓
-          </button>
-          <button onClick={() => onRemove(index)} style={smallDangerBtnStyle}>
+          </Button>
+          <Button variant="destructive" size="xs" onClick={() => onRemove(index)}>
             Remove
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -686,26 +669,23 @@ function SectionEditor({ blocks, onSave, onCancel, saving, error }) {
             <option key={val} value={val}>{label}</option>
           ))}
         </select>
-        <button onClick={addBlock} style={smallBtnStyle}>+ Add block</button>
+        <Button variant="outline" size="xs" onClick={addBlock}>+ Add block</Button>
       </div>
 
       {error && <p style={{ fontSize: 12, color: "#DC2626", marginTop: 0 }}>{error}</p>}
 
       <div style={{ display: "flex", gap: 10 }}>
-        <button
+        <Button
+          variant="invert"
+          size="lg"
           onClick={() => onSave(localBlocks)}
           disabled={saving || localBlocks.length === 0}
-          style={saving || localBlocks.length === 0 ? btnDisabledStyle : btnStyle}
         >
           {saving ? "Saving…" : "Save"}
-        </button>
-        <button
-          onClick={onCancel}
-          disabled={saving}
-          style={{ ...smallBtnStyle, padding: "8px 14px", fontSize: 13 }}
-        >
+        </Button>
+        <Button variant="outline" size="lg" onClick={onCancel} disabled={saving}>
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -1031,6 +1011,11 @@ export default function SowDocumentPage() {
   const [rewriteTargets, setRewriteTargets] = useState(() => new Set());
   const [rewriteOverrides, setRewriteOverrides] = useState(() => new Set());
   const [rewriteError, setRewriteError] = useState("");
+  // Collapsed by default. Expanded, the full section checklist reads like a
+  // list of sections that NEED rewriting — it is only a picker, and on a
+  // freshly imported SOW nothing needs rewriting at all. It opens when the
+  // user asks for it, or when the affected-sections banner sends them here.
+  const [rewriteOpen, setRewriteOpen] = useState(false);
 
   function toggleRewriteTarget(key) {
     setRewriteTargets((prev) => {
@@ -1231,7 +1216,7 @@ export default function SowDocumentPage() {
     return (
       <AppShell noPadding>
         <PageContainer>
-          <p style={{ fontSize: 13, color: "#6B7280" }}>Loading…</p>
+          <GlobalLoader fullscreen={false} />
         </PageContainer>
       </AppShell>
     );
@@ -1346,19 +1331,16 @@ export default function SowDocumentPage() {
                   style={{ fontSize: 12, marginBottom: 10, display: "block" }}
                   disabled={transcriptUploadMutation.isPending}
                 />
-                <button
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() =>
                     transcriptUploadMutation.mutate({ text: transcriptText })
                   }
                   disabled={!transcriptText.trim() || transcriptUploadMutation.isPending}
-                  style={
-                    !transcriptText.trim() || transcriptUploadMutation.isPending
-                      ? btnDisabledStyle
-                      : btnStyle
-                  }
                 >
                   {transcriptUploadMutation.isPending ? "Attaching…" : "Attach pasted text"}
-                </button>
+                </Button>
                 {transcriptError && (
                   <p style={{ fontSize: 11, color: "#DC2626", margin: "6px 0 0" }}>
                     {transcriptError}
@@ -1555,13 +1537,15 @@ export default function SowDocumentPage() {
               <button
                 key={val}
                 onClick={() => setFactFilter(val)}
+                className="chip-toggle"
+                aria-pressed={factFilter === val}
                 style={{
                   padding: "5px 11px",
                   fontSize: 12,
                   fontWeight: factFilter === val ? 600 : 400,
                   border: "1px solid #E5E7EB",
                   borderRadius: 999,
-                  background: factFilter === val ? "#111827" : "#fff",
+                  background: factFilter === val ? "#111827" : undefined,
                   color: factFilter === val ? "#fff" : "#6B7280",
                   cursor: "pointer",
                 }}
@@ -1719,15 +1703,16 @@ export default function SowDocumentPage() {
               its place once new source material arrives to fold in. */}
           {canWrite && isImportedBaseline && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-              <button
+              <Button
+                variant="invert"
+                size="lg"
                 onClick={() => sendToCheckpointsMutation.mutate()}
                 disabled={sendToCheckpointsMutation.isPending}
-                style={sendToCheckpointsMutation.isPending ? btnDisabledStyle : btnStyle}
               >
                 {sendToCheckpointsMutation.isPending
                   ? "Extracting…"
                   : "Extract Skills / TDDs"}
-              </button>
+              </Button>
               <span style={{ fontSize: 12, color: "#6B7280" }}>
                 Sends this document to Vibe Testing and extracts a runnable skill per
                 feature. Ambiguous, incomplete, or conflicting requirements stay in
@@ -1750,7 +1735,9 @@ export default function SowDocumentPage() {
 
           {canWrite && !isImportedBaseline && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-              <button
+              <Button
+                variant="invert"
+                size="lg"
                 onClick={() => {
                   // A full generation always creates a brand-new version
                   // from scratch (it does not patch the current one), so
@@ -1776,17 +1763,9 @@ export default function SowDocumentPage() {
                   generationActive ||
                   generateMutation.isPending
                 }
-                style={
-                  !hasReadySource ||
-                  !canGenerate ||
-                  generationActive ||
-                  generateMutation.isPending
-                    ? btnDisabledStyle
-                    : btnStyle
-                }
               >
                 {generationActive || generateMutation.isPending ? "Generating…" : "Generate SOW"}
-              </button>
+              </Button>
               {!hasReadySource && (
                 <span style={{ fontSize: 12, color: "#6B7280" }}>
                   Attach at least one source and wait for extraction to finish first.
@@ -1822,14 +1801,15 @@ export default function SowDocumentPage() {
                 Export current version:
               </span>
               {["md", "docx", "pdf"].map((fmt) => (
-                <button
+                <Button
                   key={fmt}
+                  variant="outline"
+                  size="xs"
                   onClick={() => downloadExport(fmt)}
                   disabled={exportingFormat !== null}
-                  style={exportingFormat !== null ? { ...smallBtnStyle, opacity: 0.6 } : smallBtnStyle}
                 >
                   {exportingFormat === fmt ? "Exporting…" : `.${fmt}`}
-                </button>
+                </Button>
               ))}
               {exportError && (
                 <span style={{ fontSize: 12, color: "#DC2626" }}>{exportError}</span>
@@ -1838,19 +1818,16 @@ export default function SowDocumentPage() {
               {canWrite && (
                 <>
                   <span style={{ width: 1, height: 18, background: "#E5E7EB", margin: "0 4px" }} />
-                  <button
+                  <Button
+                    variant="outline"
+                    size="xs"
                     onClick={() => sendToCheckpointsMutation.mutate()}
                     disabled={sendToCheckpointsMutation.isPending}
-                    style={
-                      sendToCheckpointsMutation.isPending
-                        ? { ...smallBtnStyle, opacity: 0.6 }
-                        : smallBtnStyle
-                    }
                   >
                     {sendToCheckpointsMutation.isPending
                       ? "Extracting…"
                       : "Extract Skills / TDDs"}
-                  </button>
+                  </Button>
                   {sendToCheckpointsMutation.isSuccess && (
                     <span style={{ fontSize: 12, color: "#166534" }}>
                       {sendToCheckpointsMutation.data?.message}
@@ -1900,17 +1877,19 @@ export default function SowDocumentPage() {
                   : ""}
                 . Everything else stays exactly as it is.
               </span>
-              <button
+              <Button
+                variant="outline"
+                size="xs"
                 onClick={() => {
                   setRewriteTargets(new Set(pendingSectionKeys));
+                  setRewriteOpen(true); // the panel is collapsed by default
                   document
                     .getElementById("sow-rewrite-panel")
                     ?.scrollIntoView({ behavior: "smooth", block: "center" });
                 }}
-                style={smallBtnStyle}
               >
                 Review affected sections
-              </button>
+              </Button>
             </div>
           )}
 
@@ -1925,9 +1904,48 @@ export default function SowDocumentPage() {
                 borderRadius: 8,
               }}
             >
-              <p style={{ fontSize: 12, fontWeight: 600, color: "#374151", margin: "0 0 8px" }}>
-                Rewrite (patch) — regenerate only selected sections; everything else in this
-                version stays exactly as it is.
+              {/* Header is always rendered: it carries the panel's id anchor
+                  and states what the tool does without implying the sections
+                  below are outstanding work. */}
+              <button
+                type="button"
+                onClick={() => setRewriteOpen((open) => !open)}
+                aria-expanded={rewriteOpen}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "100%",
+                  padding: 0,
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ fontSize: 12, color: "#6B7280", width: 10 }}>
+                  {rewriteOpen ? "▾" : "▸"}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+                  Rewrite sections (optional)
+                </span>
+                {pendingSectionKeys.length > 0 && (
+                  <span style={{ fontSize: 11, color: "#B45309" }}>
+                    {pendingSectionKeys.length} affected by new source
+                  </span>
+                )}
+                {rewriteTargets.size > 0 && (
+                  <span style={{ fontSize: 11, color: "#374151" }}>
+                    {rewriteTargets.size} selected
+                  </span>
+                )}
+              </button>
+
+              {rewriteOpen && (
+                <>
+              <p style={{ fontSize: 12, color: "#6B7280", margin: "8px 0 8px 18px" }}>
+                Pick the sections to regenerate — everything else in this version stays
+                exactly as it is. Nothing is rewritten until you press the button.
               </p>
               {versionDetail.sections
                 .filter((s) => !NON_PATCHABLE_SECTION_KEYS.has(s.section_key))
@@ -1967,22 +1985,21 @@ export default function SowDocumentPage() {
                   );
                 })}
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
-                <button
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() => {
                     setRewriteError("");
                     rewriteMutation.mutate();
                   }}
                   disabled={rewriteTargets.size === 0 || generationActive || rewriteMutation.isPending}
-                  style={
-                    rewriteTargets.size === 0 || generationActive || rewriteMutation.isPending
-                      ? btnDisabledStyle
-                      : btnStyle
-                  }
                 >
                   {rewriteMutation.isPending ? "Rewriting…" : `Rewrite ${rewriteTargets.size || ""} section${rewriteTargets.size === 1 ? "" : "s"}`}
-                </button>
+                </Button>
                 {rewriteError && <span style={{ fontSize: 12, color: "#DC2626" }}>{rewriteError}</span>}
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -2030,23 +2047,25 @@ export default function SowDocumentPage() {
                 >
                   Versions
                 </p>
-                <button
+                {/* On/off carried by the two designs themselves — ink when
+                    engaged, white when not — rather than by the blue fill this
+                    used to swap in. */}
+                <Button
+                  variant={diffMode ? "invert" : "outline"}
+                  size="xs"
                   onClick={() => setDiffMode((v) => !v)}
+                  aria-pressed={diffMode}
                   disabled={versionList.length < 2}
-                  style={{
-                    ...smallBtnStyle,
-                    width: "100%",
-                    marginBottom: 10,
-                    ...(diffMode ? { background: "#2563EB", color: "#fff", borderColor: "#2563EB" } : {}),
-                    ...(versionList.length < 2 ? { opacity: 0.5, cursor: "default" } : {}),
-                  }}
+                  className="mb-2.5 w-full"
                 >
                   {diffMode ? "✓ Comparing versions" : "Compare with previous"}
-                </button>
+                </Button>
                 {versionList.map((v) => (
                   <button
                     key={v.id}
                     onClick={() => setSelectedVersionId(v.id)}
+                    className="chip-toggle"
+                    aria-pressed={v.id === selectedVersionId}
                     style={{
                       display: "block",
                       width: "100%",
@@ -2056,7 +2075,7 @@ export default function SowDocumentPage() {
                       fontSize: 12,
                       border: "1px solid " + (v.id === selectedVersionId ? "#2563EB" : "#E5E7EB"),
                       borderRadius: 8,
-                      background: v.id === selectedVersionId ? "#EFF6FF" : "#fff",
+                      background: v.id === selectedVersionId ? "#EFF6FF" : undefined,
                       cursor: "pointer",
                     }}
                   >
@@ -2161,15 +2180,17 @@ export default function SowDocumentPage() {
                             </span>
                           )}
                           {canWrite && isViewingCurrentVersion && editingSectionKey !== s.section_key && (
-                            <button
+                            <Button
+                              variant="outline"
+                              size="xs"
                               onClick={() => {
                                 setEditSaveError("");
                                 setEditingSectionKey(s.section_key);
                               }}
-                              style={{ ...smallBtnStyle, marginLeft: "auto" }}
+                              className="ml-auto"
                             >
                               Edit
-                            </button>
+                            </Button>
                           )}
                         </div>
                         {s.status === "error" && s.error_message && (

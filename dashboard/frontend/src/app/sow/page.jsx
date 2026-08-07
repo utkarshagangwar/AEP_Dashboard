@@ -246,7 +246,7 @@ export default function SowPage() {
           )}
         </div>
 
-        {isLoading && <GlobalLoader />}
+        {isLoading && <GlobalLoader fullscreen={false} />}
         {error && (
           <p style={{ fontSize: 13, color: "#DC2626" }}>{error.message}</p>
         )}
@@ -320,37 +320,26 @@ export default function SowPage() {
                               width: 220,
                             }}
                           />
-                          <button
+                          <Button
+                            variant="invert"
+                            size="sm"
                             onClick={() =>
                               renameMutation.mutate({ id: doc.id, title: renameValue.trim() })
                             }
                             disabled={!renameValue.trim() || renameMutation.isPending}
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 600,
-                              color: "#2563EB",
-                              background: "transparent",
-                              border: "none",
-                              cursor: "pointer",
-                            }}
                           >
                             Save
-                          </button>
-                          <button
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => {
                               setRenamingId(null);
                               setRenameError("");
                             }}
-                            style={{
-                              fontSize: 12,
-                              color: "#6B7280",
-                              background: "transparent",
-                              border: "none",
-                              cursor: "pointer",
-                            }}
                           >
                             Cancel
-                          </button>
+                          </Button>
                           {renameError && (
                             <span style={{ fontSize: 11, color: "#DC2626" }}>{renameError}</span>
                           )}
@@ -358,9 +347,8 @@ export default function SowPage() {
                       ) : (
                         <a
                           href={`/sow/${doc.id}`}
-                          style={{ fontWeight: 500, color: "#111827", textDecoration: "none" }}
-                          onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-                          onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+                          className="link-hover-underline"
+                          style={{ fontWeight: 500, color: "#111827" }}
                         >
                           {doc.title}
                         </a>
@@ -378,23 +366,17 @@ export default function SowPage() {
                     <td style={{ padding: "10px 16px", textAlign: "right" }}>
                       {canWrite && renamingId !== doc.id && (
                         <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => {
                               setRenamingId(doc.id);
                               setRenameValue(doc.title);
                               setRenameError("");
                             }}
-                            style={{
-                              fontSize: 12,
-                              fontWeight: 500,
-                              color: "#374151",
-                              background: "transparent",
-                              border: "none",
-                              cursor: "pointer",
-                            }}
                           >
                             Rename
-                          </button>
+                          </Button>
                           <DeleteIconButton
                             onClick={() => setDeleteTarget(doc)}
                             aria-label={`Delete ${doc.title || "document"}`}
@@ -490,22 +472,16 @@ export default function SowPage() {
             )}
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button
+              <Button
+                variant="outline"
+                size="lg"
                 onClick={() => setShowModal(false)}
-                style={{
-                  padding: "8px 14px",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#374151",
-                  background: "#fff",
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="invert"
+                size="lg"
                 onClick={() =>
                   createMutation.mutate({
                     title: form.title.trim(),
@@ -513,19 +489,9 @@ export default function SowPage() {
                   })
                 }
                 disabled={!form.title.trim() || createMutation.isPending}
-                style={{
-                  padding: "8px 14px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "#fff",
-                  background: !form.title.trim() ? "#93C5FD" : "#2563EB",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: !form.title.trim() ? "default" : "pointer",
-                }}
               >
                 {createMutation.isPending ? "Creating…" : "Create"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -627,38 +593,22 @@ export default function SowPage() {
             )}
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button
+              <Button
+                variant="outline"
+                size="lg"
                 onClick={resetImportModal}
                 disabled={importSubmitting}
-                style={{
-                  padding: "8px 14px",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#374151",
-                  background: "#fff",
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  cursor: importSubmitting ? "default" : "pointer",
-                }}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="invert"
+                size="lg"
                 onClick={submitImport}
                 disabled={!importForm.file || importSubmitting}
-                style={{
-                  padding: "8px 14px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "#fff",
-                  background: !importForm.file || importSubmitting ? "#93C5FD" : "#2563EB",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: !importForm.file || importSubmitting ? "default" : "pointer",
-                }}
               >
                 {importSubmitting ? "Importing…" : "Import"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -697,37 +647,21 @@ export default function SowPage() {
               mistake.
             </p>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button
+              <Button
+                variant="outline"
+                size="lg"
                 onClick={() => setDeleteTarget(null)}
-                style={{
-                  padding: "8px 14px",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#374151",
-                  background: "#fff",
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="destructive"
+                size="lg"
                 onClick={() => deleteMutation.mutate(deleteTarget.id)}
                 disabled={deleteMutation.isPending}
-                style={{
-                  padding: "8px 14px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "#fff",
-                  background: "#DC2626",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
               >
                 {deleteMutation.isPending ? "Deleting…" : "Delete"}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

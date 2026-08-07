@@ -1,7 +1,7 @@
 from app.models.user import User, UserRole
 from app.models.refresh_token import RefreshToken
 from app.models.audit_log import AuditLog
-from app.models.project import Project, Product
+from app.models.project import Project, ProjectEnvironment, Product
 from app.models.test_suite import TestSuite, SuiteType
 from app.models.test_run import TestRun, RunStatus
 from app.models.test_result import TestResult, TestStatus
@@ -58,6 +58,7 @@ __all__ = [
     "RefreshToken",
     "AuditLog",
     "Project",
+    "ProjectEnvironment",
     "Product",
     "TestSuite",
     "SuiteType",

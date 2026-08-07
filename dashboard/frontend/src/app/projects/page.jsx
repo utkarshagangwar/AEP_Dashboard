@@ -161,12 +161,13 @@ export default function ProjectsPage() {
                 ? `Error: ${discoveryResult.errors[0]}`
                 : `Found ${discoveredProjectCount} project(s) with ${discoveryResult.discovered?.length || 0} suite(s), registered ${discoveryResult.registered?.length || 0} new`}
             </span>
-            <button
+            <Button
+              variant="ghost"
+              size="lg"
               onClick={() => setDiscoveryResult(null)}
-              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "inherit" }}
             >
               ×
-            </button>
+            </Button>
           </div>
         )}
 
@@ -242,7 +243,7 @@ export default function ProjectsPage() {
           </div>
 
           {isLoading ? (
-            <GlobalLoader />
+            <GlobalLoader fullscreen={false} />
           ) : !projects.length ? (
             <div
               style={{
@@ -258,6 +259,7 @@ export default function ProjectsPage() {
             projects.map((p, i) => (
               <div
                 key={p.id}
+                className="row-interactive"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "2fr 3fr minmax(80px, 0.8fr) 80px 80px 40px",
@@ -266,17 +268,25 @@ export default function ProjectsPage() {
                   borderBottom:
                     i < projects.length - 1 ? "1px solid #F3F4F6" : "none",
                   alignItems: "center",
-                  transition: "background 0.1s",
                   cursor: "pointer",
                 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "#F9FAFB")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "transparent")
-                }
+                // The row navigates, so it is a link — but it cannot be an
+                // <a>: it contains the actions <button>, and a button inside
+                // an anchor is invalid HTML. role="link" + tabIndex is the
+                // accessible equivalent. Before this it was a plain <div
+                // onClick>: unreachable by keyboard, absent from the tab
+                // order, and announced as nothing.
+                role="link"
+                tabIndex={0}
                 onClick={() => {
                   window.location.href = `/projects/${p.id}`;
+                }}
+                onKeyDown={(e) => {
+                  // Enter only — Space scrolls the page on links, and
+                  // hijacking it here would break that expectation.
+                  if (e.key === "Enter" && e.target === e.currentTarget) {
+                    window.location.href = `/projects/${p.id}`;
+                  }
                 }}
               >
                 <div>
@@ -360,24 +370,14 @@ export default function ProjectsPage() {
                     <Tooltip>
                       <TooltipTrigger
                         render={
-                          <button
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={() =>
                               setOpenMenuId(openMenuId === p.id ? null : p.id)
                             }
                             aria-label="Project actions"
-                            style={{
-                              width: 28,
-                              height: 28,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              background:
-                                openMenuId === p.id ? "#F3F4F6" : "transparent",
-                              border: "none",
-                              borderRadius: 6,
-                              cursor: "pointer",
-                              color: "#6B7280",
-                            }}
+                            aria-expanded={openMenuId === p.id}
                           >
                             <svg
                               width="16"
@@ -389,7 +389,7 @@ export default function ProjectsPage() {
                               <circle cx="12" cy="12" r="1.8" />
                               <circle cx="12" cy="19" r="1.8" />
                             </svg>
-                          </button>
+                          </Button>
                         }
                       />
                       <TooltipContent>Project actions</TooltipContent>
@@ -409,24 +409,15 @@ export default function ProjectsPage() {
                           overflow: "hidden",
                         }}
                       >
-                        <button
+                        <Button
+                          variant="ghost"
+                          size="lg"
                           onClick={() => openEditModal(p)}
-                          style={{
-                            display: "block",
-                            width: "100%",
-                            textAlign: "left",
-                            padding: "8px 14px",
-                            fontSize: 13,
-                            color: "#374151",
-                            background: "none",
-                            border: "none",
-                            cursor: "pointer",
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
-                          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                          className="menu-item"
+                          className="w-full"
                         >
                           Edit
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -563,38 +554,21 @@ export default function ProjectsPage() {
               )}
 
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button
+                <Button
+                  variant="outline"
+                  size="lg"
                   onClick={() => setEditingProject(null)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={saveEdit}
                   disabled={updateProjectMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    opacity: updateProjectMutation.isPending ? 0.7 : 1,
-                  }}
                 >
                   {updateProjectMutation.isPending ? "Saving…" : "Save"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

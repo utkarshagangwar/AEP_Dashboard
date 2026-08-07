@@ -190,11 +190,23 @@ export default function DashboardPage() {
     ? projects.find((p) => p.id === selectedProject)?.name
     : null;
 
-  // One full-screen loader for the whole page, replacing the per-panel
-  // "Loading…" text. isLoading (not isFetching) is deliberate: it's true only
-  // on the first load, so the 30s background refetch above never blanks the
-  // dashboard out from under someone reading it.
-  if (isLoading) return <GlobalLoader />;
+  // One loader for the whole page, replacing the per-panel "Loading…" text.
+  // isLoading (not isFetching) is deliberate: it's true only on the first
+  // load, so the 30s background refetch above never blanks the dashboard out
+  // from under someone reading it.
+  //
+  // It renders inside the shell, not over it. Returning a bare fullscreen
+  // loader here tore the sidebar down and rebuilt it a beat later, which read
+  // as the whole app reloading rather than one panel filling in.
+  if (isLoading) {
+    return (
+      <AppShell noPadding>
+        <PageContainer>
+          <GlobalLoader fullscreen={false} />
+        </PageContainer>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell noPadding>

@@ -13,7 +13,8 @@ export default function RootPage() {
     window.location.href = user ? "/dashboard" : "/login";
   }, []);
 
-  // The redirect above fires on mount, so this is usually never painted —
-  // GlobalLoader's own 180ms show-delay keeps it from flashing on the way out.
+  // The redirect above fires on mount, so this is only ever seen for a beat.
+  // GlobalLoader's backdrop paints immediately while its contents wait 90ms,
+  // so the fast path shows a plain surface rather than a flash of mascot.
   return <GlobalLoader />;
 }

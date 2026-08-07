@@ -29,6 +29,23 @@
        delete-icon-button) compiled to nothing and the hover label inherited
        whatever colour happened to be around. White on this red is ~4.9:1. */
     --destructive-foreground: oklch(0.985 0 0);
+    /* The positive counterpart to --destructive, for confirm actions.
+       Darker than the #16A34A green it replaces, and deliberately so: the
+       success button variant renders as text on a 10% tint of itself, and
+       #16A34A scored only 3.92:1 there. At L 0.48 it measures 5.24:1 on that
+       tint and 4.52:1 on the 20% hover tint — both clear AA.
+       (Note: --destructive scores 3.97:1 under the same test and predates
+       this change; flagged, not silently altered, since it is app-wide.) */
+    --success: oklch(0.48 0.15 145.6);
+    --success-foreground: oklch(0.985 0 0);
+    /* Text-weight counterparts, for the tonal forms of the white button.
+       The tinted-surface variants they replace put --destructive on a 10%
+       tint of itself; on a plain white face that same red measures ~3.3:1
+       and fails AA, so the ink form is darkened until it clears 4.5:1.
+       --success already clears it on white and is passed through unchanged,
+       named here only so both tones read from one vocabulary. */
+    --destructive-ink: oklch(0.46 0.2 27.325);
+    --success-ink: var(--success);
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
     /* Blue-tinted to match --primary: a neutral grey focus ring next to blue
@@ -48,7 +65,15 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
-    --loader-accent: oklch(0.74 0.16 55);
+    /* The mascot's orange. Canonical name — it is no longer only the loader's:
+       it is also the sidebar's active marker and the primary-action edge.
+       Deliberately never used for text or icons on a light surface, where it
+       measures 2.41:1. It marks; it does not label. */
+    --mascot-accent: oklch(0.74 0.16 55);
+    /* Retained so existing loader CSS keeps working. */
+    --loader-accent: var(--mascot-accent);
+    /* ease-out-quint. One curve for every UI transition. */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   }
   .dark {
     --background: oklch(0.145 0 0);
@@ -69,6 +94,13 @@
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
     --destructive-foreground: oklch(0.205 0 0);
+    /* Lightened for dark surfaces, matching how --destructive is handled. */
+    --success: oklch(0.75 0.17 145.6);
+    --success-foreground: oklch(0.205 0 0);
+    /* Both are already lightened for dark surfaces, so the ink forms are
+       the tokens themselves — no second darkening step to undo. */
+    --destructive-ink: var(--destructive);
+    --success-ink: var(--success);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.556 0 0);
@@ -100,6 +132,351 @@
   input, textarea, select, button {
     @apply outline-none focus:outline-none;
   }
+  /* ── Interactive rows, links and menu items ────────────────────────────────
+     These replace onMouseEnter/onMouseLeave handlers that mutated inline
+     styles across nine page files. That approach could never express
+     :focus-visible — a JS mouse event has no focus equivalent — so every one
+     of these surfaces was invisible to a keyboard user.
+
+     Selection state is expressed with [data-selected] / [aria-expanded] rather
+     than an inline `background`, because an inline style beats a class and
+     would have silently swallowed the hover. */
+
+  .row-interactive {
+    transition: background-color 180ms var(--ease-out);
+  }
+  .row-interactive:hover {
+    background-color: color-mix(in oklch, var(--foreground), transparent 97%);
+  }
+  .row-interactive:focus-visible {
+    outline: 2px solid var(--foreground);
+    /* Inset: rows are flush with their container, so a positive offset would
+       be clipped by the table's overflow. */
+    outline-offset: -2px;
+    background-color: color-mix(in oklch, var(--foreground), transparent 97%);
+  }
+  .row-interactive[data-selected],
+  .row-interactive[aria-expanded="true"] {
+    background-color: color-mix(in oklch, var(--foreground), transparent 95%);
+  }
+
+  /* Standalone tiles (evidence links, artifact cards) sit on their own fill
+     rather than on the row surface, so they step up from --muted. */
+  .tile-interactive {
+    background-color: var(--muted);
+    transition: background-color 180ms var(--ease-out),
+      border-color 180ms var(--ease-out);
+  }
+  .tile-interactive:hover,
+  .tile-interactive:focus-visible {
+    background-color: color-mix(in oklch, var(--foreground), transparent 92%);
+    border-color: color-mix(in oklch, var(--foreground), transparent 80%);
+  }
+  .tile-interactive:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 2px;
+  }
+
+  /* Toggle chips — role pills, permission pills, active/inactive segments.
+     Deliberately NOT folded into the Button component: they are toggles, not
+     actions, and they carry aria-pressed. Their selected colour stays inline
+     (it is semantic per role), so only the UNSELECTED background is left to
+     this class — an inline background would outrank it and kill the hover. */
+  .chip-toggle {
+    background-color: var(--background);
+    transition: background-color 180ms var(--ease-out),
+      border-color 180ms var(--ease-out);
+  }
+  .chip-toggle:hover {
+    background-color: color-mix(in oklch, var(--foreground), transparent 95%);
+  }
+  .chip-toggle:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 2px;
+  }
+  /* No :hover override is needed for the selected state — its inline
+     background already outranks this stylesheet, so a selected chip keeps its
+     semantic fill on hover for free. */
+
+  .menu-item {
+    transition: background-color 180ms var(--ease-out);
+  }
+  .menu-item:hover,
+  .menu-item:focus-visible {
+    background-color: color-mix(in oklch, var(--foreground), transparent 95%);
+  }
+  .menu-item:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: -2px;
+  }
+
+  .link-hover-underline {
+    text-decoration: none;
+  }
+  .link-hover-underline:hover,
+  .link-hover-underline:focus-visible {
+    text-decoration: underline;
+  }
+  .link-hover-underline:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row-interactive,
+    .tile-interactive,
+    .menu-item,
+    .chip-toggle {
+      transition: none;
+    }
+  }
+
+  /* ── Button motion ─────────────────────────────────────────────────────────
+     Applied by variants in components/ui/button.tsx, which attaches these
+     class names through its cva map. The pseudo-element choreography lives
+     here rather than in that cva string because expressing ::before/::after
+     transforms as Tailwind arbitrary variants is write-only code.
+
+     Colour transitions and the 1px press stay in the cva base — only the
+     effects that need a pseudo-element are here. */
+
+  /* The primary-action marker. Same orange, same "marks but never labels"
+     rule as the sidebar's active dot, so hover and selection read as one
+     language rather than two unrelated highlights. Fires on focus-visible
+     too — a keyboard user should get the same signal a mouse user gets. */
+  .btn-edge {
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-edge::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--mascot-accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 220ms var(--ease-out);
+  }
+  .btn-edge:hover::after,
+  .btn-edge:focus-visible::after {
+    transform: scaleX(1);
+  }
+
+  /* ── The white button ──────────────────────────────────────────────────────
+     One of the two button designs in the platform; the ink one needs no CSS
+     beyond .btn-edge, since a colour crossfade is expressible in the cva map.
+
+     Three layers, all inert until pointer-over or keyboard focus, so a page
+     with forty of these paints nothing extra at rest:
+
+       1. a rim of two counter-rotating beams, drawn as a conic gradient that
+          a two-box mask clips down to the 1px border. Doing it with `mask`
+          rather than a stack of positioned elements keeps this to a single
+          pseudo-element and leaves ::after free for the orange edge — the
+          button renders its own children, so extra wrapper spans are not
+          available to us the way they are in a standalone demo.
+       2. an ink bloom sweeping in from the bottom-right, painted as a
+          background-image so it costs no element at all.
+       3. a 1.2deg tilt. The reference had 7deg; on a 36px pill that reads as
+          a shake, and this is software people sit in for hours, so a Cancel
+          button that jolts on every accidental pass becomes an irritation
+          well before lunch. 1.2deg still reads as alive.
+
+     Hue is per-tone: the danger and success forms swap --btn-rim-* and
+     --btn-bloom and change nothing else, which is what keeps them the same
+     button rather than a third and fourth design. */
+
+  .btn-white {
+    --btn-rim-a: var(--mascot-accent);
+    --btn-rim-b: oklch(0.55 0.13 250);
+    --btn-bloom: var(--foreground);
+    position: relative;
+    /* Makes the button its own stacking context so the rim can sit at z-index
+       -1 — above the bloom, below the label — without escaping upward and
+       painting over whatever the button happens to sit inside. */
+    isolation: isolate;
+    /* Multi-stop so the falloff reads as a soft blurred glow rather than a
+       hard-edged disc — this stands in for the reference's blur() blob, and a
+       two-stop gradient at this size looks like a printed dot instead. */
+    background-image: radial-gradient(
+      circle closest-side,
+      color-mix(in oklch, var(--btn-bloom) 20%, transparent) 0%,
+      color-mix(in oklch, var(--btn-bloom) 12%, transparent) 45%,
+      color-mix(in oklch, var(--btn-bloom) 4%, transparent) 72%,
+      transparent 100%
+    );
+    background-repeat: no-repeat;
+    /* Edge-offset syntax, NOT percentages. A percentage background-position
+       resolves against (element size - image size); the bloom is deliberately
+       larger than the button, so that difference is negative and percentages
+       run backwards — 92% 112% put the glow off the top-left corner instead of
+       into the bottom-right one, which is why it read as missing entirely.
+       Offsets from a named edge are absolute and size-independent. */
+    background-position: right -70px bottom -70px;
+    background-size: 0 0;
+  }
+  .btn-white:hover,
+  .btn-white:focus-visible {
+    background-position: right -34px bottom -30px;
+    background-size: 132px 132px;
+    animation:
+      btn-rim 3000ms linear infinite,
+      btn-tilt 400ms var(--ease-out) both;
+  }
+  /* The rotating border, using the reference's actual mechanism rather than a
+     conic gradient: two 120x300 beams orbiting the button's centre, revealed
+     only where a ring mask lets them through. A conic gradient was the wrong
+     substitution — it turns a colour wheel in place, which reads as a static
+     tinted border, where orbiting bars sweep a bright head around the edge.
+
+     Both keyframes turn the same direction and differ only in the sign of
+     translateY, so the two bars sit on opposite sides of one orbit — that is
+     how the source has it, and it is why a single rotating container could
+     never reproduce the effect.
+
+     translateY(±50%) is relative to each bar's OWN height, so a bar's inner
+     edge always lands exactly on the orbit centre no matter how tall it is.
+     That is what makes the source's 300px height work unchanged on a 36px
+     button: the pair always covers the whole control between them, and only
+     the gradient's direction changes as they turn.
+
+     Rendered as a real <span> by components/ui/button.tsx, because this needs
+     a static masked container with two independently rotating children, and
+     the button's own two pseudo-elements cannot provide that (::after is the
+     orange edge). */
+  .btn-rim {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+    /* 1.5px, not 1px: on a 36px-tall control a hairline is below the
+       threshold where the sweep reads as motion at all. */
+    padding: 1.5px;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 200ms var(--ease-out);
+  }
+  .btn-rim::before,
+  .btn-rim::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 120px;
+    height: 300px;
+    margin: -150px 0 0 -60px;
+    /* Paused at rest, exactly as the reference does it: the animation is
+       declared but costs nothing until the pointer arrives. */
+    animation: rotation_9018 3000ms linear infinite;
+    animation-play-state: paused;
+  }
+  .btn-rim::before {
+    background: linear-gradient(90deg, var(--btn-rim-a), transparent);
+  }
+  .btn-rim::after {
+    background: linear-gradient(90deg, transparent, var(--btn-rim-b));
+    animation-name: rotation_9019;
+  }
+  .btn-white:hover .btn-rim,
+  .btn-white:focus-visible .btn-rim {
+    opacity: 1;
+  }
+  .btn-white:hover .btn-rim::before,
+  .btn-white:hover .btn-rim::after,
+  .btn-white:focus-visible .btn-rim::before,
+  .btn-white:focus-visible .btn-rim::after {
+    animation-play-state: running;
+  }
+
+  @keyframes rotation_9018 {
+    0% {
+      transform: rotate(0deg) translateY(50%);
+    }
+    100% {
+      transform: rotate(360deg) translateY(50%);
+    }
+  }
+  @keyframes rotation_9019 {
+    0% {
+      transform: rotate(0deg) translateY(-50%);
+    }
+    100% {
+      transform: rotate(360deg) translateY(-50%);
+    }
+  }
+  @keyframes btn-tilt {
+    0% {
+      rotate: 0deg;
+    }
+    30% {
+      rotate: 1.2deg;
+    }
+    65% {
+      rotate: -1.2deg;
+    }
+    100% {
+      rotate: 0deg;
+    }
+  }
+
+  /* Forward motion for actions that actually go somewhere. Targets the last
+     icon so a leading icon (a status glyph, a spinner) never drifts. */
+  .btn-nudge svg:last-child {
+    transition: transform 220ms var(--ease-out);
+  }
+  .btn-nudge:hover svg:last-child {
+    transform: translateX(3px);
+  }
+
+  /* Reduced motion keeps every state legible and drops everything that moves.
+     The beams stop rather than freeze mid-orbit — a halted bar parked across
+     one edge is an arbitrary smear, not a border — so the rim holds a still,
+     evenly-lit ring and the bloom appears in place without travelling. */
+  @media (prefers-reduced-motion: reduce) {
+    .btn-edge::after,
+    .btn-nudge svg:last-child,
+    .btn-white,
+    .btn-rim {
+      transition: none;
+    }
+    .btn-white:hover,
+    .btn-white:focus-visible {
+      animation: none;
+    }
+    .btn-rim::before,
+    .btn-rim::after,
+    .btn-white:hover .btn-rim::before,
+    .btn-white:hover .btn-rim::after,
+    .btn-white:focus-visible .btn-rim::before,
+    .btn-white:focus-visible .btn-rim::after {
+      animation: none;
+      transform: none;
+      inset: 0;
+      width: auto;
+      height: auto;
+      margin: 0;
+    }
+    .btn-rim::before {
+      background: var(--btn-rim-a);
+    }
+    .btn-rim::after {
+      background: none;
+    }
+  }
+
   @keyframes fade-in-up {
     from {
       opacity: 0;
@@ -143,6 +520,11 @@
      The supplied design, translated from styled-components to plain CSS so it
      needs no new dependency. The motion is a vertical swap: the trash icon
      grows and slides down out of the pill while the label drops in above it.
+
+     Deliberately exempt from the two-button system. It is the only control in
+     the app whose hover *is* the affordance — the label it reveals is how you
+     learn what the icon does — and collapsing it into the shared button traded
+     that away for a tooltip. Kept as its own design at the owner's request.
 
      TWO DEVIATIONS FROM THE SOURCE, both to stop it disturbing the page:
 

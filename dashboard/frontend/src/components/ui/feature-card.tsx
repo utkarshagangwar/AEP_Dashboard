@@ -5,6 +5,8 @@ import { Plus } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+import { Button } from "./button"
+
 interface FeatureCardProps extends React.ComponentProps<"div"> {
   badge?: string
   title: string
@@ -70,14 +72,19 @@ function FeatureCard({
           ) : (
             <span />
           )}
-          <button
+          {/* Ink rather than the old bg-primary blue. The round shape, the
+              card-hover scale, and the halo are this affordance's own
+              geometry and are kept on top of the shared button. */}
+          <Button
             type="button"
+            variant="invert"
+            size="icon-sm"
             onClick={onAction}
             aria-label={actionLabel}
-            className="ml-auto flex size-7 scale-90 items-center justify-center rounded-full bg-primary text-primary-foreground transition-all duration-300 outline-none group-hover/card:scale-100 group-hover/card:ring-4 group-hover/card:ring-primary/20 motion-reduce:transition-none focus-visible:scale-100 focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="ml-auto size-7 scale-90 transition-all duration-300 group-hover/card:scale-100 group-hover/card:ring-4 group-hover/card:ring-foreground/15 motion-reduce:transition-none focus-visible:scale-100"
           >
             <Plus className="size-4" />
-          </button>
+          </Button>
         </div>
       </div>
     </div>

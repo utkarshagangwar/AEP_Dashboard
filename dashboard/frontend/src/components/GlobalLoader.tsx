@@ -2,15 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 
-// Delay before showing anything, so fast transitions don't flash a loader.
-const SHOW_DELAY_MS = 180;
+import LoaderMascot from "./LoaderMascot";
+import { Button } from "./ui/button";
+
+// The backdrop paints immediately; only the mascot + bar wait this long before
+// fading in, so a sub-100ms transition never strobes them. Keep in sync with
+// the `global-loader-enter` animation delay below.
+const CONTENT_DELAY_MS = 90;
 // Past this, stop implying progress and offer a way out. PRODUCT.md: never
 // claim progress that isn't actually happening.
 const CEILING_MS = 15000;
-
-// Crop of the mascot's 0 0 500 500 canvas around its resting + jump-apex
-// bounding box, so it fills the rig instead of floating in empty space.
-const MASCOT_VIEWBOX = "150 70 230 410";
 
 /**
  * The app's one loading state.
@@ -22,17 +23,24 @@ const MASCOT_VIEWBOX = "150 70 230 410";
  * corresponded to nothing real, which is precisely the progress-theatre
  * PRODUCT.md rules out. The bar reads as indeterminate, which is the truth.
  *
+ * Two things this deliberately does NOT do, both of which it used to:
+ *
+ * 1. It does not render `null` for the first N milliseconds. That gap meant a
+ *    route's loading boundary painted nothing at all while the router worked,
+ *    so the outgoing page showed through — the visible flash before the loader
+ *    appeared. The opaque backdrop is now up on the first frame and only the
+ *    contents are delayed, which keeps the anti-strobe benefit without the gap.
+ * 2. It does not fetch the mascot over the network. See LoaderMascot.
+ *
  * `fullscreen` (default) covers the viewport for route transitions.
- * Pass `fullscreen={false}` to fill a content region instead.
+ * Pass `fullscreen={false}` to fill a content region instead — use that
+ * whenever the app shell is already painted and should stay put.
  */
 export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boolean }) {
-  const [visible, setVisible] = useState(false);
   const [pastCeiling, setPastCeiling] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
 
-  const mascotRef = useRef<HTMLDivElement>(null);
-  const mascotSvgElRef = useRef<SVGSVGElement | null>(null);
-  const reducedMotionRef = useRef(false);
+  const mascotRef = useRef<SVGSVGElement | null>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -43,67 +51,23 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
   }, []);
 
   useEffect(() => {
-    const showTimer = window.setTimeout(() => setVisible(true), SHOW_DELAY_MS);
-    return () => window.clearTimeout(showTimer);
-  }, []);
-
-  // One timer for the only time-based state left. Replaces the old 100ms
-  // polling interval, which existed to drive the checklist badges.
-  useEffect(() => {
-    if (!visible) return;
-    const ceilingTimer = window.setTimeout(
-      () => setPastCeiling(true),
-      Math.max(0, CEILING_MS - SHOW_DELAY_MS),
-    );
+    const ceilingTimer = window.setTimeout(() => setPastCeiling(true), CEILING_MS);
     return () => window.clearTimeout(ceilingTimer);
-  }, [visible]);
-
-  // Mirror the preference into a ref, and apply it to the SVG if it has
-  // already landed. The ref exists because the fetch below is mount-scoped
-  // and would otherwise close over a stale `reducedMotion`.
-  useEffect(() => {
-    reducedMotionRef.current = reducedMotion;
-    const svgEl = mascotSvgElRef.current;
-    if (!svgEl) return;
-    if (reducedMotion) svgEl.pauseAnimations?.();
-    else svgEl.unpauseAnimations?.();
-  }, [reducedMotion]);
-
-  // The mascot is a self-contained SMIL-animated SVG (no JS animation
-  // library needed). It's fetched once and injected so we can (a) crop its
-  // viewBox and (b) pause/resume its native animation for reduced-motion,
-  // since prefers-reduced-motion doesn't pause SMIL automatically.
-  //
-  // Mount-scoped ([] deps) on purpose. The previous version keyed this on
-  // `reducedMotion` and used a "have I fetched yet" ref to dedupe, which
-  // broke under React StrictMode: the first pass was cancelled by its own
-  // cleanup while the ref already read `true`, so the second pass skipped
-  // the fetch entirely and the mascot never rendered in dev.
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/loader-orb.svg")
-      .then((res) => res.text())
-      .then((svgText) => {
-        if (cancelled || !mascotRef.current) return;
-        mascotRef.current.innerHTML = svgText;
-        const svgEl = mascotRef.current.querySelector("svg");
-        if (!svgEl) return;
-        svgEl.setAttribute("viewBox", MASCOT_VIEWBOX);
-        svgEl.setAttribute("aria-hidden", "true");
-        mascotSvgElRef.current = svgEl;
-        mascotRef.current.classList.add("is-loaded");
-        // Read the ref, not the closed-over state: the preference may have
-        // flipped while this request was in flight.
-        if (reducedMotionRef.current) svgEl.pauseAnimations?.();
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      mascotSvgElRef.current = null;
-    };
   }, []);
 
-  if (!visible) return null;
+  // prefers-reduced-motion does not pause SMIL, so the mascot's jump has to be
+  // stopped explicitly. Paused at time 0 it holds its resting pose, which is
+  // the honest still frame of this animation.
+  useEffect(() => {
+    const svgEl = mascotRef.current;
+    if (!svgEl) return;
+    if (reducedMotion) {
+      svgEl.setCurrentTime?.(0);
+      svgEl.pauseAnimations?.();
+    } else {
+      svgEl.unpauseAnimations?.();
+    }
+  }, [reducedMotion, pastCeiling]);
 
   return (
     <div
@@ -112,15 +76,19 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
       aria-live="polite"
     >
       {pastCeiling ? (
-        <div className="global-loader__ceiling">
+        <div className="global-loader__content global-loader__ceiling">
           <p>This is taking unusually long.</p>
-          <button type="button" onClick={() => window.location.reload()}>
+          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
             Reload
-          </button>
+          </Button>
         </div>
       ) : (
-        <>
-          <div className="global-loader__mascot" ref={mascotRef} aria-hidden="true" />
+        <div className="global-loader__content">
+          {/* The mascot's box is sized to its resting pose; the jump apex
+              overflows upward into space that is empty regardless. */}
+          <div className="global-loader__mascot">
+            <LoaderMascot ref={mascotRef} />
+          </div>
           {/* global_loader_2: the word travels while the capsule stretches
               across and back. Purely decorative — the accessible name comes
               from the visually-hidden text below. */}
@@ -129,16 +97,14 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
             <span className="global-loader__bar-fill" />
           </div>
           <span className="global-loader__sr">Loading…</span>
-        </>
+        </div>
       )}
 
       <style>{`
         .global-loader {
           display: flex;
-          flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 20px;
           width: 100%;
           min-height: min(60vh, 520px);
           padding: 24px;
@@ -147,22 +113,43 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
         .global-loader--fixed {
           position: fixed;
           inset: 0;
-          z-index: 50;
+          /* Above the app shell and every in-page overlay (max is z-50), so a
+             route transition genuinely covers what it is replacing. */
+          z-index: 60;
           min-height: 0;
         }
-        .global-loader__mascot {
-          width: 96px;
-          height: 96px;
-          opacity: 0;
-          transition: opacity 0.3s ease-out;
+        .global-loader__content {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
+          animation: global-loader-enter 140ms cubic-bezier(0.22, 1, 0.36, 1)
+            ${CONTENT_DELAY_MS}ms both;
         }
-        .global-loader__mascot.is-loaded {
-          opacity: 1;
+        @keyframes global-loader-enter {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+
+        /* ── global_loader_1 ─────────────────────────────────────────────── */
+        .global-loader__mascot {
+          position: relative;
+          /* Sized to the RESTING pose only — see LoaderMascot's geometry note.
+             240:370 viewBox at 95px wide puts the resting slice (156 of 370
+             units) at almost exactly 62px tall. */
+          width: 95px;
+          height: 62px;
         }
         .global-loader__mascot svg {
+          position: absolute;
+          bottom: 0;
+          left: 0;
           display: block;
           width: 100%;
-          height: 100%;
+          /* 95 / (240/370) — the full viewBox, bottom-anchored, so the jump
+             leaves the box upward instead of being clipped or squashed. */
+          height: 146px;
+          overflow: visible;
         }
 
         /* ── global_loader_2 ─────────────────────────────────────────────── */
@@ -235,9 +222,6 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
         }
 
         .global-loader__ceiling {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
           gap: 12px;
           text-align: center;
         }
@@ -246,23 +230,15 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
           font-size: 13px;
           color: var(--muted-foreground);
         }
-        .global-loader__ceiling button {
-          border: 1px solid var(--border);
-          background: var(--secondary);
-          color: var(--secondary-foreground);
-          border-radius: var(--radius);
-          padding: 6px 16px;
-          font-size: 13px;
-          cursor: pointer;
-        }
-        .global-loader__ceiling button:hover {
-          background: var(--accent);
-        }
 
         /* The bar's whole point is horizontal travel, so there's no honest
            reduced-motion variant of it — swap to a static capsule that just
            breathes opacity. The mascot's SMIL is paused in JS above. */
         @media (prefers-reduced-motion: reduce) {
+          .global-loader__content {
+            animation: none;
+            opacity: 1;
+          }
           .global-loader__bar-text,
           .global-loader__bar-fill,
           .global-loader__bar-fill::before {

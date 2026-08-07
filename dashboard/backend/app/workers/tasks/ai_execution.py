@@ -280,10 +280,16 @@ def _resolve_run_inputs(
 
     Shared by run_ai_test_task and replay_skill_task.
 
-    Three mutually-exclusive sources, in priority order:
+    Four sources, in priority order:
     1. A saved credential_profile_id — kind="bypass" resolves to (target_url,
        cookies) via _resolve_bypass_profile(); any other kind (including
-       null/"standard") decrypts credentials into sensitive_data as before.
+       null/"standard") decrypts credentials into sensitive_data as before,
+       AND now also contributes its target_url as the start URL. That last
+       part is a fix, not a refinement: target_url was previously read only
+       inside the bypass branch, so a standard profile supplied credentials
+       with no address, environment_url stayed "about:blank", ai_runner's
+       `!= "about:blank"` guard skipped page.goto() and the agent opened a
+       blank tab.
        allowed_domains stays scoped to the profile's configured domains
        (plus the OAuth-provider widen below) — saved profiles keep the
        mandatory domain guardrail.
@@ -300,12 +306,28 @@ def _resolve_run_inputs(
        these runs have no domain guardrail at all, so a malicious/
        compromised target page could in principle induce the agent to
        submit the typed credentials to an attacker-controlled domain.
-    3. Neither — environment_url stays "about:blank", the AI agent navigates
-       from the goal text, exactly as today.
+    3. The run's project + environment, via the project_environments table
+       (app.models.project.ProjectEnvironment, migration 0041) — base_url
+       and an optional default credential profile. Consulted ONLY when 1
+       and 2 produced no URL, so it cannot change the behaviour of any run
+       that already resolved one. This is the path a SOW-extracted prompt
+       skill takes: saved under a project, but never given a credential
+       profile at parse time, because parsing knows nothing about
+       environments or logins.
+    4. None of the above — environment_url stays "about:blank" and the AI
+       agent navigates from the goal text, exactly as before. Runs whose
+       goal carries no URL are now rejected at submit time instead of
+       reaching this state (see app/api/v1/ai_runs.py), so this branch is
+       reserved for goals that genuinely embed their own address.
     """
     from app.models.ai_runs import AICredentialProfile
+    from app.services.start_context import (
+        NO_NAVIGATION_URL,
+        derive_allowed_domains,
+        resolve_start_context,
+    )
 
-    environment_url = "about:blank"
+    environment_url = NO_NAVIGATION_URL
     allowed_domains: list[str] | None = None
     sensitive_data: dict | None = None
     cookies: list[dict] | None = None
@@ -317,16 +339,25 @@ def _resolve_run_inputs(
             allowed_domains = profile.allowed_domains or []
             if (profile.kind or "standard") == "bypass":
                 environment_url, cookies = _resolve_bypass_profile(profile)
-            elif profile.credentials_json:
-                try:
-                    from app.services.credential_service import decrypt_credentials
-                    sensitive_data = decrypt_credentials(profile.credentials_json)
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to decrypt credentials for profile %s: %s",
-                        run.credential_profile_id,
-                        exc,
-                    )
+            else:
+                # A standard profile's target_url used to be ignored
+                # outright — the profile handed over a password with
+                # nowhere to type it, environment_url stayed
+                # "about:blank", ai_runner skipped page.goto(), and the
+                # agent reported a blank page. target_url is now honoured
+                # for every kind, not just "bypass".
+                if profile.target_url:
+                    environment_url = profile.target_url
+                if profile.credentials_json:
+                    try:
+                        from app.services.credential_service import decrypt_credentials
+                        sensitive_data = decrypt_credentials(profile.credentials_json)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to decrypt credentials for profile %s: %s",
+                            run.credential_profile_id,
+                            exc,
+                        )
     elif getattr(run, "adhoc_target_url", None):
         environment_url = run.adhoc_target_url
         if getattr(run, "adhoc_credentials_json", None):
@@ -345,6 +376,138 @@ def _resolve_run_inputs(
             # "allowed_domains required when sensitive_data is set" gate
             # too, instead of raising.
             unrestricted_domains = True
+
+    # ── Project-level fallback ──────────────────────────────────────────
+    #
+    # Runs when the branches above left the run without a login, a URL,
+    # or both. Deliberately NOT gated on environment_url still being
+    # "about:blank": the login and the URL are independent, and gating
+    # the login on a missing URL is exactly the bug this replaces.
+    #
+    # The failure it caused: a SOW-extracted skill whose goal text
+    # happened to mention its own address resolved a URL, so the login
+    # lookup was skipped, so the project's kind="bypass" profile was
+    # never loaded and no auth cookie was injected. The agent navigated
+    # to the app unauthenticated, was bounced to the real login form, and
+    # hit the reCAPTCHA the bypass profile exists to route around —
+    # reproduced against dev.interviewgod.ai, where the action log
+    # contained no "Inject authenticated session cookie" step at all.
+    #
+    # Still guarded on the ad-hoc path being untaken (unrestricted_
+    # domains): an ad-hoc run has deliberately opted out of domain
+    # allowlisting and must not silently acquire a project's saved
+    # credentials.
+    needs_login = not run.credential_profile_id and sensitive_data is None
+    needs_url = environment_url == NO_NAVIGATION_URL
+    if (needs_login or needs_url) and not unrestricted_domains:
+        ctx = resolve_start_context(
+            db,
+            project_id=getattr(run, "project_id", None),
+            environment=getattr(run, "environment", None),
+            # Explicit profile/ad-hoc were already handled above; ask the
+            # resolver for the project-level answer only, so this can
+            # never override a choice the run already made.
+            credential_profile_id=None,
+            adhoc_target_url=None,
+            goal=getattr(run, "goal", None),
+        )
+
+        # Adopt the project's default login when the run named none. Done
+        # BEFORE the URL is settled, because a bypass profile supplies
+        # its own logged-in landing URL and that is more specific than a
+        # project-wide base_url.
+        if needs_login and ctx.profile is not None:
+            fallback_profile = ctx.profile
+            allowed_domains = fallback_profile.allowed_domains or []
+            if (fallback_profile.kind or "standard") == "bypass":
+                try:
+                    bypass_url, cookies = _resolve_bypass_profile(fallback_profile)
+                    # The bypass profile's own target_url wins over a
+                    # generic base_url and over a URL the agent would
+                    # otherwise have taken from the goal text — it is the
+                    # address the injected cookie is actually valid for.
+                    environment_url = bypass_url
+                    needs_url = False
+                    logger.info(
+                        "Run %s using project-default bypass profile '%s' "
+                        "(%d cookie(s) will be injected)",
+                        getattr(run, "id", None),
+                        fallback_profile.name,
+                        len(cookies or []),
+                    )
+                except Exception as exc:
+                    # A misconfigured bypass profile must be loud, and it
+                    # must fail the SAME way here as it does when the run
+                    # names the profile explicitly (the branch at the top
+                    # of this function lets _resolve_bypass_profile
+                    # propagate). Logging and continuing — which this used
+                    # to do — is what made a Skills run look like it never
+                    # used the bypass at all: with the token fetch dead,
+                    # the run started unauthenticated, the agent typed a
+                    # work email into the real login form and ran itself
+                    # out of steps, and the QA engineer was handed a
+                    # verdict about job creation rather than "bypass login
+                    # failed". Against a CAPTCHA-gated app an
+                    # unauthenticated run is not a degraded run, it is a
+                    # guaranteed false result.
+                    logger.error(
+                        "Run %s: project-default bypass profile '%s' failed to "
+                        "resolve (%s). Failing the run rather than continuing "
+                        "unauthenticated.",
+                        getattr(run, "id", None),
+                        fallback_profile.name,
+                        exc,
+                    )
+                    raise RuntimeError(
+                        f"Bypass login failed for credential profile "
+                        f"'{fallback_profile.name}': {exc}. The run was not "
+                        f"started — no test result was produced. Check the "
+                        f"profile's API base URL, bypass endpoint and API key "
+                        f"under Test setup."
+                    ) from exc
+            elif fallback_profile.credentials_json:
+                try:
+                    from app.services.credential_service import decrypt_credentials
+                    sensitive_data = decrypt_credentials(
+                        fallback_profile.credentials_json
+                    )
+                except Exception as exc:
+                    # Same reasoning as the bypass branch above: a login
+                    # that was configured but cannot be used is a setup
+                    # failure, not a test result.
+                    logger.error(
+                        "Run %s: failed to decrypt project-default credentials for "
+                        "profile '%s' (%s). Failing the run rather than continuing "
+                        "unauthenticated.",
+                        getattr(run, "id", None),
+                        fallback_profile.name,
+                        exc,
+                    )
+                    raise RuntimeError(
+                        f"Could not read the stored credentials for profile "
+                        f"'{fallback_profile.name}': {exc}. The run was not "
+                        f"started — no test result was produced."
+                    ) from exc
+
+        if needs_url and ctx.has_url:
+            environment_url = ctx.environment_url
+
+    # Credentials will be typed into the page, but the profile carries no
+    # allowlist — ai_runner hard-requires one whenever sensitive_data is
+    # set and raises otherwise, which previously made such a profile
+    # unusable rather than merely unguarded. Derive the target's own host:
+    # strictly tighter than running unrestricted, and it keeps the safety
+    # gate satisfied honestly instead of switching it off.
+    if sensitive_data and not allowed_domains and not unrestricted_domains:
+        derived = derive_allowed_domains(environment_url)
+        if derived:
+            logger.info(
+                "Derived allowed_domains=%s from target URL for run %s "
+                "(credential profile configured none)",
+                derived,
+                getattr(run, "id", None),
+            )
+            allowed_domains = derived
 
     # Let the agent follow a saved profile's own SSO/OAuth redirects
     # (Google, Microsoft, etc.) instead of being blocked by browser-use's

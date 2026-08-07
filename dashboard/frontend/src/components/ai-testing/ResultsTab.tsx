@@ -143,12 +143,14 @@ export default function ResultsTab() {
   if (selectedRunId) {
     return (
       <div className="space-y-4">
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => {
             setSelectedRunId(null);
             setSelectedRunType(null);
           }}
-          className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-900 transition-colors"
+          className="text-gray-500"
         >
           <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
             <path
@@ -160,7 +162,7 @@ export default function ResultsTab() {
             />
           </svg>
           Back to results
-        </button>
+        </Button>
         {selectedRunType === "ui_test" ? (
           visualDetailLoading || !visualDetail ? (
             <div className="space-y-4">

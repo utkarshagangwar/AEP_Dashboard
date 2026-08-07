@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "../../../components/ui/button";
 export default function Error({ error, reset }) {
   return (
     <div
@@ -36,21 +37,9 @@ export default function Error({ error, reset }) {
         <p style={{ margin: "0 0 20px", fontSize: 13, color: "#6B7280" }}>
           {error?.message || "Could not load user management."}
         </p>
-        <button
-          onClick={() => reset()}
-          style={{
-            padding: "9px 20px",
-            background: "#2563EB",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
+        <Button variant="invert" size="lg" onClick={() => reset()}>
           Try again
-        </button>
+        </Button>
       </div>
     </div>
   );

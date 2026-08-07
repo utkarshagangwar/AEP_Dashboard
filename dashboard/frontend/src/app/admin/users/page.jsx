@@ -153,24 +153,16 @@ export default function UsersPage() {
               Manage team access and roles
             </p>
           </div>
-          <button
+          <Button
+            variant="invert"
+            size="lg"
             onClick={() => {
               setShowModal(true);
               setFormError("");
             }}
-            style={{
-              padding: "9px 16px",
-              background: "#2563EB",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
           >
             + Invite/Add User
-          </button>
+          </Button>
         </div>
 
         <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
@@ -261,7 +253,7 @@ export default function UsersPage() {
             ))}
           </div>
           {isLoading ? (
-            <GlobalLoader />
+            <GlobalLoader fullscreen={false} />
           ) : !users.length ? (
             <div
               style={{
@@ -277,6 +269,7 @@ export default function UsersPage() {
             users.map((u, i) => (
               <div
                 key={u.id}
+                className="row-interactive"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "2fr 2.5fr 1.2fr 80px 120px",
@@ -285,12 +278,6 @@ export default function UsersPage() {
                     i < users.length - 1 ? "1px solid #F3F4F6" : "none",
                   alignItems: "center",
                 }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "#F9FAFB")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "transparent")
-                }
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div
@@ -378,7 +365,9 @@ export default function UsersPage() {
                   {u.is_active ? "Active" : "Inactive"}
                 </span>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button
+                  <Button
+                    variant="outline"
+                    size="xs"
                     onClick={() => {
                       setEditUser({
                         ...u,
@@ -387,18 +376,9 @@ export default function UsersPage() {
                       });
                       setFormError("");
                     }}
-                    style={{
-                      fontSize: 11,
-                      padding: "4px 8px",
-                      border: "1px solid #E5E7EB",
-                      borderRadius: 6,
-                      background: "#fff",
-                      color: "#374151",
-                      cursor: "pointer",
-                    }}
                   >
                     Edit
-                  </button>
+                  </Button>
                   {user.id !== u.id && (
                     <DeleteIconButton
                       onClick={() => setDeleteConfirm(u)}
@@ -515,13 +495,15 @@ export default function UsersPage() {
                     <button
                       key={r}
                       onClick={() => setForm((f) => ({ ...f, role: r }))}
+                      className="chip-toggle"
+                      aria-pressed={form.role === r}
                       style={{
                         padding: "5px 10px",
                         fontSize: 11,
                         fontWeight: form.role === r ? 600 : 400,
                         border: `1px solid ${form.role === r ? ROLE_COLORS[r] : "#E5E7EB"}`,
                         borderRadius: 999,
-                        background: form.role === r ? ROLE_BG[r] : "#fff",
+                        background: form.role === r ? ROLE_BG[r] : undefined,
                         color: form.role === r ? ROLE_COLORS[r] : "#6B7280",
                         cursor: "pointer",
                         textTransform: "uppercase",
@@ -551,8 +533,12 @@ export default function UsersPage() {
                   {PERMISSIONS.map(({ key, label }) => {
                     const checked = form.permissions.includes(key);
                     return (
-                      <button
+                      <Button
+                        variant="invert"
+                        size="xs"
                         key={key}
+                        className="chip-toggle"
+                        aria-pressed={checked}
                         onClick={() =>
                           setForm((f) => ({
                             ...f,
@@ -561,19 +547,9 @@ export default function UsersPage() {
                               : [...f.permissions, key],
                           }))
                         }
-                        style={{
-                          padding: "5px 10px",
-                          fontSize: 11,
-                          fontWeight: checked ? 600 : 400,
-                          border: `1px solid ${checked ? "#2563EB" : "#E5E7EB"}`,
-                          borderRadius: 999,
-                          background: checked ? "#DBEAFE" : "#fff",
-                          color: checked ? "#2563EB" : "#6B7280",
-                          cursor: "pointer",
-                        }}
                       >
                         {label}
-                      </button>
+                      </Button>
                     );
                   })}
                 </div>
@@ -586,21 +562,9 @@ export default function UsersPage() {
               <div
                 style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
               >
-                <button
-                  onClick={() => setShowModal(false)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
+                <Button variant="outline" size="lg" onClick={() => setShowModal(false)}>
                   Cancel
-                </button>
+                </Button>
                 <Button
                   variant="invert"
                   size="lg"
@@ -667,14 +631,15 @@ export default function UsersPage() {
                     <button
                       key={r}
                       onClick={() => setEditUser((u) => ({ ...u, newRole: r }))}
+                      className="chip-toggle"
+                      aria-pressed={editUser.newRole === r}
                       style={{
                         padding: "5px 10px",
                         fontSize: 11,
                         fontWeight: editUser.newRole === r ? 600 : 400,
                         border: `1px solid ${editUser.newRole === r ? ROLE_COLORS[r] : "#E5E7EB"}`,
                         borderRadius: 999,
-                        background:
-                          editUser.newRole === r ? ROLE_BG[r] : "#fff",
+                        background: editUser.newRole === r ? ROLE_BG[r] : undefined,
                         color:
                           editUser.newRole === r ? ROLE_COLORS[r] : "#6B7280",
                         cursor: "pointer",
@@ -702,6 +667,8 @@ export default function UsersPage() {
                   {[true, false].map((active) => (
                     <button
                       key={String(active)}
+                      className="chip-toggle"
+                      aria-pressed={editUser.is_active === active}
                       onClick={() =>
                         setEditUser((u) => ({ ...u, is_active: active }))
                       }
@@ -717,7 +684,7 @@ export default function UsersPage() {
                             ? active
                               ? "#DCFCE7"
                               : "#FEE2E2"
-                            : "#fff",
+                            : undefined,
                         color:
                           editUser.is_active === active
                             ? active
@@ -751,8 +718,12 @@ export default function UsersPage() {
                   {PERMISSIONS.map(({ key, label }) => {
                     const checked = (editUser.permissions || []).includes(key);
                     return (
-                      <button
+                      <Button
+                        variant="invert"
+                        size="xs"
                         key={key}
+                        className="chip-toggle"
+                        aria-pressed={checked}
                         onClick={() =>
                           setEditUser((u) => ({
                             ...u,
@@ -761,19 +732,9 @@ export default function UsersPage() {
                               : [...(u.permissions || []), key],
                           }))
                         }
-                        style={{
-                          padding: "5px 10px",
-                          fontSize: 11,
-                          fontWeight: checked ? 600 : 400,
-                          border: `1px solid ${checked ? "#2563EB" : "#E5E7EB"}`,
-                          borderRadius: 999,
-                          background: checked ? "#DBEAFE" : "#fff",
-                          color: checked ? "#2563EB" : "#6B7280",
-                          cursor: "pointer",
-                        }}
                       >
                         {label}
-                      </button>
+                      </Button>
                     );
                   })}
                 </div>
@@ -786,22 +747,12 @@ export default function UsersPage() {
               <div
                 style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
               >
-                <button
-                  onClick={() => setEditUser(null)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
+                <Button variant="outline" size="lg" onClick={() => setEditUser(null)}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="invert"
+                  size="lg"
                   onClick={() =>
                     updateMutation.mutate({
                       id: editUser.id,
@@ -811,19 +762,9 @@ export default function UsersPage() {
                     })
                   }
                   disabled={updateMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#2563EB",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                  }}
                 >
                   {updateMutation.isPending ? "Saving…" : "Save Changes"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -869,37 +810,17 @@ export default function UsersPage() {
               <div
                 style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
               >
-                <button
-                  onClick={() => setDeleteConfirm(null)}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    border: "1px solid #E5E7EB",
-                    borderRadius: 8,
-                    background: "#fff",
-                    cursor: "pointer",
-                    color: "#374151",
-                  }}
-                >
+                <Button variant="outline" size="lg" onClick={() => setDeleteConfirm(null)}>
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="lg"
                   onClick={() => deleteMutation.mutate(deleteConfirm.id)}
                   disabled={deleteMutation.isPending}
-                  style={{
-                    padding: "8px 16px",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    background: "#DC2626",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    cursor: "pointer",
-                  }}
                 >
                   {deleteMutation.isPending ? "Removing…" : "Remove User"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

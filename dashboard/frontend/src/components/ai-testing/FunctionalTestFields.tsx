@@ -102,14 +102,16 @@ function ListEditor({
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-xs"
                       onClick={() => onChange(rows.filter((_, j) => j !== i))}
-                      className="text-gray-400 hover:text-red-600 text-sm flex-shrink-0 px-1"
+                      className="shrink-0 text-gray-400 hover:text-destructive [--btn-rim-a:var(--destructive)] [--btn-rim-b:oklch(0.72_0.16_35)] [--btn-bloom:var(--destructive)]"
                       aria-label={`Remove ${label.toLowerCase()} ${i + 1}`}
                     >
                       ✕
-                    </button>
+                    </Button>
                   }
                 />
                 <TooltipContent>Remove {label.toLowerCase()}</TooltipContent>
@@ -118,13 +120,15 @@ function ListEditor({
           </div>
         ))}
       </div>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="xs"
         onClick={() => onChange([...rows, ""])}
-        className="text-xs text-blue-600 hover:underline mt-1.5"
+        className="mt-1.5"
       >
         + Add {label.toLowerCase().replace(/s$/, "")}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -291,16 +295,18 @@ export default function FunctionalTestFields({
                   <Tooltip>
                     <TooltipTrigger
                       render={
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon-xs"
                           onClick={() =>
                             setDataSets(dataSets.filter((_, j) => j !== i))
                           }
-                          className="text-gray-400 hover:text-red-600 text-sm px-1"
+                          className="text-gray-400 hover:text-destructive [--btn-rim-a:var(--destructive)] [--btn-rim-b:oklch(0.72_0.16_35)] [--btn-bloom:var(--destructive)]"
                           aria-label={`Remove data set ${i + 1}`}
                         >
                           ✕
-                        </button>
+                        </Button>
                       }
                     />
                     <TooltipContent>Remove data set</TooltipContent>
@@ -332,7 +338,7 @@ export default function FunctionalTestFields({
                       placeholder="value"
                       className="flex-1 rounded-md border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-gray-900"
                     />
-                    <button
+                    <Button
                       type="button"
                       onClick={() => {
                         const entries = Object.entries(ds.values).filter(
@@ -342,23 +348,27 @@ export default function FunctionalTestFields({
                         next[i] = { ...next[i], values: Object.fromEntries(entries) };
                         setDataSets(next);
                       }}
-                      className="text-gray-400 hover:text-red-600 text-xs px-1"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="text-gray-400 hover:text-destructive [--btn-rim-a:var(--destructive)] [--btn-rim-b:oklch(0.72_0.16_35)] [--btn-bloom:var(--destructive)]"
                     >
                       ✕
-                    </button>
+                    </Button>
                   </div>
                 ))}
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => {
                     const next = [...dataSets];
                     next[i] = { ...next[i], values: { ...next[i].values, "": "" } };
                     setDataSets(next);
                   }}
-                  className="text-xs text-blue-600 hover:underline pl-2"
+                  className="ml-2"
                 >
                   + Add field
-                </button>
+                </Button>
               </div>
             ))}
             <Button type="button" variant="outline" className="h-8 text-xs" onClick={addDataSet}>

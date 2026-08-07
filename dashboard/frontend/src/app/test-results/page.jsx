@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
 import GlobalLoader from "../../components/GlobalLoader";
 import { apiGet } from "../../utils/apiClient";
+import { Button } from "../../components/ui/button";
 import {
   Select,
   SelectContent,
@@ -82,22 +83,15 @@ export default function TestResultsPage() {
               ["error", "Error"],
               ["skipped", "Skipped"],
             ].map(([val, label]) => (
-              <button
+              <Button
+                variant={statusFilter === val ? "invert" : "outline"}
+                size="sm"
                 key={val}
+                aria-pressed={statusFilter === val}
                 onClick={() => setStatusFilter(val)}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  fontWeight: statusFilter === val ? 600 : 400,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 999,
-                  background: statusFilter === val ? "#111827" : "#fff",
-                  color: statusFilter === val ? "#fff" : "#6B7280",
-                  cursor: "pointer",
-                }}
               >
                 {label}
-              </button>
+              </Button>
             ))}
             <Select
               value={runFilter || "all"}
@@ -170,7 +164,7 @@ export default function TestResultsPage() {
               ))}
             </div>
             {isLoading ? (
-              <GlobalLoader />
+              <GlobalLoader fullscreen={false} />
             ) : !results.length ? (
               <div
                 style={{
@@ -186,7 +180,25 @@ export default function TestResultsPage() {
               results.map((r, i) => (
                 <div
                   key={r.id}
+                  className="row-interactive"
+                  // Was a bare <div onClick>: not focusable, not in the tab
+                  // order, announced as nothing. It toggles a detail panel,
+                  // so it is a button, and aria-pressed states which row is
+                  // currently open.
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected?.id === r.id}
+                  // Selection is a data attribute rather than an inline
+                  // background because an inline style outranks a class and
+                  // would have silently killed the CSS hover.
+                  data-selected={selected?.id === r.id ? "" : undefined}
                   onClick={() => setSelected(selected?.id === r.id ? null : r)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelected(selected?.id === r.id ? null : r);
+                    }
+                  }}
                   style={{
                     display: "grid",
                     gridTemplateColumns: "3fr 1.5fr 1fr 80px",
@@ -195,16 +207,6 @@ export default function TestResultsPage() {
                       i < results.length - 1 ? "1px solid #F3F4F6" : "none",
                     alignItems: "center",
                     cursor: "pointer",
-                    background:
-                      selected?.id === r.id ? "#F9FAFB" : "transparent",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (selected?.id !== r.id)
-                      e.currentTarget.style.background = "#F9FAFB";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (selected?.id !== r.id)
-                      e.currentTarget.style.background = "transparent";
                   }}
                 >
                   <div>
@@ -308,19 +310,13 @@ export default function TestResultsPage() {
                 >
                   Result Detail
                 </h3>
-                <button
+                <Button
+                  variant="ghost"
+                  size="lg"
                   onClick={() => setSelected(null)}
-                  style={{
-                    border: "none",
-                    background: "none",
-                    cursor: "pointer",
-                    color: "#9CA3AF",
-                    fontSize: 18,
-                    lineHeight: 1,
-                  }}
                 >
                   ×
-                </button>
+                </Button>
               </div>
               <p
                 style={{

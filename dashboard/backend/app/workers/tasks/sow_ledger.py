@@ -412,7 +412,23 @@ def extract_existing_sow_ledger_task(self, source_id: str) -> None:
             baseline_sections = _build_baseline_version(session, document, blocks)
 
         session.commit()
-        _queue_impact_analysis(source_id)
+
+        # Impact analysis answers "which EXISTING sections does this NEW
+        # source affect". When baseline_sections > 0 this source just BECAME
+        # version 1 — the sections and the facts are the same document — so
+        # running it would diff the import against itself and report every
+        # section as affected by brand-new material. baseline_sections == 0
+        # means either a version already existed (this really is new material
+        # for it — analyse) or no version could be built (the task self-guards
+        # on current_version_id).
+        if baseline_sections > 0:
+            logger.info(
+                "SOW ledger: existing-SOW source %s became the verbatim baseline — "
+                "skipping impact analysis (nothing pre-existing to affect)", source_id,
+            )
+        else:
+            _queue_impact_analysis(source_id)
+
         logger.info(
             "SOW ledger: existing-SOW source %s -> %d fact(s), %d outline heading(s), "
             "%d baseline section(s) via %s (%d failed part(s))",

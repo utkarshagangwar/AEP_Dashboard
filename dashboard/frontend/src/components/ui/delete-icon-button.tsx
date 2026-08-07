@@ -19,6 +19,12 @@ interface DeleteIconButtonProps extends React.ComponentProps<"button"> {
  * size, radius, colours and hover geometry, and layering it on Button meant
  * fighting that component's variant classes for every one of them.
  *
+ * The deliberate exception to the two-button system. Its hover IS the
+ * affordance — the revealed label is how you learn what the icon does — so
+ * folding it into the shared white button traded a working disclosure for a
+ * tooltip. Kept as-is on purpose; see the `.delete-button` comment in
+ * app/global.css.
+ *
  * The outer span is not decoration — it reserves the button's fully-expanded
  * width so the hover animation costs zero layout. Without it the button grows
  * in normal flow and shoves every sibling along with it, which reflowed whole
