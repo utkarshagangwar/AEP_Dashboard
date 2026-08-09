@@ -65,7 +65,7 @@ Pillow==12.2.0
 Pillow==12.2.0
 pixelmatch==0.3.0
 # Visual QA (Phase 3): SOW PDF text extraction
-pypdf==6.14.2
+pypdf==6.15.0
 # Android Vibe Testing: Appium client for the Hands loop in android_runner.py.
 # Talks to a remote cloud device-farm Appium endpoint (BrowserStack) over
 # HTTP -- no local Appium server, no Android SDK, no emulator dependency.
