@@ -47,6 +47,7 @@ from app.core.rate_limit import limiter
 from app.models.project import Project
 from app.models.sow import (
     SowDocument,
+    SowDocumentSlugHistory,
     SowDocumentSource,
     SowDocumentStatus,
     SowDocumentVersion,
@@ -113,6 +114,70 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+# ── Slug generation (migration 0048) ─────────────────────────────────────────
+# Must stay byte-for-byte equivalent to the copy frozen into that migration's
+# backfill (0048_sow_document_slugs.py) -- same lowercase/collapse/cap
+# behaviour, so a document created today and one backfilled from an old row
+# would produce the identical slug for the identical title.
+def _slugify(title: str) -> str:
+    text = (title or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = text.strip("-")
+    return text[:80] or "sow"
+
+
+def _generate_unique_slug(db: Session, title: str) -> str:
+    """A slug that has never been used, by any document, ever.
+
+    Checked against SowDocumentSlugHistory rather than SowDocument.slug --
+    history is the append-only superset (every current slug is also a
+    history row, written in the same transaction that sets it -- see
+    create_document/rename_document below), and checking it is what stops a
+    new document from claiming a slug a *different*, since-renamed-or-
+    deleted document used to hold. See SowDocumentSlugHistory's docstring.
+    """
+    base = _slugify(title)
+    candidate = base
+    n = 2
+    while (
+        db.query(SowDocumentSlugHistory)
+        .filter(SowDocumentSlugHistory.slug == candidate)
+        .first()
+        is not None
+    ):
+        suffix = f"-{n}"
+        candidate = f"{base[: 80 - len(suffix)]}{suffix}"
+        n += 1
+    return candidate
+
+
+def _assign_initial_slug(db: Session, doc: SowDocument, title: str) -> None:
+    """Give a brand-new `doc` its first slug and record it in history, in the
+    same transaction as the caller's insert (caller commits)."""
+    doc.slug = _generate_unique_slug(db, title)
+    db.add(SowDocumentSlugHistory(document_id=doc.id, slug=doc.slug))
+
+
+def _maybe_rotate_slug(db: Session, doc: SowDocument, old_title: str, new_title: str) -> None:
+    """Rotate `doc` onto a new slug if `new_title` actually changes what the
+    title would slugify to, and record the new slug in history (the old one
+    is deliberately left in history unchanged -- that is what lets it keep
+    resolving and redirecting after this rename). Same-transaction as the
+    caller's other writes to `doc`; caller commits.
+
+    Compares the two titles' OWN slugified forms, not new-title-vs-doc.slug:
+    doc.slug can carry a "-2"-style disambiguation suffix from a collision
+    that has nothing to do with this document's title, and comparing against
+    it directly would spuriously rotate the slug (and strand a pointless
+    redirect) on every rename of a title that never actually collided in the
+    first place.
+    """
+    if _slugify(new_title) == _slugify(old_title):
+        return
+    doc.slug = _generate_unique_slug(db, new_title)
+    db.add(SowDocumentSlugHistory(document_id=doc.id, slug=doc.slug))
+
+
 def _data_dir() -> str:
     """Shared visual_qa_data volume root -- same one design_artifacts/sow/
     video storage already uses (app.workers.tasks.visual_audit.data_dir),
@@ -124,7 +189,13 @@ def _data_dir() -> str:
 
 
 def _ensure_artifact_file(
-    db: Session, artifact: DesignArtifact, content: bytes, *, subdir: str, ext: str
+    db: Session,
+    artifact: DesignArtifact,
+    content: bytes | None = None,
+    *,
+    subdir: str,
+    ext: str,
+    source_path: str | None = None,
 ) -> None:
     """Guarantee the reused artifact's file is actually on the volume.
 
@@ -151,9 +222,16 @@ def _ensure_artifact_file(
     ------------
     Nothing at all when the file is present -- the normal path is
     unchanged, no extra write, no extra commit. When the file is missing it
-    heals: the bytes are still in memory at this point in the request, so
-    they are rewritten and the row is repointed at the current data
-    directory. The user simply re-uploads and it works.
+    heals: the uploaded content is rewritten and the row is repointed at the
+    current data directory. The user simply re-uploads and it works.
+
+    Callers supply that content one of two ways. Small uploads that are
+    already buffered pass `content` bytes. Large ones that were streamed
+    straight to disk (recordings, which can be 300MB) pass `source_path`
+    instead, so healing does not require pulling the whole file back into
+    memory -- the entire point of streaming it in the first place. Exactly
+    one of the two is expected; the copy only ever happens on this rare
+    missing-file branch, never on the normal path.
 
     The filename is preserved from the existing row where possible so a
     reused artifact keeps its original extension (the content is
@@ -182,8 +260,13 @@ def _ensure_artifact_file(
             artifact.id, artifact.storage_path or "<no path recorded>", storage_path,
         )
         os.makedirs(target_dir, exist_ok=True)
-        with open(storage_path, "wb") as fh:
-            fh.write(content)
+        if source_path is not None:
+            # copyfile, not move: the caller's own cleanup still owns the
+            # temp file, and this branch must not change that contract.
+            shutil.copyfile(source_path, storage_path)
+        else:
+            with open(storage_path, "wb") as fh:
+                fh.write(content or b"")
     except OSError as exc:
         logger.exception("SOW: could not restore artifact %s file", artifact.id)
         raise HTTPException(
@@ -199,7 +282,14 @@ def _ensure_artifact_file(
 
 
 def _max_recording_bytes() -> int:
-    return int(os.environ.get("SOW_MAX_RECORDING_MB", "300")) * 1024 * 1024
+    # 500MB, matching VISUAL_VIDEO_MAX_MB for walkthroughs — both are "upload
+    # a video" to a user, so a different number in each place is a trap.
+    return int(os.environ.get("SOW_MAX_RECORDING_MB", "500")) * 1024 * 1024
+
+
+# Read granularity for uploads streamed to disk instead of buffered. Peak
+# memory for such an upload is one chunk, whatever the file size.
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def _max_recording_minutes() -> int:
@@ -263,6 +353,7 @@ def _document_out(d: SowDocument, db: Session | None = None) -> SowDocumentOut:
         id=d.id,
         project_id=d.project_id,
         title=d.title,
+        slug=d.slug,
         status=d.status.value if hasattr(d.status, "value") else str(d.status),
         is_active=d.is_active,
         current_version_id=d.current_version_id,
@@ -277,11 +368,38 @@ def _document_out(d: SowDocument, db: Session | None = None) -> SowDocumentOut:
     )
 
 
-def _get_active_document_or_404(db: Session, document_id: uuid.UUID) -> SowDocument:
-    doc = db.get(SowDocument, document_id)
-    if doc is None or not doc.is_active:
-        raise HTTPException(status_code=404, detail="SOW document not found")
-    return doc
+def _get_active_document_or_404(db: Session, document_ref: str) -> SowDocument:
+    """Resolve a document identifier that is either its raw UUID (every
+    existing link, and every internal caller that already has doc.id) or a
+    slug -- current or historical (migration 0048).
+
+    UUID is tried first but never short-circuits the slug path: a `ref` that
+    happens to be syntactically UUID-shaped but doesn't match any row's
+    primary key still falls through to the slug_history lookup below, rather
+    than 404ing early. (In practice a slugified title can't naturally
+    produce the 8-4-4-4-12 hex shape a real UUID needs, so this fallthrough
+    is only a correctness guarantee, not something expected to fire.)
+    """
+    try:
+        doc_id = uuid.UUID(document_ref)
+    except (ValueError, AttributeError, TypeError):
+        doc_id = None
+    if doc_id is not None:
+        doc = db.get(SowDocument, doc_id)
+        if doc is not None and doc.is_active:
+            return doc
+
+    history = (
+        db.query(SowDocumentSlugHistory)
+        .filter(SowDocumentSlugHistory.slug == document_ref)
+        .first()
+    )
+    if history is not None:
+        doc = db.get(SowDocument, history.document_id)
+        if doc is not None and doc.is_active:
+            return doc
+
+    raise HTTPException(status_code=404, detail="SOW document not found")
 
 
 def _source_out(db: Session, source: SowDocumentSource) -> SowDocumentSourceOut:
@@ -363,11 +481,18 @@ def create_document(
             raise HTTPException(status_code=404, detail="Project not found")
 
     try:
+        title = payload.title.strip()
+        # Explicit id (rather than relying on the column's flush-time Python
+        # default) so it's known now, before insert -- the slug-history row
+        # below needs doc.id to exist and this avoids depending on exactly
+        # when SQLAlchemy would otherwise populate it.
         doc = SowDocument(
+            id=uuid.uuid4(),
             project_id=payload.project_id,
-            title=payload.title.strip(),
+            title=title,
             created_by=current_user.id,
         )
+        _assign_initial_slug(db, doc, title)
         db.add(doc)
         db.commit()
         db.refresh(doc)
@@ -412,7 +537,9 @@ def list_documents(
 
 @router.get("/documents/{document_id}", response_model=SowDocumentOut)
 def get_document(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -423,7 +550,9 @@ def get_document(
 
 @router.patch("/documents/{document_id}", response_model=SowDocumentOut)
 def rename_document(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     payload: SowDocumentUpdate,
     request: Request,
     db: Session = Depends(get_db),
@@ -435,8 +564,12 @@ def rename_document(
     doc = _get_active_document_or_404(db, document_id)
 
     old_title = doc.title
+    old_slug = doc.slug
     try:
         doc.title = payload.title.strip()
+        # Only rotates doc.slug (+ writes a new history row) when the new
+        # title actually slugifies differently -- see _maybe_rotate_slug.
+        _maybe_rotate_slug(db, doc, old_title, doc.title)
         db.commit()
         db.refresh(doc)
     except SQLAlchemyError:
@@ -450,7 +583,14 @@ def rename_document(
         action="rename_sow_document",
         resource_type="sow_document",
         resource_id=str(doc.id),
-        details={"old_title": old_title, "new_title": doc.title},
+        details={
+            "old_title": old_title,
+            "new_title": doc.title,
+            # Only present when the slug actually rotated -- lets the audit
+            # trail explain a redirect if a user ever asks "why did my old
+            # SOW link change".
+            **({"old_slug": old_slug, "new_slug": doc.slug} if doc.slug != old_slug else {}),
+        },
         ip_address=_client_ip(request),
     )
     # db passed: a renamed document may already have been generated, so
@@ -460,7 +600,9 @@ def rename_document(
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_200_OK)
 def delete_document(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("sow")),
@@ -509,7 +651,9 @@ def delete_document(
     status_code=status.HTTP_201_CREATED,
 )
 async def add_transcript_source(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     request: Request,
     file: UploadFile | None = File(default=None),
     text: str | None = Form(default=None),
@@ -606,7 +750,9 @@ async def add_transcript_source(
     status_code=status.HTTP_201_CREATED,
 )
 async def add_existing_sow_source(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -697,7 +843,9 @@ async def add_existing_sow_source(
 )
 @limiter.limit("10/hour")
 async def add_recording_source(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     request: Request,
     file: UploadFile = File(...),
     context_label: str | None = Form(default=None),
@@ -707,7 +855,7 @@ async def add_recording_source(
     """Attach a meeting recording (audio or video) to this document. The
     most expensive operation in this feature (Gemini Files API upload +
     processing + generateContent, same cost class as Video Walkthrough) —
-    rate-limited, size-capped (SOW_MAX_RECORDING_MB, default 300MB), and
+    rate-limited, size-capped (SOW_MAX_RECORDING_MB, default 500MB), and
     duration-capped (SOW_MAX_RECORDING_MINUTES, default 60min) via ffprobe
     before the file is ever registered as an artifact."""
     _feature_enabled()
@@ -721,37 +869,52 @@ async def add_recording_source(
     except IngestError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    content = await file.read()
+    # Streamed to disk in chunks rather than buffered with `await
+    # file.read()`. At the 300MB default cap that read cost 300MB of RAM per
+    # concurrent upload, and it happened BEFORE the size check, so the cap
+    # never actually protected the process — an oversized upload was fully
+    # resident in memory by the time it was rejected. Hashing as we go means
+    # the sha256 dedupe below costs nothing extra, and the temp file this
+    # produces is the same one ffprobe already needed for the duration
+    # check, so streaming removes a write rather than adding one.
     max_bytes = _max_recording_bytes()
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Recording exceeds the {max_bytes // (1024 * 1024)}MB limit.",
-        )
-    if not content:
-        raise HTTPException(status_code=400, detail="Recording file is empty")
+    ext = os.path.splitext(file_name.lower())[1]
+    digest = hashlib.sha256()
+    total = 0
+    fd, _tmp = tempfile.mkstemp(suffix=ext)
+    tmp_path: str | None = _tmp
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            while True:
+                chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Recording exceeds the "
+                        f"{max_bytes // (1024 * 1024)}MB limit.",
+                    )
+                digest.update(chunk)
+                fh.write(chunk)
+        if not total:
+            raise HTTPException(status_code=400, detail="Recording file is empty")
 
-    sha = hashlib.sha256(content).hexdigest()
-    artifact = (
-        db.query(DesignArtifact)
-        .filter(
-            DesignArtifact.sha256 == sha,
-            DesignArtifact.project_id == doc.project_id,
-            DesignArtifact.artifact_type == ArtifactType.meeting_recording,
+        sha = digest.hexdigest()
+        artifact = (
+            db.query(DesignArtifact)
+            .filter(
+                DesignArtifact.sha256 == sha,
+                DesignArtifact.project_id == doc.project_id,
+                DesignArtifact.artifact_type == ArtifactType.meeting_recording,
+            )
+            .first()
         )
-        .first()
-    )
-    if artifact is None:
-        # Duration cap check BEFORE this file is ever registered as an
-        # artifact: write to a temp path first so ffprobe can measure it,
-        # only promote to permanent storage if it passes.
-        ext = os.path.splitext(file_name.lower())[1]
-        tmp_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-
+        if artifact is None:
+            # Duration cap checked BEFORE this file is ever registered as an
+            # artifact, straight off the temp file the upload streamed into;
+            # only promoted to permanent storage if it passes.
             duration_s = recording_duration_seconds(tmp_path)
             max_minutes = _max_recording_minutes()
             if duration_s is not None and duration_s > max_minutes * 60:
@@ -768,35 +931,37 @@ async def add_recording_source(
             storage_path = os.path.join(recording_dir, f"{sha}{ext}")
             shutil.move(tmp_path, storage_path)
             tmp_path = None  # moved — nothing left for the finally block to clean up
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
 
-        artifact = DesignArtifact(
-            project_id=doc.project_id,
-            artifact_type=ArtifactType.meeting_recording,
-            file_name=file_name,
-            sha256=sha,
-            storage_path=storage_path,
-            platform_name=(context_label or "").strip()[:300] or None,
-            parse_status=ParseStatus.not_required,
-        )
-        db.add(artifact)
-        db.commit()
-        db.refresh(artifact)
-    else:
-        # Reused artifact (sha256 match) — verify its file is still on the
-        # volume. See _ensure_artifact_file. The duration check above is
-        # deliberately NOT repeated here: this exact content already passed
-        # it when the artifact was first registered, and re-running ffprobe
-        # would only add latency to a path that is already known-good.
-        _ensure_artifact_file(
-            db,
-            artifact,
-            content,
-            subdir="sow_meeting_recording",
-            ext=os.path.splitext(file_name.lower())[1],
-        )
+            artifact = DesignArtifact(
+                project_id=doc.project_id,
+                artifact_type=ArtifactType.meeting_recording,
+                file_name=file_name,
+                sha256=sha,
+                storage_path=storage_path,
+                platform_name=(context_label or "").strip()[:300] or None,
+                parse_status=ParseStatus.not_required,
+            )
+            db.add(artifact)
+            db.commit()
+            db.refresh(artifact)
+        else:
+            # Reused artifact (sha256 match) — verify its file is still on the
+            # volume. See _ensure_artifact_file; source_path rather than bytes
+            # so a 300MB heal does not undo the streaming above. The duration
+            # check is deliberately NOT repeated here: this exact content
+            # already passed it when the artifact was first registered, and
+            # re-running ffprobe would only add latency to a path that is
+            # already known-good.
+            _ensure_artifact_file(
+                db,
+                artifact,
+                subdir="sow_meeting_recording",
+                ext=ext,
+                source_path=tmp_path,
+            )
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
     source = _attach_source(db, doc, artifact, current_user)
 
@@ -815,7 +980,9 @@ async def add_recording_source(
     status_code=status.HTTP_201_CREATED,
 )
 async def add_design_source(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     request: Request,
     artifact_id: uuid.UUID | None = Form(default=None),
     file: UploadFile | None = File(default=None),
@@ -901,7 +1068,9 @@ async def add_design_source(
 
 @router.get("/documents/{document_id}/sources", response_model=list[SowDocumentSourceOut])
 def list_sources(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -918,7 +1087,9 @@ def list_sources(
 
 @router.delete("/documents/{document_id}/sources/{source_id}", status_code=status.HTTP_200_OK)
 def delete_source(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     source_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
@@ -967,7 +1138,9 @@ def delete_source(
 
 @router.get("/documents/{document_id}/ledger", response_model=list[SowRequirementsLedgerOut])
 def list_ledger(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -1083,7 +1256,9 @@ def _section_out(section: SowSection) -> SowSectionOut:
 )
 @limiter.limit(_generate_rate_limit)
 def generate_document(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("sow")),
@@ -1203,7 +1378,9 @@ def generate_document(
 )
 @limiter.limit(_generate_rate_limit)
 def rewrite_document(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     payload: SowRewriteRequest,
     request: Request,
     db: Session = Depends(get_db),
@@ -1390,7 +1567,9 @@ def rewrite_document(
 
 @router.get("/documents/{document_id}/generation", response_model=SowGenerationJobOut)
 def get_generation_status(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1410,7 +1589,9 @@ def get_generation_status(
 
 @router.get("/documents/{document_id}/versions", response_model=list[SowVersionOut])
 def list_versions(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1427,7 +1608,9 @@ def list_versions(
 
 @router.get("/documents/{document_id}/versions/{version_id}", response_model=SowVersionDetailOut)
 def get_version(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     version_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -1462,7 +1645,9 @@ def get_version(
     response_model=SowSectionOut,
 )
 def patch_section(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     section_key: str,
     payload: SowSectionPatch,
     request: Request,
@@ -1612,7 +1797,9 @@ def _current_version_sections(db: Session, doc: SowDocument) -> list[SowSection]
 
 @router.post("/documents/{document_id}/export")
 def export_document(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     payload: SowExportRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("sow")),
@@ -1660,7 +1847,9 @@ def export_document(
 
 @router.post("/documents/{document_id}/send-to-checkpoints", response_model=SowSendToCheckpointsOut)
 def send_to_checkpoints(
-    document_id: uuid.UUID,
+    # str, not uuid.UUID -- accepts either the document's slug (current or
+    # historical) or its raw id; resolved by _get_active_document_or_404.
+    document_id: str,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("sow")),

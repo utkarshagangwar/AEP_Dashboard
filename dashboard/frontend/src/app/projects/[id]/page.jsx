@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
 import { Button } from "../../../components/ui/button";
+import { BackButton } from "../../../components/ui/back-button";
 import { toastSuccess } from "../../../lib/toast";
 import { Checkbox } from "../../../components/ui/checkbox";
 import {
@@ -11,6 +12,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "../../../components/ui/tooltip";
+import ProjectUiInventoryPanel from "../../../components/ProjectUiInventoryPanel";
 import { apiGet, apiPost, apiPatch } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -259,22 +261,7 @@ export default function ProjectDetailPage({ params }) {
       <PageContainer>
         {/* Breadcrumb */}
         <div style={{ marginBottom: 16 }}>
-          <a
-            href="/projects"
-            style={{
-              fontSize: 13,
-              color: "#6B7280",
-              textDecoration: "none",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-            Projects
-          </a>
+          <BackButton href="/projects" label="Projects" />
         </div>
 
         {/* Project Header */}
@@ -425,6 +412,12 @@ export default function ProjectDetailPage({ params }) {
             ))}
           </div>
         </div>
+
+        {/* What the AI reads off this project's evidence when it writes tests
+            for it. Sits after Environments because it is configuration-like:
+            something you check and correct, not something you act on. Renders
+            nothing when Vibe Testing is disabled. */}
+        <ProjectUiInventoryPanel projectId={resolvedParams.id} />
 
         {/* Suites Section */}
         <div

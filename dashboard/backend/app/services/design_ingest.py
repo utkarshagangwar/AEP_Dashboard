@@ -358,6 +358,8 @@ def render_skill_markdown(
     notes: list[str],
     review_status: str | None = None,
     review_reason: str | None = None,
+    test_type: str | None = None,
+    grounding: str | None = None,
 ) -> str:
     """Deterministic Role/Objective/Context/Instructions/Notes markdown.
 
@@ -372,8 +374,40 @@ def render_skill_markdown(
     Vibe goal box, it appears in exports), and a warning that only lives in
     a database column is a warning the person actually running the skill
     never sees.
+
+    test_type/grounding are rendered for exactly the same reason. A NEGATIVE
+    checkpoint passes when the system REFUSES the action; an agent that only
+    reads "Objective: submit the form" will report a defect when the form is
+    correctly rejected. The test type has to travel with the goal text, not
+    only in a column the agent never sees. `grounding="derived"` likewise
+    tells the reader (and the person triaging the result) that the
+    expectation is standard QA practice rather than something the source
+    document actually specified.
     """
     sections: list[str] = []
+    if test_type in ("negative", "edge"):
+        if test_type == "negative":
+            banner = (
+                "# ⛔ Negative test\n"
+                "This test PASSES when the system correctly REFUSES or safely "
+                "rejects the action below. A visible, specific error with no "
+                "partial data saved and no access granted is a PASS. The action "
+                "succeeding is a FAIL."
+            )
+        else:
+            banner = (
+                "# 🔍 Edge-case test\n"
+                "This test probes a boundary or unusual-but-legal condition. It "
+                "PASSES when the system behaves in a defined, consistent way — "
+                "not necessarily when the action succeeds."
+            )
+        if grounding == "derived":
+            banner += (
+                "\n\nExpectation source: standard QA practice, NOT stated in the "
+                "source document. If the product's actual intended behaviour "
+                "differs, confirm with the spec owner before raising a defect."
+            )
+        sections.append(banner)
     if review_status:
         label = (
             "Needs Design Flow"
@@ -426,6 +460,39 @@ def _read_review_status(item: dict) -> tuple[str | None, str | None]:
     return status, (reason if status else None)
 
 
+def _read_tdd_fields(item: dict) -> dict:
+    """Normalize the TDD classification fields (app.services.tdd_extraction).
+
+    Imported lazily and defensively: these fields are absent on every
+    checkpoint written before the v2 extractor, and on everything the legacy
+    single-pass path still produces. A missing field normalizes to the
+    conservative default (positive / stated / regression) rather than
+    failing, so old rows and new rows are readable by exactly the same code.
+    """
+    from app.services import tdd_extraction as _tdd
+
+    test_type = str(item.get("test_type") or "").strip().lower()
+    grounding = str(item.get("grounding") or "").strip().lower()
+    priority = str(item.get("priority") or "").strip().lower()
+    category = str(item.get("category") or "").strip().lower()
+    behaviour_key = str(item.get("behaviour_key") or "").strip().lower()[:120] or None
+
+    coverage_gap = item.get("coverage_gap")
+    if isinstance(coverage_gap, list):
+        coverage_gap = [str(g)[:20] for g in coverage_gap if str(g).strip()][:3] or None
+    else:
+        coverage_gap = None
+
+    return {
+        "test_type": test_type if test_type in _tdd.TEST_TYPES else _tdd.DEFAULT_TEST_TYPE,
+        "grounding": grounding if grounding in _tdd.GROUNDINGS else _tdd.DEFAULT_GROUNDING,
+        "priority": priority if priority in _tdd.PRIORITIES else _tdd.DEFAULT_PRIORITY,
+        "category": category if category in _tdd.CATEGORIES else None,
+        "behaviour_key": behaviour_key,
+        "coverage_gap": coverage_gap,
+    }
+
+
 def _validate_checkpoint(item: object) -> dict | None:
     """Return a normalized checkpoint dict, or None if there is genuinely
     nothing to record.
@@ -449,11 +516,16 @@ def _validate_checkpoint(item: object) -> dict | None:
         (str(item["expected"]).strip()[:2000] or None) if item.get("expected") else None
     )
     review_status, review_reason = _read_review_status(item)
+    tdd = _read_tdd_fields(item)
 
     if ctype == "visual":
         description = str(item.get("description") or "").strip()
         if not description:
             return None
+        # A visual checkpoint is an appearance claim; there is no meaningful
+        # negative/edge variant of "the logo is in the header", so the type is
+        # pinned rather than trusted from the model.
+        tdd["test_type"] = "positive"
         return {
             "type": "visual",
             "title": (title or description[:80])[:200],
@@ -467,6 +539,7 @@ def _validate_checkpoint(item: object) -> dict | None:
             "expected": expected,
             "review_status": review_status,
             "review_reason": review_reason,
+            **tdd,
         }
 
     # functional — prefer the structured fields; fall back to a single-step
@@ -523,6 +596,8 @@ def _validate_checkpoint(item: object) -> dict | None:
         notes=notes,
         review_status=review_status,
         review_reason=review_reason,
+        test_type=tdd["test_type"],
+        grounding=tdd["grounding"],
     )
     return {
         "type": "functional",
@@ -537,11 +612,78 @@ def _validate_checkpoint(item: object) -> dict | None:
         "expected": expected,
         "review_status": review_status,
         "review_reason": review_reason,
+        **tdd,
     }
 
 
+# Public alias. app.services.tdd_extraction validates its own checkpoints
+# through this function so the character caps, the review-status derivation
+# and the skill-markdown rendering have exactly ONE implementation shared by
+# both the v1 and v2 extraction paths.
+def validate_checkpoint(item: object) -> dict | None:
+    return _validate_checkpoint(item)
+
+
+def parse_sow_detailed(
+    text: str,
+    *,
+    part_label: str | None = None,
+    ui_inventory: str | None = None,
+    on_progress=None,
+):
+    """Extract checkpoints from SOW text — full result including zoning.
+
+    Returns a tdd_extraction.ExtractionResult (checkpoints, excluded_zones,
+    coverage, model_used). This is the entry point the SOW worker uses so it
+    can persist what the testability gate excluded and the coverage
+    scorecard; parse_sow() below is the narrow (checkpoints, model) form kept
+    for every other caller.
+
+    ui_inventory: the project's UI naming reference (see
+    app.services.ui_inventory), so generated instructions name the product's
+    real buttons and fields rather than the document's wording for them. None
+    means extract from text alone, which is what every caller without a
+    project gets and is exactly the pre-inventory behaviour.
+
+    Set TDD_EXTRACTION_V2=0 to fall back to the legacy single-pass extractor,
+    which produces no zoning data and no negative/edge variants. The fallback
+    exists as an escape hatch for a provider that cannot hold the larger v2
+    prompt — it is not the recommended configuration.
+    """
+    from app.services import tdd_extraction
+
+    if tdd_extraction.v2_enabled():
+        return tdd_extraction.extract(
+            text,
+            part_label=part_label,
+            ui_inventory=ui_inventory,
+            on_progress=on_progress,
+        )
+
+    logger.warning(
+        "SOW ingest: TDD_EXTRACTION_V2 is disabled — using the legacy single-pass "
+        "extractor (no testability gate, no negative/edge coverage)"
+    )
+    checkpoints, model_used = _parse_sow_legacy(text, part_label=part_label)
+    return tdd_extraction.ExtractionResult(
+        checkpoints, [], tdd_extraction.scorecard(checkpoints, []), model_used
+    )
+
+
 def parse_sow(text: str, *, part_label: str | None = None) -> tuple[list[dict], str]:
-    """Extract checkpoints from SOW text. Returns (checkpoints, model_used).
+    """(checkpoints, model_used) for callers that don't need the zoning data."""
+    result = parse_sow_detailed(text, part_label=part_label)
+    return result.checkpoints, result.model_used
+
+
+def _parse_sow_legacy(text: str, *, part_label: str | None = None) -> tuple[list[dict], str]:
+    """The original single-pass extractor (pre-TDD-v2).
+
+    Retained as the TDD_EXTRACTION_V2=0 escape hatch and as the reference the
+    v2 pipeline is compared against in tests. Known limitations, all of them
+    the reason v2 exists: no testability gate (project/commercial/contractual
+    prose becomes checkpoints), one happy-path checkpoint per feature (no
+    negative or edge variants), and no behaviour categorisation.
 
     part_label (e.g. "part 2 of 4"): when set, the prompt notes that this is
     only an excerpt of a larger document so the model doesn't assume missing

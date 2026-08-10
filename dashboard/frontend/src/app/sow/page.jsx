@@ -3,12 +3,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
-import GlobalLoader from "../../components/GlobalLoader";
+import { usePageLoading } from "../../components/NavigationLoadingProvider";
 import PageContainer from "../../components/PageContainer";
 import { toastSuccess } from "../../lib/toast";
 import { Button } from "../../components/ui/button";
 import { DeleteIconButton } from "../../components/ui/delete-icon-button";
-import { apiGet, apiPost, apiPatch, apiDelete, apiFetch } from "../../utils/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../../utils/apiClient";
+import ImportSowDialog from "../../components/ImportSowDialog";
 import { getStoredUser } from "../../utils/authStore";
 import {
   Select,
@@ -57,12 +58,6 @@ function StatusBadge({ status }) {
   );
 }
 
-// Import SOW: same upload validation the backend endpoint enforces
-// (app/api/v1/sow.py::add_existing_sow_source's _EXISTING_SOW_EXTENSIONS) --
-// mirrored here only so a wrong file type is rejected instantly in the UI
-// instead of round-tripping to the server first.
-const IMPORT_ACCEPT = ".docx,.pdf,.txt,.md";
-
 export default function SowPage() {
   const qc = useQueryClient();
   const router = useRouter();
@@ -78,69 +73,22 @@ export default function SowPage() {
   const [renameError, setRenameError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
 
-  // Import SOW: create a document, then attach the uploaded file as an
-  // "existing-sow" source in one step -- the resulting document lands on
-  // /sow/{id} where extraction progress, the requirements ledger, and the
-  // existing Generate button all work exactly as they do for a meeting-
-  // sourced document (nothing new on that page's generation/editor/export/
-  // Send-to-Vibe-Testing flow -- this only adds a new way to seed the
-  // ledger).
+  // Import SOW: creates a document, attaches the uploaded file as an
+  // "existing-sow" source, and files the platform evidence against the
+  // project -- all inside ImportSowDialog, which owns that whole flow
+  // (including the evidence requirement) so this page stays a library view.
+  // The resulting document lands on /sow/{id} where extraction progress, the
+  // requirements ledger and Generate work exactly as they do for a
+  // meeting-sourced document; nothing about that page changed.
   const [showImportModal, setShowImportModal] = useState(false);
-  const [importForm, setImportForm] = useState({ title: "", project_id: "", file: null });
-  const [importError, setImportError] = useState("");
-  const [importSubmitting, setImportSubmitting] = useState(false);
-
-  function resetImportModal() {
-    setShowImportModal(false);
-    setImportForm({ title: "", project_id: "", file: null });
-    setImportError("");
-    setImportSubmitting(false);
-  }
-
-  async function submitImport() {
-    setImportError("");
-    if (!importForm.file) {
-      setImportError("Choose a file to import.");
-      return;
-    }
-    const title = importForm.title.trim() || importForm.file.name.replace(/\.[^./]+$/, "");
-    setImportSubmitting(true);
-    try {
-      const doc = await apiPost("/api/sow/documents", {
-        title,
-        project_id: importForm.project_id || null,
-      });
-
-      const body = new FormData();
-      body.append("file", importForm.file);
-      const res = await apiFetch(
-        `/api/v1/sow/documents/${doc.id}/sources/existing-sow`,
-        { method: "POST", body }
-      );
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null);
-        throw new Error(errBody?.detail || `Upload failed (${res.status})`);
-      }
-
-      qc.invalidateQueries(["sow-documents"]);
-      resetImportModal();
-      router.push(`/sow/${doc.id}`);
-    } catch (e) {
-      // The document may already have been created even if the file
-      // upload step failed -- refresh the library list so it's visible
-      // either way, and let the user retry the upload from the document
-      // page's "Existing SOW document" source panel rather than losing
-      // the reserved document.
-      qc.invalidateQueries(["sow-documents"]);
-      setImportError(e.message);
-      setImportSubmitting(false);
-    }
-  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["sow-documents"],
     queryFn: () => apiGet("/api/sow/documents"),
   });
+
+  // Loading is the app-wide overlay, not a box inside the page.
+  usePageLoading(isLoading);
 
   const { data: projectsData } = useQuery({
     queryKey: ["projects-list"],
@@ -225,10 +173,7 @@ export default function SowPage() {
               <Button
                 variant="outline"
                 size="lg"
-                onClick={() => {
-                  resetImportModal();
-                  setShowImportModal(true);
-                }}
+                onClick={() => setShowImportModal(true)}
               >
                 Import SOW
               </Button>
@@ -246,7 +191,6 @@ export default function SowPage() {
           )}
         </div>
 
-        {isLoading && <GlobalLoader fullscreen={false} />}
         {error && (
           <p style={{ fontSize: 13, color: "#DC2626" }}>{error.message}</p>
         )}
@@ -305,7 +249,20 @@ export default function SowPage() {
               <tbody>
                 {documents.map((doc) => (
                   <tr key={doc.id} style={{ borderBottom: "1px solid #F3F4F6" }}>
-                    <td style={{ padding: "10px 16px", fontSize: 13, color: "#111827" }}>
+                    {/* position: relative is what .cell-link's inset:0
+                        resolves against -- without it the link would size
+                        itself off the table instead of this cell. The row's
+                        height still comes from the other cells (Status,
+                        Project, Updated always render text), so taking the
+                        link out of flow cannot collapse the row. */}
+                    <td
+                      style={{
+                        position: "relative",
+                        padding: "10px 16px",
+                        fontSize: 13,
+                        color: "#111827",
+                      }}
+                    >
                       {renamingId === doc.id ? (
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                           <input
@@ -346,11 +303,19 @@ export default function SowPage() {
                         </div>
                       ) : (
                         <a
-                          href={`/sow/${doc.id}`}
-                          className="link-hover-underline"
-                          style={{ fontWeight: 500, color: "#111827" }}
+                          // slug is the canonical URL identifier (migration
+                          // 0048); doc.id fallback only guards a document
+                          // fetched before the backend added it, which
+                          // shouldn't happen post-deploy but costs nothing
+                          // to keep the link from breaking if it ever does.
+                          href={`/sow/${doc.slug || doc.id}`}
+                          // .cell-link makes the whole TITLE cell the target
+                          // and tints it on hover -- no inline `color` here
+                          // on purpose, since an inline colour would outrank
+                          // the stylesheet and kill the hover transition.
+                          className="cell-link"
                         >
-                          {doc.title}
+                          <span style={{ fontWeight: 500 }}>{doc.title}</span>
                         </a>
                       )}
                     </td>
@@ -365,9 +330,17 @@ export default function SowPage() {
                     </td>
                     <td style={{ padding: "10px 16px", textAlign: "right" }}>
                       {canWrite && renamingId !== doc.id && (
-                        <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                        // One segmented control rather than two loose buttons:
+                        // Rename and Delete are the same row's two options, so
+                        // they read as a pair. `outline` (not `ghost`) because
+                        // the group needs a resting left cap to be a group at
+                        // all. Segment width and corner rounding come from
+                        // `.btn-option-group` in app/global.css, not from
+                        // classes here. Everything else about both buttons --
+                        // rim, edge, hover reveal -- is the shared design.
+                        <div className="btn-option-group">
                           <Button
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
                             onClick={() => {
                               setRenamingId(doc.id);
@@ -497,122 +470,16 @@ export default function SowPage() {
         </div>
       )}
 
-      {/* Import SOW modal */}
-      {showImportModal && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(17,24,39,0.4)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 50,
-          }}
-          onClick={() => !importSubmitting && resetImportModal()}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "#fff",
-              borderRadius: 12,
-              padding: 24,
-              width: 440,
-              maxWidth: "90vw",
-            }}
-          >
-            <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 600, color: "#111827" }}>
-              Import SOW
-            </h2>
-            <p style={{ margin: "0 0 16px", fontSize: 12, color: "#6B7280" }}>
-              Upload an existing SOW/requirements document (.docx, .pdf, .txt, or .md). It's
-              parsed into this document's requirements ledger — click Generate on the document
-              page to produce an editable, structured SOW from it, then refine it further with
-              meeting sources or send it to Vibe Testing whenever you're ready.
-            </p>
-
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
-              Title (optional — defaults to the file name)
-            </label>
-            <input
-              autoFocus
-              value={importForm.title}
-              onChange={(e) => setImportForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="e.g. Checkout Redesign — SOW"
-              style={{
-                display: "block",
-                width: "100%",
-                marginTop: 4,
-                marginBottom: 14,
-                fontSize: 13,
-                padding: "8px 10px",
-                border: "1px solid #D1D5DB",
-                borderRadius: 8,
-                boxSizing: "border-box",
-              }}
-            />
-
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
-              Project (optional)
-            </label>
-            <div style={{ marginTop: 4, marginBottom: 14 }}>
-              <Select
-                value={importForm.project_id || "none"}
-                onValueChange={(v) =>
-                  setImportForm((f) => ({ ...f, project_id: v === "none" ? "" : v }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="No project" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No project</SelectItem>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>File</label>
-            <input
-              type="file"
-              accept={IMPORT_ACCEPT}
-              onChange={(e) => {
-                const f = e.target.files?.[0] || null;
-                setImportForm((form) => ({ ...form, file: f }));
-              }}
-              style={{ fontSize: 12, marginTop: 4, marginBottom: 14, display: "block" }}
-              disabled={importSubmitting}
-            />
-
-            {importError && (
-              <p style={{ fontSize: 12, color: "#DC2626", margin: "0 0 10px" }}>{importError}</p>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <Button
-                variant="outline"
-                size="lg"
-                onClick={resetImportModal}
-                disabled={importSubmitting}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="invert"
-                size="lg"
-                onClick={submitImport}
-                disabled={!importForm.file || importSubmitting}
-              >
-                {importSubmitting ? "Importing…" : "Import"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ImportSowDialog
+        open={showImportModal}
+        projects={projects}
+        onClose={() => setShowImportModal(false)}
+        onImported={(id) => {
+          setShowImportModal(false);
+          qc.invalidateQueries(["sow-documents"]);
+          router.push(`/sow/${id}`);
+        }}
+      />
 
       {/* Delete confirmation */}
       {deleteTarget && (

@@ -172,6 +172,23 @@ class SowPart(Base):
     #   bad extraction cannot be diagnosed after the fact.
     context_header = mapped_column(Text, nullable=True)
 
+    # ── Testability gate audit trail (migration 0043) ──
+    #
+    # excluded_zones: what app.services.tdd_extraction's Stage 0 decided was
+    #   NOT product behaviour and therefore never sent for extraction —
+    #   [{heading, zone_kind, reason, char_count, classifier}]. This column
+    #   is the reason the gate is safe to have at all: the alternative to
+    #   recording exclusions is a filter nobody can audit, and "the extractor
+    #   quietly decided your requirements section was a glossary" is exactly
+    #   the failure mode that would be impossible to notice otherwise.
+    excluded_zones = mapped_column(JSONB, nullable=True)
+    # coverage_json: tdd_extraction.scorecard() for this part — counts by
+    #   test type / category / grounding, the negative_edge_ratio, and any
+    #   behaviour that came back missing a variant its category requires.
+    #   Makes a regression in extraction QUALITY (as opposed to extraction
+    #   failure) visible without re-reading every generated skill.
+    coverage_json = mapped_column(JSONB, nullable=True)
+
     created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
@@ -256,4 +273,125 @@ class VisualFinding(Base):
     actual = mapped_column(Text, nullable=True)            # e.g. "#1B74E9"
     # Bounding box of the region, percentages of viewport: {x,y,w,h}
     region = mapped_column(JSONB, nullable=True)
+    created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class ProjectUiInventory(Base):
+    """What a project's UI is actually CALLED — one row per project.
+
+    THE PROBLEM IT SOLVES. Extraction only ever saw text, so a checkpoint said
+    "click Submit Application" because that is what the requirements document
+    called the button, while the product's button says "Apply Now". The test
+    then fails for a reason that is neither a product defect nor a spec gap,
+    which is the most demoralising kind of red result there is.
+
+    This row is the vocabulary that closes that gap: screens, buttons, fields
+    and nav items read off the project's uploaded evidence (design_artifacts
+    of type figma_png, plus labels already recovered from digested
+    walkthrough videos). Built ONCE per project and reused by every SOW
+    imported for it, which is what keeps it far cheaper than having an agent
+    navigate the live product per test — and needs no credentials and no
+    deployed environment.
+
+    IT IS VOCABULARY, NOT REQUIREMENTS. The extractor is told to use these
+    names when the document describes the same control differently. It is
+    never allowed to treat a label as evidence that a behaviour exists — a
+    button visible in a screenshot is not a requirement, and letting the
+    inventory add behaviours would reintroduce exactly the "everything becomes
+    a TDD" defect from the other direction.
+
+    Derived and disposable: every field can be rebuilt from the artifacts, so
+    a stale or bad row is fixed by rebuilding rather than by hand-editing.
+    """
+
+    __tablename__ = "project_ui_inventory"
+
+    id = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Unique: one inventory per project. Rebuilds update in place so the
+    # extraction path never has to choose between two versions.
+    project_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    # Structured form: [{screen, controls[], fields[], nav[], messages[]}].
+    # Kept alongside the rendered text so a future consumer (a locator
+    # healer, a coverage view) can use the structure without re-parsing prose.
+    inventory_json = mapped_column(JSONB, nullable=True)
+    # Exactly the text handed to the extraction prompt. Stored rather than
+    # re-rendered per call so that what the model actually saw is auditable
+    # after the fact — the same reason sow_parts keeps context_header.
+    rendered_text = mapped_column(Text, nullable=True)
+    # Artifact ids this was built from. This is the staleness key: when the
+    # project gains new evidence the set no longer matches and the inventory
+    # is rebuilt automatically, which is the whole answer to "we added
+    # screenshots after importing the first SOW".
+    source_artifact_ids = mapped_column(JSONB, nullable=True)
+    # Count of screens the vision pass actually described, so "built from 12
+    # screenshots" can be told apart from "built from 12 screenshots and
+    # understood 2 of them".
+    screen_count = mapped_column(Integer, nullable=False, default=0)
+    built_by_model = mapped_column(String(200), nullable=True)
+    # Why the last build produced nothing usable, if it didn't. Recorded
+    # rather than silently leaving rendered_text NULL, since "no evidence
+    # uploaded" and "the vision call failed" need different responses.
+    build_error = mapped_column(Text, nullable=True)
+    created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class SowIngestEvent(Base):
+    """A step that actually happened during one artifact's extraction.
+
+    WHY A TABLE AND NOT A DERIVED STATUS. The alternative was a fixed list of
+    phases in the UI, ticked off by inspecting SowPart rows afterwards. That
+    can only ever show the same four steps in the same order regardless of
+    what the pipeline really did — it would claim "identifying feature
+    sections" on a run with zoning disabled, and stay silent on the repair
+    pass, the variant cap and the cross-part merge, which are the stages a
+    reader most needs to know fired. PRODUCT.md's first design principle is
+    that copy must never claim progress that isn't happening; a row written
+    by the code that did the work is the only version that can't drift from
+    it.
+
+    Rows are append-only and describe history, so they deliberately survive a
+    rolled-back ingest: "extraction started and then failed" is exactly what
+    the reader needs, and deleting the evidence on failure would leave the
+    panel blank at the one moment it matters most.
+
+    `sequence` is per artifact and assigned by the emitter. SOW ingest is
+    single-flight per document — never two parts of one artifact in flight
+    (see sow_ingest._chain_next_part) — so there is no writer race to guard.
+    """
+
+    __tablename__ = "sow_ingest_events"
+
+    id = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    artifact_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("design_artifacts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Null for document-level steps (chunking, the cross-part merge) — the UI
+    # renders those unprefixed rather than pretending they belong to a part.
+    part_number = mapped_column(Integer, nullable=True)
+    sequence = mapped_column(Integer, nullable=False, default=0)
+    # Machine-readable stage key (e.g. "zoning", "repair", "naming_reference").
+    # Kept alongside the human description so the panel can pick an icon
+    # without pattern-matching on prose.
+    stage = mapped_column(String(40), nullable=False)
+    # running | done | skipped | error.
+    #   skipped is its own state on purpose: "the repair pass found nothing to
+    #   repair" and "the repair pass never ran" are different facts, and
+    #   collapsing them into done would misreport a disabled flag as work.
+    status = mapped_column(String(20), nullable=False, default="running")
+    description = mapped_column(Text, nullable=False)
+    # Counts behind the sentence — {"segments": 14, "excluded": 6} — so the
+    # numbers can be re-rendered or charted without re-parsing the prose.
+    detail = mapped_column(JSONB, nullable=True)
     created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)

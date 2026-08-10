@@ -40,6 +40,8 @@ class AIProviderBreakdown(BaseModel):
     provider: str
     calls: int
     tokens: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     cost_usd: float
 
 
@@ -49,6 +51,8 @@ class AIUsageSummary(BaseModel):
     window_days: Optional[int]
     total_calls: int
     total_tokens: int
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
     total_cost_usd: float
     failed_calls: int
     by_provider: list[AIProviderBreakdown]
@@ -60,6 +64,8 @@ class AIKeyUsage(BaseModel):
     provider: str
     calls_period: int  # calls in the relevant reset period (today for daily quotas, all-time for budgets)
     tokens_period: int
+    prompt_tokens_period: int = 0
+    completion_tokens_period: int = 0
     cost_period_usd: float
     limit_type: Optional[str] = None  # "requests_per_day" | "budget_usd" | None
     limit_value: Optional[float] = None
@@ -74,3 +80,34 @@ class AIKeyLimitUpsert(BaseModel):
     limit_type: str = Field(..., pattern="^(requests_per_day|budget_usd)$")
     limit_value: float = Field(..., gt=0)
     note: Optional[str] = None
+
+
+class AITaskGroup(BaseModel):
+    """One user-triggered task (a Vibe Test run, a SOW import, a Visual
+    Audit, ...) and the aggregate of every AI call logged under it — see
+    app.services.ai_usage.list_task_groups. is_legacy=True groups calls
+    logged before task-tracking existed (or made outside any tracked task),
+    bucketed per source rather than dropped."""
+    run_type: Optional[str] = None
+    run_id: Optional[str] = None
+    is_legacy: bool = False
+    legacy_source: Optional[str] = None
+    label: str
+    task_kind_label: Optional[str] = None
+    call_count: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost_usd: float
+    status: str  # "ok" | "error" | "partial"
+    first_seen: datetime
+    last_seen: datetime
+    sources: list[str] = []
+    providers: list[str] = []
+
+
+class AITaskGroupListResponse(BaseModel):
+    data: list[AITaskGroup]
+    total: int
+    page: int
+    limit: int

@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
-import GlobalLoader from "../../../components/GlobalLoader";
+import { usePageLoading } from "../../../components/NavigationLoadingProvider";
 import PageContainer from "../../../components/PageContainer";
 import { toastSuccess } from "../../../lib/toast";
 import { Button } from "../../../components/ui/button";
@@ -90,6 +90,18 @@ export default function UsersPage() {
       ),
   });
 
+  // App-wide overlay for the FIRST load only. Reporting isLoading verbatim
+  // on every keystroke in the search box would refire this for each new
+  // (uncached) query key and blank the whole page — including the search
+  // input the user is actively typing in — instead of the table-only
+  // `isLoading ? null : ...` below, which is what should handle that case.
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  useEffect(() => {
+    if (!isLoading && !hasLoadedOnce) setHasLoadedOnce(true);
+  }, [isLoading, hasLoadedOnce]);
+  const showGlobalLoader = !hasLoadedOnce && isLoading;
+  usePageLoading(showGlobalLoader);
+
   const createMutation = useMutation({
     mutationFn: (body) => apiPost("/api/users", body),
     onSuccess: () => {
@@ -124,7 +136,7 @@ export default function UsersPage() {
 
   const users = data?.data || [];
 
-  if (!user) return null;
+  if (!user || showGlobalLoader) return null;
 
   return (
     <AppShell noPadding>
@@ -252,9 +264,7 @@ export default function UsersPage() {
               </span>
             ))}
           </div>
-          {isLoading ? (
-            <GlobalLoader fullscreen={false} />
-          ) : !users.length ? (
+          {isLoading ? null : !users.length ? (
             <div
               style={{
                 padding: 40,

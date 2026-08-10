@@ -143,6 +143,34 @@ class AISkill(Base):
         nullable=True,
         index=True,
     )
+    # ── TDD classification (app.services.tdd_extraction, migration 0043) ──
+    # All nullable with no backfill. Skills created before the v2 extractor
+    # carry NULLs, which every reader treats as "positive / stated /
+    # regression, category unknown" — the conservative reading of a legacy
+    # happy-path skill, which is exactly what they are.
+    #
+    # test_type: "positive" | "negative" | "edge". The most operationally
+    #   important of these: a negative skill PASSES when the system refuses
+    #   the action, so a reviewer reading a "failed" result needs this to
+    #   interpret it correctly.
+    test_type = mapped_column(String(20), nullable=True, index=True)
+    # category: a code from tdd_extraction.CATEGORIES — the behaviour class
+    #   that determined which variants were required (e.g. "authorization",
+    #   "ai_untrusted_input"). Drives coverage reporting per risk area.
+    category = mapped_column(String(50), nullable=True, index=True)
+    # grounding: "stated" (the source document specifies this expectation) or
+    #   "derived" (inferred from standard QA practice because the document is
+    #   silent). A failing "derived" test may be a spec gap rather than a
+    #   product defect, and triage needs to be able to tell.
+    grounding = mapped_column(String(20), nullable=True)
+    # behaviour_key: stable slug shared by every variant of one behaviour, so
+    #   the Skills tab can group "Create Job" positive/negative/edge together
+    #   and coverage can be reported per behaviour rather than per row.
+    behaviour_key = mapped_column(String(120), nullable=True, index=True)
+    # priority: "smoke" | "sanity" | "regression" — the execution tier, which
+    #   maps onto Robot Framework [Tags] for suite selection.
+    priority = mapped_column(String(20), nullable=True)
+
     environment = mapped_column(String(200), nullable=True)
     credential_profile_id = mapped_column(
         UUID(as_uuid=True),

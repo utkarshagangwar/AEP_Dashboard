@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -13,6 +14,7 @@ logger = get_logger(__name__)
     max_retries=0,
     acks_late=True,
 )
+@ai_usage.tracked_task("orchestrator_run")
 def run_orchestrator_task(self, run_id: str) -> None:
     """Thin wrapper around orchestrator.execute_run() — the outer safety net.
 

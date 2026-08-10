@@ -14,6 +14,7 @@ import os
 from datetime import datetime, timezone
 
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -52,6 +53,7 @@ def _capture_screenshot(url: str, output_path: str, timeout_ms: int = 60000) -> 
     bind=True,
     max_retries=0,
 )
+@ai_usage.tracked_task("visual_audit")
 def run_visual_audit_task(self, run_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.visual_qa import (

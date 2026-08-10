@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { apiDelete, apiFetch, apiGet, apiPost } from "@/utils/apiClient";
+import { confirmDialog } from "@/lib/confirm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,49 @@ interface Checkpoint {
   // checkpoints parsed before this shipped carry no such field.
   review_status?: "needs_review" | "needs_design_flow" | null;
   review_reason?: string | null;
+  // ── TDD classification (backend app/services/tdd_extraction.py) ──
+  // All optional: checkpoints extracted before the v2 pipeline carry none of
+  // these, and are rendered as unclassified rather than assumed positive.
+  //
+  // test_type is the one that changes how a result must be read: a negative
+  // checkpoint PASSES when the system refuses the action, so it can never be
+  // shown in the same visual register as a happy path.
+  test_type?: "positive" | "negative" | "edge" | null;
+  category?: string | null;
+  // "derived" = inferred from standard QA practice, not stated in the
+  // document. A failure there may be a spec gap rather than a product defect.
+  grounding?: "stated" | "derived" | null;
+  behaviour_key?: string | null;
+  priority?: string | null;
+  // Variants this checkpoint's category requires that the extractor did not
+  // produce — computed in Python, not claimed by the model.
+  coverage_gap?: string[];
+  // Other parts that stated this same behaviour and were merged into this
+  // checkpoint. Shown so a merge is visible: without it a reader comparing
+  // the per-part counts against the document total sees numbers that don't
+  // add up and no explanation.
+  merged_from_parts?: number[];
+  // Lower-priority variants dropped to keep this behaviour under its ceiling.
+  // Shown because a cap nobody can see reads as "the extractor found nothing
+  // more" — which is a different problem with a different fix.
+  capped_variants?: number;
+}
+
+interface ExcludedZone {
+  heading?: string | null;
+  zone_kind?: string | null;
+  reason?: string | null;
+  char_count?: number | null;
+  classifier?: string | null;
+}
+
+interface PartCoverage {
+  total_checkpoints?: number;
+  by_test_type?: Record<string, number>;
+  by_grounding?: Record<string, number>;
+  negative_edge_ratio?: number;
+  coverage_gaps?: { behaviour_key?: string | null; missing?: string[] }[];
+  capped_variants?: number;
 }
 
 interface Part {
@@ -61,6 +105,11 @@ interface Part {
   checkpoint_count: number;
   char_count: number;
   preview: string;
+  // Testability-gate audit trail + coverage scorecard (migration 0043).
+  // Empty/null on parts analyzed before it, which render as "no data" rather
+  // than "nothing was excluded".
+  excluded_zones?: ExcludedZone[];
+  coverage?: PartCoverage | null;
 }
 
 // Anything in this set keeps the poll loop running (see the effect below) —
@@ -106,13 +155,16 @@ const VARIANTS = {
       "Upload a design walkthrough video — the AI watches it and extracts detailed, " +
       "step-by-step skills the agent can run directly (saved to the Skills tab " +
       "automatically, no live run needed). Each video is digested once and cached.",
-    accept: ".mp4,.webm,.mov",
-    uploadLabel: "Upload video (.mp4 / .webm / .mov)",
+    accept: ".mp4,.webm,.mov,.mkv",
+    uploadLabel: "Upload video (.mp4 / .webm / .mov / .mkv)",
     emptyLabel: "No videos uploaded yet.",
     activeLabel: "digesting…",
     workingLabel: "Watching the video and extracting checkpoints — this can take a few minutes…",
     noneFoundLabel: "No testable requirements found in this video.",
-    maxSizeMB: 50 as number | null,
+    // Mirrors the backend's VISUAL_VIDEO_MAX_MB default. This posts to the
+    // same /visual-audits/video endpoint as the Import SOW dialog, so a
+    // lower number here would reject client-side a file the server accepts.
+    maxSizeMB: 500 as number | null,
     // Mandatory so the AI has a declared identity to check on-screen content
     // against instead of guessing/assuming — see backend video_ingest.py.
     requiresPlatformName: true,
@@ -134,6 +186,173 @@ function extractErrorMessage(body: unknown, fallback: string): string {
   }
   if (detail && typeof detail === "object") return JSON.stringify(detail);
   return fallback;
+}
+
+// A negative test passes when the system REFUSES, and an edge test passes
+// when behaviour is merely DEFINED — neither is a happy path, and reading a
+// result without knowing which is which inverts the conclusion. Hence the
+// distinct tones rather than one neutral chip.
+const TEST_TYPE_STYLES: Record<string, string> = {
+  negative: "text-red-700 border-red-300 bg-red-50",
+  edge: "text-amber-700 border-amber-300 bg-amber-50",
+  positive: "text-green-700 border-green-300 bg-green-50",
+};
+
+const TEST_TYPE_LABELS: Record<string, string> = {
+  negative: "⛔ Negative",
+  edge: "🔍 Edge",
+  positive: "✓ Positive",
+};
+
+const TEST_TYPE_TITLES: Record<string, string> = {
+  negative:
+    "Negative test — PASSES when the system correctly refuses or safely rejects the action. The action succeeding is a FAIL.",
+  edge: "Edge-case test — PASSES when behaviour is defined and consistent, not necessarily when the action succeeds.",
+  positive: "Positive test — PASSES when the stated outcome is observable.",
+};
+
+/** Checkpoints from before the v2 extractor carry no test_type; they render
+ *  nothing rather than a guessed "Positive", because guessing here would be
+ *  indistinguishable from a real classification. */
+function TestTypeBadge({ cp }: { cp: Checkpoint }) {
+  if (!cp.test_type) return null;
+  const derived = cp.grounding === "derived";
+  return (
+    <Badge
+      variant="outline"
+      className={`${TEST_TYPE_STYLES[cp.test_type] || ""} shrink-0`}
+      title={
+        TEST_TYPE_TITLES[cp.test_type] +
+        (derived
+          ? " Expectation source: standard QA practice, NOT stated in the source document — confirm with the spec owner before raising a defect."
+          : "")
+      }
+    >
+      {TEST_TYPE_LABELS[cp.test_type] || cp.test_type}
+      {derived ? " · derived" : ""}
+    </Badge>
+  );
+}
+
+/** Per-document roll-up over the parts' scorecards.
+ *
+ *  negative_edge_ratio is the headline: the defect this pipeline exists to
+ *  fix produced ~0.0 by construction, and the spec's acceptance gate is 0.40.
+ *  Showing it here is what makes a regression in extraction QUALITY (as
+ *  opposed to extraction failure) visible without re-reading every skill.
+ */
+function CoverageSummary({ parts }: { parts: Part[] }) {
+  const scored = parts.filter((p) => p.coverage && p.coverage.total_checkpoints);
+  if (scored.length === 0) return null;
+
+  let total = 0;
+  let nonPositive = 0;
+  let derived = 0;
+  let gaps = 0;
+  let capped = 0;
+  for (const p of scored) {
+    const c = p.coverage!;
+    total += c.total_checkpoints || 0;
+    nonPositive += (c.by_test_type?.negative || 0) + (c.by_test_type?.edge || 0);
+    derived += c.by_grounding?.derived || 0;
+    gaps += (c.coverage_gaps || []).length;
+    capped += c.capped_variants || 0;
+  }
+  if (!total) return null;
+  const ratio = nonPositive / total;
+  const healthy = ratio >= 0.4;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-gray-500">Coverage:</span>
+      <Badge
+        variant="outline"
+        className={
+          healthy
+            ? "text-green-700 border-green-300 bg-green-50"
+            : "text-amber-700 border-amber-300 bg-amber-50"
+        }
+        title={
+          healthy
+            ? "Negative + edge cases as a share of all checkpoints. At or above the 0.40 acceptance gate."
+            : "Below the 0.40 acceptance gate — extraction has drifted towards happy-path-only output. Re-analyse, or check the extraction prompt/provider."
+        }
+      >
+        {Math.round(ratio * 100)}% negative + edge
+      </Badge>
+      <span className="text-gray-400">
+        {nonPositive} of {total} checkpoint{total === 1 ? "" : "s"}
+      </span>
+      {derived > 0 && (
+        <span
+          className="text-gray-400"
+          title="Inferred from standard QA practice because the document is silent. A failure may be a spec gap rather than a product defect."
+        >
+          · {derived} derived
+        </span>
+      )}
+      {capped > 0 && (
+        <span
+          className="text-gray-400"
+          title="Lower-priority variants dropped to keep a behaviour under its ceiling. A deliberate cap, not a truncation — the worker log names each dropped test."
+        >
+          · {capped} capped
+        </span>
+      )}
+      {gaps > 0 && (
+        <Badge
+          variant="outline"
+          className="text-amber-700 border-amber-300 bg-amber-50"
+          title="Behaviours whose category requires a variant the extractor did not produce. Flagged, not dropped."
+        >
+          {gaps} coverage gap{gaps === 1 ? "" : "s"}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+/** The testability gate's audit trail.
+ *
+ *  Rendered collapsed but never hidden: the alternative to showing what was
+ *  excluded is a filter nobody can audit, and "the extractor quietly decided
+ *  your requirements section was a glossary" is exactly the failure that
+ *  would otherwise be impossible to notice.
+ */
+function ExcludedZonesPanel({ parts }: { parts: Part[] }) {
+  const zones = parts.flatMap((p) =>
+    (p.excluded_zones || []).map((z) => ({ ...z, part_number: p.part_number }))
+  );
+  if (zones.length === 0) return null;
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-gray-500 hover:text-gray-700">
+        {zones.length} section{zones.length === 1 ? "" : "s"} skipped as non-testable
+        (pricing, timelines, legal, glossary…) — click to review
+      </summary>
+      <ul className="mt-1.5 space-y-1 border-l-2 border-gray-200 pl-3">
+        {zones.map((z, i) => (
+          <li key={i} className="text-gray-500">
+            <span className="font-medium text-gray-700">
+              {z.heading || "(untitled section)"}
+            </span>
+            <span className="text-gray-400">
+              {" "}
+              — {z.zone_kind || "unclassified"}
+              {z.char_count ? ` · ${z.char_count} chars` : ""}
+              {z.classifier ? ` · ${z.classifier}` : ""}
+              {parts.length > 1 ? ` · part ${z.part_number}` : ""}
+            </span>
+            {z.reason && <p className="text-gray-400">{z.reason}</p>}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1.5 text-gray-400">
+        Skipped text is never sent for extraction. If a real requirement is listed here,
+        re-analyse that part with <code>TDD_ZONING=0</code> to bypass the gate.
+      </p>
+    </details>
+  );
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -298,9 +517,13 @@ export default function SowCheckpointsSection({
   };
 
   const handleDelete = async (sow: Sow) => {
-    if (!window.confirm(`Delete "${sow.file_name}"? This also removes its extracted checkpoints.`)) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: `Delete "${sow.file_name}"?`,
+      body: "This also removes its extracted checkpoints.",
+      tone: "danger",
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     setDeletingId(sow.id);
     setError(null);
     try {
@@ -578,6 +801,13 @@ export default function SowCheckpointsSection({
                         )}
                       </div>
                     )}
+                    {/* Extraction-quality summary and the testability gate's
+                        audit trail, for single- and multi-part documents
+                        alike. Both render only once there is data, so a
+                        document analysed before migration 0043 looks exactly
+                        as it did before. */}
+                    <CoverageSummary parts={parts[sow.id] || []} />
+                    <ExcludedZonesPanel parts={parts[sow.id] || []} />
                     {(sow.total_parts > 1 || sow.parse_status === "done") &&
                       (checkpoints[sow.id] ? (
                         checkpoints[sow.id].length === 0 ? (
@@ -608,6 +838,7 @@ export default function SowCheckpointsSection({
                                     >
                                       {cp.type}
                                     </Badge>
+                                    <TestTypeBadge cp={cp} />
                                     <span className="text-sm font-medium text-gray-800 truncate">
                                       {cp.title}
                                     </span>
@@ -630,6 +861,40 @@ export default function SowCheckpointsSection({
                                   {cp.review_status && cp.review_reason && (
                                     <p className="mt-1 text-xs text-amber-700">
                                       {cp.review_reason}
+                                    </p>
+                                  )}
+                                  {/* A derived expectation is reasoned from
+                                      standard QA practice, not read out of the
+                                      document. Saying so here is what lets a
+                                      failure be triaged as a possible SPEC GAP
+                                      instead of straight to a product defect. */}
+                                  {cp.grounding === "derived" && (
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      Expectation inferred from standard QA practice — the
+                                      document does not state it. Confirm with the spec owner
+                                      before raising a defect.
+                                    </p>
+                                  )}
+                                  {(cp.capped_variants ?? 0) > 0 && (
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      {cp.capped_variants} lower-priority variant
+                                      {cp.capped_variants === 1 ? "" : "s"} of this behaviour
+                                      were dropped to keep it under the per-behaviour limit —
+                                      the worker log names each one.
+                                    </p>
+                                  )}
+                                  {(cp.merged_from_parts?.length ?? 0) > 0 && (
+                                    <p className="mt-1 text-xs text-gray-500">
+                                      Also stated in part{" "}
+                                      {cp.merged_from_parts!.join(", ")} — merged into this
+                                      one checkpoint instead of duplicated.
+                                    </p>
+                                  )}
+                                  {(cp.coverage_gap?.length ?? 0) > 0 && (
+                                    <p className="mt-1 text-xs text-amber-700">
+                                      Coverage gap: no {cp.coverage_gap!.join(" or ")} case was
+                                      extracted for this behaviour, though its category requires
+                                      one.
                                     </p>
                                   )}
 

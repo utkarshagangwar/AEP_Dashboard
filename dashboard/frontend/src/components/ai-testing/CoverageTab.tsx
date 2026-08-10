@@ -140,7 +140,138 @@ function TestRow({ entry }: { entry: CoverageTestEntry }) {
   );
 }
 
-export default function CoverageTab() {
+interface SpecGapEntry {
+  skill_id: string;
+  name: string;
+  test_type?: string | null;
+  category?: string | null;
+  behaviour_key?: string | null;
+  project_name?: string | null;
+  source_type?: string | null;
+  decided_runs: number;
+  fail_count: number;
+  last_run_at?: string | null;
+  last_failure_summary?: string | null;
+}
+
+interface SpecGapResponse {
+  entries: SpecGapEntry[];
+  total_derived_skills: number;
+  evaluated_skills: number;
+  min_runs: number;
+}
+
+/** Derived expectations the product has never once satisfied.
+ *
+ *  Most negative and edge tests are inferred from standard QA practice rather
+ *  than stated in the source document, so a failure has two possible readings
+ *  needing opposite responses: the product is wrong (raise a defect), or the
+ *  inference is wrong because the product deliberately behaves differently
+ *  and the document never said so (fix the document). Nothing aggregated
+ *  that, so every failure got triaged as the first.
+ *
+ *  Rendered separately from the coverage report, and BEFORE its empty state,
+ *  because the two are independent: a project can have no linked requirements
+ *  and still have spec gaps worth reading.
+ */
+function SpecGapPanel() {
+  const { data, isLoading, isError } = useQuery<SpecGapResponse>({
+    queryKey: ["ai-spec-gaps"],
+    queryFn: () => apiGet("/api/ai-testing/spec-gaps"),
+    refetchInterval: 60_000,
+  });
+
+  // Silent while loading and on error: this panel is a secondary signal
+  // sitting above the coverage report, and an error banner for it would
+  // read as the coverage report itself having failed.
+  if (isLoading || isError || !data) return null;
+  if (data.entries.length === 0) {
+    // Only worth saying "none" when something was actually checked —
+    // otherwise it claims a clean bill of health nobody earned.
+    if (data.evaluated_skills === 0) return null;
+    return (
+      <p className="text-xs text-gray-400">
+        No spec-gap candidates: every one of the {data.evaluated_skills} inferred
+        expectation{data.evaluated_skills === 1 ? "" : "s"} with at least{" "}
+        {data.min_runs} decided run{data.min_runs === 1 ? "" : "s"} has passed at
+        least once.
+      </p>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/50 px-5 py-4">
+      <div className="flex items-center gap-2 mb-1">
+        <h3 className="text-sm font-semibold text-gray-900">
+          Possible spec gaps
+        </h3>
+        <Badge
+          variant="outline"
+          className="text-amber-700 border-amber-300 bg-amber-50"
+        >
+          {data.entries.length}
+        </Badge>
+      </div>
+      <p className="text-xs text-gray-600 mb-3">
+        These tests assert behaviour that was <strong>inferred</strong> from standard
+        QA practice, not stated in the source document — and the product has never
+        once satisfied them ({data.evaluated_skills} of {data.total_derived_skills}{" "}
+        inferred expectations had enough runs to judge). Either the product is wrong,
+        or the assumption is and the document never said so. Worth confirming with
+        the spec owner before raising a defect.
+      </p>
+      <div className="space-y-0">
+        {data.entries.map((e) => (
+          <div
+            key={e.skill_id}
+            className="flex items-start justify-between gap-4 py-2.5 border-b border-amber-100 last:border-b-0"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-gray-800 truncate" title={e.name}>
+                {e.name}
+              </p>
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                {e.test_type && (
+                  <Badge
+                    variant="outline"
+                    className={`text-xs ${
+                      e.test_type === "negative"
+                        ? "border-red-300 text-red-700 bg-red-50"
+                        : "border-amber-300 text-amber-700 bg-amber-50"
+                    }`}
+                  >
+                    {e.test_type}
+                  </Badge>
+                )}
+                {e.category && (
+                  <span className="text-xs text-gray-400">{e.category}</span>
+                )}
+                {e.project_name && (
+                  <span className="text-xs text-gray-400">· {e.project_name}</span>
+                )}
+                {e.last_run_at && (
+                  <span className="text-xs text-gray-400">
+                    · last run {new Date(e.last_run_at).toLocaleDateString("en-GB")}
+                  </span>
+                )}
+              </div>
+              {e.last_failure_summary && (
+                <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+                  {e.last_failure_summary}
+                </p>
+              )}
+            </div>
+            <span className="text-xs text-red-600 font-medium flex-shrink-0">
+              failed {e.fail_count}/{e.decided_runs}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CoverageReport() {
   const { data, isLoading, isError } = useQuery<CoverageResponse>({
     queryKey: ["ai-coverage"],
     queryFn: () => apiGet("/api/ai-testing/coverage"),
@@ -230,6 +361,15 @@ export default function CoverageTab() {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+export default function CoverageTab() {
+  return (
+    <div className="space-y-4">
+      <SpecGapPanel />
+      <CoverageReport />
     </div>
   );
 }

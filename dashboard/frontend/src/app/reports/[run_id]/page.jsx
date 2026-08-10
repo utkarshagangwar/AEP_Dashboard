@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
 import { Button } from "../../../components/ui/button";
+import { BackButton } from "../../../components/ui/back-button";
 import { apiGet, apiPost, apiFetch } from "../../../utils/apiClient";
 import { toastSuccess } from "../../../lib/toast";
 import { getStoredUser } from "../../../utils/authStore";
@@ -274,16 +275,7 @@ export default function ReportDetailPage() {
         >
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <a
-                href="/reports"
-                style={{
-                  fontSize: 13,
-                  color: "#6B7280",
-                  textDecoration: "none",
-                }}
-              >
-                ← Reports
-              </a>
+              <BackButton href="/reports" label="Reports" />
             </div>
             <h1
               style={{

@@ -83,6 +83,17 @@ class Defect(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    # Soft delete (migration 0044). NULL = live. A deleted defect keeps every
+    # other column untouched and is restorable by an admin or QA lead; nothing
+    # is cascaded, because the bug record is the audit trail for a failure.
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Defect id={self.id} title={self.title} severity={self.severity}>"

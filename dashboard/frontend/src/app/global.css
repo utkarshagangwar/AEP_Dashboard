@@ -74,10 +74,20 @@
     --loader-accent: var(--mascot-accent);
     /* ease-out-quint. One curve for every UI transition. */
     --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    /* The app's default canvas texture (see the `body` rule below): a faint
+       grid plus a warm bloom pinned to the bottom of the viewport, replacing
+       flat white/black everywhere nothing else paints an opaque background
+       over it. --bg-grid-line is themed here rather than hardcoded into the
+       gradient so .dark only has to override one value. Approved design:
+       see the "AEP background pattern" preview from 2026-08-08. */
+    --bg-grid-line: color-mix(in oklch, var(--foreground), transparent 94.5%);
   }
   .dark {
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
+    /* Slightly higher opacity than light mode's grid: the same 1px line reads
+       fainter against near-black than it does against white at equal alpha. */
+    --bg-grid-line: color-mix(in oklch, var(--foreground), transparent 94%);
     --card: oklch(0.205 0 0);
     --card-foreground: oklch(0.985 0 0);
     --popover: oklch(0.205 0 0);
@@ -125,6 +135,28 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
+    /* Three layers, painted in front-to-back order: the glow first (so the
+       grid draws visibly through its faint edges), then the vertical and
+       horizontal hairlines of the grid. `background-attachment: fixed` on
+       all three pins the whole texture to the viewport rather than the page,
+       so it reads as one stationary canvas behind login, loading and scrolled
+       content alike instead of drifting or repeating awkwardly as the page
+       scrolls. AppShell's own containers are transparent over their content
+       area for exactly this reason — see the `background: transparent`
+       comment in AppShell.jsx — the sidebar rail stays a solid, legible
+       surface and only the canvas shows this texture through. */
+    background-image:
+      radial-gradient(
+        ellipse 70% 55% at 50% 120%,
+        color-mix(in oklch, var(--mascot-accent) 42%, transparent) 0%,
+        color-mix(in oklch, var(--mascot-accent) 18%, transparent) 40%,
+        transparent 72%
+      ),
+      linear-gradient(var(--bg-grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid-line) 1px, transparent 1px);
+    background-size: 100% 100%, 34px 34px, 34px 34px;
+    background-repeat: no-repeat, repeat, repeat;
+    background-attachment: fixed, fixed, fixed;
   }
   html {
     font-family: Inter, sans-serif;
@@ -210,17 +242,133 @@
     outline-offset: -2px;
   }
 
-  .link-hover-underline {
+  /* Surfaces whose whole area is the click target — a table cell that is
+     really a link, and a card header that is really a toggle.
+
+     These replace the old `.link-hover-underline`. An underline is the
+     affordance for a text link sitting *inside* a sentence; on a target that
+     occupies a whole cell or a whole header row it reads as stray decoration
+     hugging the glyphs, and it tells the user the hit area is the text when
+     it is actually the entire surface. A tinted surface says the true thing.
+
+     Both follow the same recipe as .row-interactive above — a
+     color-mix tint over --foreground, so they hold up in light and dark
+     without a second rule — and both deepen their text from a slightly held
+     back resting colour to full contrast, so the label itself responds and
+     not just the plate behind it. */
+
+  .cell-link,
+  .section-toggle {
+    /* Held back at rest so the hover has somewhere to travel to. */
+    color: color-mix(in oklch, var(--foreground), transparent 18%);
+    text-decoration: none;
+    transition: color 160ms var(--ease-out);
+  }
+  .cell-link:hover,
+  .cell-link:focus-visible,
+  .section-toggle:hover,
+  .section-toggle:focus-visible {
+    color: var(--foreground);
     text-decoration: none;
   }
-  .link-hover-underline:hover,
-  .link-hover-underline:focus-visible {
-    text-decoration: underline;
+
+  /* Fills its <td> exactly. Absolute + inset:0 rather than padding tricks
+     because a table cell has no definite height for a child's `height: 100%`
+     to resolve against — the row is as tall as its tallest cell (here the
+     Rename/Delete group), so an in-flow link only ever covers its own line
+     box and leaves dead strips above and below. Requires
+     `position: relative` on the owning <td> (set at the call site).
+
+     z-index:0 (not auto) is load-bearing: it makes this positioned box a
+     stacking context so the ::before below can sit at z-index:-1 — behind
+     the link's own text, but still in front of the table and row
+     backgrounds. With z-index:auto here, -1 would escape to the page's root
+     stacking context and the white row would paint straight over it. */
+  .cell-link {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    /* Out of flow, so a wrapping title could not grow the row anyway —
+       truncate instead of letting it spill over the next column. */
+    white-space: nowrap;
+    overflow: hidden;
   }
-  .link-hover-underline:focus-visible {
+  .cell-link > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The tint lives on a pseudo-element, not on .cell-link itself, so the
+     rounded corners cost no hit area. border-radius clips pointer hit
+     testing as well as painting — a radius on the link would leave the four
+     corners of the cell unclickable, which is exactly the "click anywhere in
+     the cell" promise this class exists to make. Square box for hits,
+     rounded plate for the eye. */
+  .cell-link::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: calc(var(--radius) - 2px);
+    transition: background-color 160ms var(--ease-out);
+  }
+  .cell-link:hover::before,
+  .cell-link:focus-visible::before {
+    background-color: color-mix(in oklch, var(--foreground), transparent 94%);
+  }
+  .cell-link:active::before {
+    background-color: color-mix(in oklch, var(--foreground), transparent 90%);
+  }
+  .cell-link:focus-visible {
     outline: 2px solid var(--foreground);
-    outline-offset: 2px;
-    border-radius: 2px;
+    outline-offset: -2px;
+    border-radius: calc(var(--radius) - 2px);
+  }
+
+  .section-toggle:hover,
+  .section-toggle:focus-visible {
+    background-color: color-mix(in oklch, var(--foreground), transparent 94%);
+  }
+  .section-toggle:active {
+    background-color: color-mix(in oklch, var(--foreground), transparent 90%);
+  }
+  .section-toggle:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: -2px;
+  }
+
+  /* Same trick against the card's 20px padding, so the tint reads as a band
+     across the full header rather than a chip around the title. */
+  .section-toggle {
+    padding: 8px 10px;
+    margin: -8px -10px;
+    width: calc(100% + 20px);
+    border-radius: calc(var(--radius) - 2px);
+    transition: background-color 160ms var(--ease-out),
+      color 160ms var(--ease-out);
+  }
+  /* The disclosure caret inherits the header's colour so it deepens in step
+     with the label instead of staying a fixed grey while everything else
+     moves. */
+  .section-toggle .section-toggle-caret {
+    color: currentColor;
+    opacity: 0.55;
+    transition: transform 180ms var(--ease-out), opacity 160ms var(--ease-out);
+  }
+  .section-toggle:hover .section-toggle-caret,
+  .section-toggle:focus-visible .section-toggle-caret {
+    opacity: 0.9;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cell-link,
+    .section-toggle,
+    .section-toggle .section-toggle-caret {
+      transition: none;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -429,6 +577,172 @@
     }
     100% {
       rotate: 0deg;
+    }
+  }
+
+  /* ── Back button ────────────────────────────────────────────────────────
+     The supplied design's motion, at this platform's size and colour: the
+     reference is a 140x56 white borderless block, these sit above a page
+     title at 13px with a border, so only the animation is carried over.
+
+     The label is rendered twice. The visible copy slides up and out of a
+     one-line window while a clone rises into its place, staggered per word
+     on the reference's own 0.15/0.2/0.25/0.3s delays. Both copies are
+     aria-hidden and a visually-hidden span carries the accessible name, so a
+     screen reader announces "Back to SOW" once rather than twice.
+
+     Every hover rule is mirrored on :focus-visible — a keyboard user should
+     get the same feedback a mouse user gets, and the reference has no focus
+     state at all. */
+  .btn-back {
+    --back-line: 1.2em;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background-color: var(--background);
+    color: var(--foreground);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+    overflow: hidden;
+    transition: border-color 180ms var(--ease-out);
+  }
+  .btn-back:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 2px;
+  }
+
+  /* The reference's underline wipe, origin swapping right-to-left so it
+     enters and leaves from opposite ends. Painted in the mascot orange
+     rather than currentColor: on a bordered control a same-colour bar along
+     the bottom edge just reads as a thicker border. */
+  .btn-back::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--mascot-accent);
+    transform: scaleX(0);
+    transform-origin: bottom right;
+    transition: transform 250ms ease-out;
+  }
+  .btn-back:hover::before,
+  .btn-back:focus-visible::before {
+    transform: scaleX(1);
+    transform-origin: bottom left;
+  }
+
+  /* A one-line window. The swap distance is this height exactly, so a word
+     lands flush instead of near-enough. */
+  .btn-back__label {
+    position: relative;
+    display: block;
+    height: var(--back-line);
+    overflow: hidden;
+  }
+  .btn-back__text,
+  .btn-back__clone {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    height: var(--back-line);
+    white-space: nowrap;
+  }
+  .btn-back__clone {
+    position: absolute;
+    inset: 0;
+  }
+  .btn-back__text > span,
+  .btn-back__clone > span {
+    transition: transform 200ms;
+  }
+  .btn-back__clone > span {
+    transform: translateY(var(--back-line));
+  }
+  .btn-back:hover .btn-back__text > span,
+  .btn-back:focus-visible .btn-back__text > span {
+    transform: translateY(calc(var(--back-line) * -1));
+    transition: transform 200ms cubic-bezier(0.215, 0.61, 0.355, 1) 0s;
+  }
+  .btn-back:hover .btn-back__clone > span,
+  .btn-back:focus-visible .btn-back__clone > span {
+    transform: translateY(0);
+    transition: transform 200ms cubic-bezier(0.215, 0.61, 0.355, 1) 0s;
+  }
+  .btn-back:hover .btn-back__clone > :nth-child(1),
+  .btn-back:focus-visible .btn-back__clone > :nth-child(1) {
+    transition-delay: 0.15s;
+  }
+  .btn-back:hover .btn-back__clone > :nth-child(2),
+  .btn-back:focus-visible .btn-back__clone > :nth-child(2) {
+    transition-delay: 0.2s;
+  }
+  .btn-back:hover .btn-back__clone > :nth-child(3),
+  .btn-back:focus-visible .btn-back__clone > :nth-child(3) {
+    transition-delay: 0.25s;
+  }
+  .btn-back:hover .btn-back__clone > :nth-child(4),
+  .btn-back:focus-visible .btn-back__clone > :nth-child(4) {
+    transition-delay: 0.3s;
+  }
+
+  /* A full turn, not the reference's 90deg step. This arrow states a
+     direction: parking it at -180deg would leave a "back" control pointing
+     forward. A 360deg turn keeps the reference's spin and still resolves
+     pointing the way the button actually goes. */
+  .btn-back__icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    /* Explicit rotate(0deg) rather than the implied `none`: interpolating
+       none -> rotate(-360deg) relies on the browser normalising `none` into
+       the target's function list. It does, but both endpoints resolve to the
+       identity matrix, so if it ever falls back to matrix interpolation the
+       turn silently becomes a no-op. Stating the start keeps it per-function. */
+    transform: rotate(0deg);
+    transition: transform 300ms ease-out;
+  }
+  .btn-back:hover .btn-back__icon,
+  .btn-back:focus-visible .btn-back__icon {
+    transform: rotate(-360deg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn-back,
+    .btn-back::before,
+    .btn-back__icon,
+    .btn-back__text > span,
+    .btn-back__clone > span {
+      transition: none;
+    }
+    /* The clone never rises, so the label simply stays put; the border
+       darkening is what marks the hover instead. */
+    .btn-back:hover .btn-back__text > span,
+    .btn-back:focus-visible .btn-back__text > span,
+    .btn-back:hover .btn-back__clone > span,
+    .btn-back:focus-visible .btn-back__clone > span {
+      transform: none;
+    }
+    .btn-back__clone {
+      display: none;
+    }
+    .btn-back:hover .btn-back__icon,
+    .btn-back:focus-visible .btn-back__icon {
+      transform: none;
+    }
+    .btn-back:hover,
+    .btn-back:focus-visible {
+      border-color: var(--foreground);
     }
   }
 
@@ -646,4 +960,578 @@
       transition-duration: 0s;
     }
   }
+
+  /* ── The row option group ──────────────────────────────────────────────────
+     A row's actions joined into one segmented control: equal 72x28 segments
+     that read as a single pill instead of unrelated controls floating at the
+     end of a row. Used at every width the app needs — Delete alone (Reports,
+     Vibe Testing → Results), Rename + Delete (SOW), Edit + Run + Delete
+     (Skills), Edit + Start + Delete (Defects).
+
+     Opt-in, and scoped entirely to `.btn-option-group`. Every rule below is an
+     override of the free-standing `.delete-button` above, so the circular
+     resting form that Users, the Skills bulk toolbar and the SOW detail page
+     use is untouched — only a row that asks for the group is reshaped.
+
+     Two things change versus the free-standing button:
+
+       1. It rests at its FULL width rather than expanding into reserved space.
+          The segments of a group are fixed; only the fill colour and the
+          icon/label swap move. `.delete-button-slot` still reserves the
+          footprint, which keeps the geometry identical either way.
+
+       2. It anchors left instead of right, because the slot and the button are
+          now the same width and the group grows rightward from the seam.
+
+     The 2px lift on hover is the whole point of the seam: the segment you are
+     pointing at detaches from the pill for as long as you hold it. It rides the
+     shared 0.3s duration already on `.delete-button`, and the reduced-motion
+     branch above already covers it.
+
+     Corner treatment is positional, not per-call-site: `--delete-radius` is
+     re-declared by :first-child/:only-child so a delete-only group is a
+     rounded square while a trailing delete squares off its seam. That is what
+     lets a group with a conditional segment (Defects renders Start only while
+     the bug is open) round itself correctly without the page computing it. */
+  .btn-option-group {
+    --option-group-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+  }
+  .btn-option-group .delete-button-slot {
+    --delete-button-size: 28px;
+    --delete-button-expanded: 72px;
+    /* Trailing segment: outer corners on the right only. */
+    --delete-radius: 0 var(--option-group-radius) var(--option-group-radius) 0;
+  }
+  /* The only segment there is — a delete-only group is a rounded square. */
+  .btn-option-group .delete-button-slot:only-child {
+    --delete-radius: var(--option-group-radius);
+  }
+  .btn-option-group .delete-button {
+    left: 0;
+    right: auto;
+    width: var(--delete-button-expanded);
+    border-radius: var(--delete-radius);
+  }
+  .btn-option-group .delete-button:hover,
+  .btn-option-group .delete-button:focus-visible {
+    top: -2px;
+    width: var(--delete-button-expanded);
+    border-radius: var(--delete-radius);
+  }
+  /* Icon and label offsets re-derived for the 28px height (the free-standing
+     button is 32px), so the swap lands centred rather than 2px low. */
+  .btn-option-group .delete-button:hover .delete-button__icon,
+  .btn-option-group .delete-button:focus-visible .delete-button__icon {
+    width: var(--delete-button-size);
+    transform: translateY(70%);
+  }
+  .btn-option-group .delete-button:hover::before,
+  .btn-option-group .delete-button:focus-visible::before {
+    transform: translateY(22px);
+  }
+  /* A disabled segment stays seated and stays dark: no lift, no red, no swap.
+     The icon and label rules have to be restated here, not just inherited from
+     the free-standing `:disabled:hover` block above: that block's selectors tie
+     these on specificity, and a tie goes to whichever comes later in the file —
+     which is this one. Without these two rules a disabled delete in a group
+     would still play the reveal. */
+  .btn-option-group .delete-button:disabled:hover {
+    top: 0;
+    width: var(--delete-button-expanded);
+    border-radius: var(--delete-radius);
+    background-color: rgb(20, 20, 20);
+  }
+  .btn-option-group .delete-button:disabled:hover .delete-button__icon {
+    width: 11px;
+    transform: none;
+  }
+  .btn-option-group .delete-button:disabled:hover::before {
+    transform: none;
+  }
+
+  /* ── Global confirm dialog ──────────────────────────────────────────────
+     Replaces window.confirm() everywhere (reports, results, skills, SOW
+     checkpoints, SOW detail) with one shared, animated dialog. Rendered by
+     ConfirmDialogHost (mounted once in Providers.jsx), triggered from
+     anywhere via confirmDialog() in lib/confirm.ts -- a promise-based
+     stand-in for window.confirm's return value, so call sites barely change.
+
+     Same shape as the platform's existing delete-confirmation modals (SOW,
+     Defects): a centered white card over a dimmed backdrop. What's new is
+     the motion: entrance is a 220ms scale+fade on --ease-out (the one
+     easing curve already used everywhere in this app); exit is a quicker
+     160ms fade only, no scale, so leaving reads as dismissing rather than
+     rewinding -- the same "leave faster/slower than arrive" logic the ink
+     button's hover crossfade already uses. The two buttons inside are the
+     shared <Button> component (outline for Cancel; destructive or invert
+     for Confirm depending on tone) -- nothing bespoke lives here for them.
+
+     z-index 60: one tier above the existing form modals (SOW/Defects create
+     and edit dialogs use 50 inline) since a confirm can be triggered from on
+     top of one of those flows. */
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background-color: oklch(0.145 0 0 / 0);
+    transition: background-color 220ms var(--ease-out);
+  }
+  .confirm-backdrop.is-entered {
+    background-color: oklch(0.145 0 0 / 0.38);
+  }
+  .confirm-backdrop:not(.is-entered) {
+    transition-duration: 160ms;
+  }
+  .confirm-card {
+    width: 360px;
+    max-width: 100%;
+    background: var(--background);
+    color: var(--foreground);
+    border-radius: 14px;
+    box-shadow:
+      0 24px 48px -12px oklch(0.145 0 0 / 0.28),
+      0 0 0 1px oklch(0.145 0 0 / 0.04);
+    padding: 22px 22px 18px;
+    opacity: 0;
+    transform: scale(0.94) translateY(6px);
+    transition:
+      opacity 220ms var(--ease-out),
+      transform 220ms var(--ease-out);
+  }
+  .confirm-backdrop.is-entered .confirm-card {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  .confirm-backdrop:not(.is-entered) .confirm-card {
+    transition-duration: 160ms;
+  }
+  .confirm-card h2 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--foreground);
+  }
+  .confirm-card p {
+    margin: 0 0 18px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: color-mix(in oklch, var(--foreground), transparent 32%);
+  }
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  /* The motion icon. Both tones share one shape language -- a drawn outline
+     plus a drawn interior mark, then a dot that settles a beat later -- so
+     "danger" and "neutral" read as the same component in two colors, not
+     two unrelated icon sets. */
+  .confirm-icon {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+  }
+  .confirm-icon--danger {
+    background: color-mix(in oklch, var(--destructive) 12%, transparent);
+    color: var(--destructive-ink);
+  }
+  .confirm-icon--neutral {
+    background: color-mix(in oklch, var(--mascot-accent) 16%, transparent);
+    color: oklch(0.5 0.14 55);
+  }
+  .confirm-icon__svg {
+    position: relative;
+    z-index: 1;
+    width: 20px;
+    height: 20px;
+  }
+  /* Stroke reveal via the SVG2 pathLength trick: every drawn path/circle
+     carries pathLength="1", so stroke-dasharray/dashoffset are always 0-1
+     regardless of the glyph's real geometry -- no per-icon length math. The
+     120ms delay lets the card's own entrance settle first, so the icon
+     completing its outline reads as the last beat of one continuous
+     entrance instead of two animations racing each other. */
+  .confirm-icon__path {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    transition: stroke-dashoffset 420ms var(--ease-out) 120ms;
+  }
+  .confirm-icon__path.is-drawn {
+    stroke-dashoffset: 0;
+  }
+  /* The dot has no meaningful path length to draw, so it fades and scales in
+     on its own slightly later delay instead -- timed to land just as the
+     stroke reveal finishes, so the glyph reads as completing itself. */
+  .confirm-icon__dot {
+    position: absolute;
+    z-index: 1;
+    top: 24.5px;
+    left: 19px;
+    width: 2.6px;
+    height: 2.6px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0;
+    transform: scale(0.4);
+    transition:
+      opacity 160ms var(--ease-out) 480ms,
+      transform 220ms var(--ease-out) 480ms;
+  }
+  .confirm-icon__dot.is-drawn {
+    opacity: 1;
+    transform: scale(1);
+  }
+  /* Ambient pulse: destructive tone only. It's the one case where holding
+     the eye a beat longer earns its keep -- an irreversible action is
+     awaiting a decision. Neutral confirms (sign out, discard changes) get
+     the entrance draw only, no loop; a pulse on every confirm dialog in the
+     app would be decoration, not signal. It's a child of the card, so it
+     only exists, and only runs, while the dialog is open. */
+  .confirm-icon__ring {
+    position: absolute;
+    inset: 6px;
+    border-radius: 999px;
+    background: color-mix(in oklch, var(--destructive) 55%, transparent);
+    animation: confirm-ring-pulse 2.2s var(--ease-out) infinite;
+  }
+  @keyframes confirm-ring-pulse {
+    0% {
+      transform: scale(0.7);
+      opacity: 0.45;
+    }
+    70%,
+    100% {
+      transform: scale(1.7);
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Every selector re-stated at matching specificity (not just
+       `.confirm-card`) rather than relying on this block winning the
+       cascade -- the entered/exiting rules above are more specific than a
+       bare `.confirm-card`, so a lower-specificity override here would
+       silently lose exactly where it matters most: mid-transition. */
+    .confirm-backdrop,
+    .confirm-backdrop.is-entered,
+    .confirm-backdrop:not(.is-entered) {
+      transition-duration: 160ms;
+    }
+    .confirm-card,
+    .confirm-backdrop.is-entered .confirm-card,
+    .confirm-backdrop:not(.is-entered) .confirm-card {
+      transition: opacity 160ms linear;
+      transform: none;
+    }
+    .confirm-icon__path {
+      transition: none;
+      stroke-dashoffset: 0;
+    }
+    .confirm-icon__dot {
+      transition: none;
+      opacity: 1;
+      transform: scale(1);
+    }
+    .confirm-icon__ring {
+      animation: none;
+      opacity: 0;
+    }
+  }
+}
+
+/* ── Option-group segment geometry ──────────────────────────────────────────
+   UNLAYERED ON PURPOSE. These rules have to beat the `rounded-lg` and the
+   size variant's horizontal padding that components/ui/button.tsx renders as
+   Tailwind utilities, and `@layer base` loses to the utilities layer no matter
+   how specific the selector is — layer order is decided before specificity is
+   even consulted. Unlayered rules outrank every layer, which is the only way
+   to win this from a stylesheet rather than from each call site.
+
+   Owning it here rather than passing `rounded-r-none` per button is what makes
+   a group with a conditional segment correct by construction: Defects renders
+   Start only while a bug is open, so the segment that must square its right
+   edge changes per row, and :first-child / :last-child already know which.
+
+   Nothing outside `.btn-option-group` is touched, so every other Button in the
+   app keeps its own radius and padding.
+
+   72px min-width, not a fixed width: it holds the segments equal for the short
+   labels this design was drawn for ("Edit", "Run", "Rename") while letting a
+   longer transient one ("Starting…", "Replay") grow instead of clipping. */
+.btn-option-group > [data-slot="button"] {
+  min-width: 72px;
+  border-radius: 0;
+}
+.btn-option-group > [data-slot="button"]:first-child {
+  border-radius: var(--option-group-radius) 0 0 var(--option-group-radius);
+}
+.btn-option-group > [data-slot="button"]:last-child {
+  border-radius: 0 var(--option-group-radius) var(--option-group-radius) 0;
+}
+.btn-option-group > [data-slot="button"]:only-child {
+  border-radius: var(--option-group-radius);
+}
+/* One shared 1px line between two bordered segments instead of two abutting
+   ones, which read as a 2px seam at the join. */
+.btn-option-group > [data-slot="button"] + [data-slot="button"] {
+  margin-left: -1px;
+}
+/* The hovered segment's rim and orange edge belong above its neighbour's
+   border, not under it. */
+.btn-option-group > [data-slot="button"]:hover,
+.btn-option-group > [data-slot="button"]:focus-visible {
+  z-index: 1;
+}
+
+/* ── SOW extraction loaders ────────────────────────────────────────────────
+   Two loaders shared by the SOW detail page (app/sow/[id]/page.jsx) and the
+   live extraction panel (components/SowExtractionProgress.tsx).
+
+   They live here rather than in a per-component <style> tag because the
+   capsule renders once per attached-source ROW and the orb once per running
+   STEP -- both repeat, and a style element per instance would ship the same
+   keyframes a dozen times over on a sixteen-part document.
+
+   Colours are literals, not theme tokens, on purpose: both are ports of
+   supplied artwork whose whole identity is the amber/rust ramp. Remapping
+   them onto --foreground/--accent would make them a different design.
+
+   Every animation is switched off under prefers-reduced-motion at the bottom
+   of this block -- PRODUCT.md makes that a requirement, not a nicety, because
+   these panels stay on screen for minutes at a time. */
+
+/* ── The capsule: attached-source extraction progress ───────────────────── */
+.sow-capsule {
+  flex: 1;
+  height: 22px;
+  background: #cce9ff;
+  border-radius: 999px;
+  padding: 3px;
+  box-sizing: border-box;
+  box-shadow: inset 0 0 0 1px rgba(14, 83, 140, 0.16);
+}
+/* min-width holds the fill's own pill shape at 1-2%, where a bare percentage
+   width would collapse it into a sliver too thin to read as a capsule. */
+.sow-capsule__fill {
+  position: relative;
+  height: 100%;
+  min-width: 16px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffcb73, #f5a623);
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+}
+.sow-capsule__sheen {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.5),
+    rgba(255, 255, 255, 0)
+  );
+  animation: sow-capsule-sheen 2.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes sow-capsule-sheen {
+  0% { transform: translateX(-140%); }
+  100% { transform: translateX(320%); }
+}
+/* Rides the fill's leading edge, so it advances with real progress rather
+   than on a timer of its own -- the movement IS the percentage. */
+.sow-capsule__turtle {
+  position: absolute;
+  right: 3px;
+  bottom: 0;
+  display: flex;
+  animation: sow-turtle-walk 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes sow-turtle-walk {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+.sow-turtle__foot {
+  animation: sow-turtle-step 0.75s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+.sow-turtle__foot--b { animation-delay: -0.375s; }
+.sow-turtle__foot--c { animation-delay: -0.2s; }
+@keyframes sow-turtle-step {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(1.4px); }
+}
+.sow-turtle__head {
+  animation: sow-turtle-bob 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes sow-turtle-bob {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(0.8px); }
+}
+/* No-denominator variant: one indivisible LLM call (a recording, a design
+   image, a file read before chunking). It sweeps instead of filling, and
+   carries no turtle -- there is no finish line for it to walk toward, and a
+   travelling mascot on an unknown duration would imply a position it does
+   not have. */
+.sow-capsule--indeterminate { overflow: hidden; }
+.sow-capsule__sweep {
+  height: 100%;
+  width: 38%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffcb73, #f5a623);
+  animation: sow-capsule-sweep 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes sow-capsule-sweep {
+  0% { transform: translateX(-105%); }
+  100% { transform: translateX(275%); }
+}
+
+/* ── The orb: one running step in the live extraction panel ─────────────────
+   A metaball: seven blurred polygons inside an SVG mask, pushed back through
+   contrast() so the blur's soft edges snap into a single molten silhouette.
+   The polygons rotate at different origins and phases, which is what makes
+   the shape churn rather than spin.
+
+   It is authored at 100x100 -- the size the effect was drawn for, and blur
+   radii do not scale with the geometry, so shrinking the source polygons
+   instead would dissolve the silhouette entirely -- then scaled down into a
+   fixed slot at the call site via --sow-orb-scale.
+
+   --sow-orb-scale is UNITLESS and must stay that way: it is the argument to
+   scale(), so a px value (or a calc that divides one, which still yields a
+   length) makes the whole transform declaration invalid and silently drops
+   it, leaving a 100x100 orb sitting on top of the row. 0.18 = an 18px orb. */
+.sow-orb {
+  --sow-orb-one: #ffbf48;
+  --sow-orb-two: #be4a1d;
+  --sow-orb-three: #ffbf4780;
+  --sow-orb-four: #bf4a1d80;
+  --sow-orb-five: #ffbf4740;
+  --sow-orb-time: 2s;
+  --sow-orb-scale: 0.18;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(var(--sow-orb-scale));
+  box-shadow: 0 0 25px 0 var(--sow-orb-three), 0 20px 50px 0 var(--sow-orb-four);
+  animation: sow-orb-colorize calc(var(--sow-orb-time) * 3)
+    cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+.sow-orb::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  border-top: solid 1px var(--sow-orb-one);
+  border-bottom: solid 1px var(--sow-orb-two);
+  background: linear-gradient(180deg, var(--sow-orb-five), var(--sow-orb-four));
+  box-shadow: inset 0 10px 10px 0 var(--sow-orb-three),
+    inset 0 -10px 10px 0 var(--sow-orb-four);
+}
+.sow-orb__box {
+  display: block;
+  width: 100px;
+  height: 100px;
+  background: linear-gradient(
+    180deg,
+    var(--sow-orb-one) 30%,
+    var(--sow-orb-two) 70%
+  );
+}
+.sow-orb svg { position: absolute; }
+/* Targeted by element, not by a hardcoded #id: the mask id is per-instance
+   (useId at the call site) so two running rows cannot collide, which means
+   these rules cannot name it. */
+.sow-orb svg mask {
+  filter: contrast(15);
+  animation: sow-orb-roundness calc(var(--sow-orb-time) / 2) linear infinite;
+}
+.sow-orb svg mask polygon { filter: blur(7px); }
+.sow-orb svg mask polygon:nth-child(1) {
+  transform-origin: 75% 25%;
+  transform: rotate(90deg);
+}
+.sow-orb svg mask polygon:nth-child(2) {
+  transform-origin: 50% 50%;
+  animation: sow-orb-rotate var(--sow-orb-time) linear infinite reverse;
+}
+.sow-orb svg mask polygon:nth-child(3) {
+  transform-origin: 50% 60%;
+  animation: sow-orb-rotate var(--sow-orb-time) linear infinite;
+  animation-delay: calc(var(--sow-orb-time) / -3);
+}
+.sow-orb svg mask polygon:nth-child(4) {
+  transform-origin: 40% 40%;
+  animation: sow-orb-rotate var(--sow-orb-time) linear infinite reverse;
+}
+.sow-orb svg mask polygon:nth-child(5) {
+  transform-origin: 40% 40%;
+  animation: sow-orb-rotate var(--sow-orb-time) linear infinite reverse;
+  animation-delay: calc(var(--sow-orb-time) / -2);
+}
+.sow-orb svg mask polygon:nth-child(6) {
+  transform-origin: 60% 40%;
+  animation: sow-orb-rotate var(--sow-orb-time) linear infinite;
+}
+.sow-orb svg mask polygon:nth-child(7) {
+  transform-origin: 60% 40%;
+  animation: sow-orb-rotate var(--sow-orb-time) linear infinite;
+  animation-delay: calc(var(--sow-orb-time) / -1.5);
+}
+@keyframes sow-orb-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes sow-orb-roundness {
+  0% { filter: contrast(15); }
+  20% { filter: contrast(3); }
+  40% { filter: contrast(3); }
+  60% { filter: contrast(15); }
+  100% { filter: contrast(15); }
+}
+@keyframes sow-orb-colorize {
+  0% { filter: hue-rotate(0deg); }
+  20% { filter: hue-rotate(-30deg); }
+  40% { filter: hue-rotate(-60deg); }
+  60% { filter: hue-rotate(-90deg); }
+  80% { filter: hue-rotate(-45deg); }
+  100% { filter: hue-rotate(0deg); }
+}
+
+/* Both loaders hold a still pose rather than vanishing: the row still has to
+   read as "this is the step in flight". The indeterminate capsule fills
+   solid, because a frozen 38% sliver would look like a stalled 38%. The orb
+   keeps contrast(15) so its silhouette stays crisp instead of resting on the
+   blurred soup the animation cycles through. */
+@media (prefers-reduced-motion: reduce) {
+  .sow-capsule__sheen,
+  .sow-capsule__turtle,
+  .sow-turtle__foot,
+  .sow-turtle__head,
+  .sow-capsule__sweep,
+  .sow-orb,
+  .sow-orb svg mask,
+  .sow-orb svg mask polygon {
+    animation: none;
+  }
+  .sow-capsule__fill { transition: none; }
+  .sow-capsule__sweep { width: 100%; }
+  .sow-orb svg mask { filter: contrast(15); }
 }

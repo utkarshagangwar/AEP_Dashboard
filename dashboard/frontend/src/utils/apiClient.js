@@ -48,7 +48,7 @@ function clearTokens() {
 // module is evaluated — which happens while the JS module graph loads,
 // strictly before React mounts anything. Every page fires several queries
 // on mount (this page alone: environments, credential-profiles, plus
-// whatever AutonomousQASection/SowCheckpointsSection load eagerly), and on
+// whatever VisualAuditSection/SowCheckpointsSection load eagerly), and on
 // a fresh page load the in-memory access token is always empty (it's
 // intentionally never persisted — see header comment). Without this, each
 // of those queries independently 401s before apiFetch's reactive refresh

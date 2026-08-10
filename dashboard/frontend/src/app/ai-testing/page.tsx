@@ -6,7 +6,6 @@ import { apiGet, apiFetch, apiPost, refreshAccessToken } from "@/utils/apiClient
 import { getAccessToken } from "@/lib/api";
 import AppShell from "@/components/AppShell";
 import PageContainer from "@/components/PageContainer";
-import AutonomousQASection from "@/components/AutonomousQASection";
 import VisualAuditSection from "@/components/VisualAuditSection";
 import CoverageTab from "@/components/ai-testing/CoverageTab";
 import ResultsTab from "@/components/ai-testing/ResultsTab";
@@ -166,9 +165,9 @@ export default function AITestingPage() {
   const [defectDescription, setDefectDescription] = useState("");
   const [defectLogged, setDefectLogged] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  // New-test mode picker for the three Vibe Testing surfaces. Switching
-  // modes only toggles visibility, so an in-flight visual audit remains
-  // intact while another web-test mode is selected.
+  // New-test mode picker for the two Vibe Testing surfaces (UI Test and
+  // Functional Test). Switching modes only toggles visibility, so an
+  // in-flight visual audit remains intact while the other mode is selected.
   const [testMode, setTestMode] = useState<TestMode>("functional");
   const [testType, setTestType] = useState<"web" | "android">("web");
   // Structured Functional Test authoring state (New Vibe Test Phase 1) —
@@ -610,11 +609,31 @@ export default function AITestingPage() {
   if (pageTab !== "new" && uiState !== "running") {
     return (
       <AppShell noPadding>
-        <div className="min-h-full bg-gray-50">
+        {/* No bg-gray-50 here -- that painted over the app's shared canvas
+            texture (the grid + bottom glow in app/global.css's `body` rule)
+            on this page only. Every other page renders straight on
+            AppShell's transparent content area; this page had drifted into
+            its own opaque wrapper. */}
+        <div className="min-h-full">
           <PageContainer>
             <div className="mb-8">
-              <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
-              <p className="text-gray-500 mt-1">
+              {/* Matches the shared page-heading style used on Reports,
+                  Defects, SOW, Dashboard, Projects, etc. (22px/600/-0.02em +
+                  13px #6B7280 subtitle) instead of this page's own
+                  text-3xl/font-bold/text-gray-500 treatment, which read as a
+                  different design language for the same kind of element. */}
+              <h1
+                style={{
+                  margin: 0,
+                  fontSize: 22,
+                  fontWeight: 600,
+                  color: "#111827",
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                Vibe Testing
+              </h1>
+              <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6B7280" }}>
                 {pageTab === "results"
                   ? "Every goal-based test run is saved here — open one to review its summary, steps, and video."
                   : pageTab === "coverage"
@@ -641,12 +660,26 @@ export default function AITestingPage() {
   if (uiState === "idle") {
     return (
       <AppShell noPadding>
-        <div className="min-h-full bg-gray-50">
+        {/* No bg-gray-50 -- see the same-named comment in the results/
+            coverage/skills branch above. */}
+        <div className="min-h-full">
           <PageContainer>
             <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 className="text-3xl font-bold text-gray-900">Vibe Testing</h1>
-                <p className="text-gray-500 mt-1">
+                {/* Same shared page-heading style as every other page --
+                    see the comment on this h1/p pair above. */}
+                <h1
+                  style={{
+                    margin: 0,
+                    fontSize: 22,
+                    fontWeight: 600,
+                    color: "#111827",
+                    letterSpacing: "-0.02em",
+                  }}
+                >
+                  Vibe Testing
+                </h1>
+                <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6B7280" }}>
                   Describe a goal, or bring a design — the AI drives the
                   browser or app.
                 </p>
@@ -688,8 +721,7 @@ export default function AITestingPage() {
                 {/* UI Test — VisualAuditSection is self-contained (its own
                     reference upload/Figma-imported picker, target URL, run,
                     poll, and findings display) and doesn't participate in
-                    the goal/runId/SSE state machine below at all — same
-                    pattern as AutonomousQASection. */}
+                    the goal/runId/SSE state machine below at all. */}
                 <div className={testMode === "ui" ? "" : "hidden"}>
                   <VisualAuditSection />
                 </div>
@@ -931,12 +963,6 @@ export default function AITestingPage() {
             </Card>
 
                 </div>
-
-                {/* AutonomousQASection remains feature-detected server-side
-                    and renders null when its backend flag is off. */}
-                <div className={testMode === "visual" ? "" : "hidden"}>
-                  <AutonomousQASection />
-                </div>
               </>
             )}
           </PageContainer>
@@ -985,6 +1011,14 @@ export default function AITestingPage() {
 
     return (
       <AppShell noPadding>
+        {/* bg-white kept here, deliberately, unlike the page's other three
+            states. This is the live action log + browser-frame view -- the
+            "evidence, stays precise and sober" surface PRODUCT.md calls out
+            (as opposed to loading/empty/onboarding states, which get the
+            mascot's personality). The log panel below has no background of
+            its own, so an untinted page canvas keeps every step row legible
+            against a flat surface instead of the grid+glow texture — the
+            same reason a Card or table never shows it either. */}
         <div className="flex flex-col h-full bg-white overflow-hidden">
           {/* Goal header bar */}
           <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 bg-white flex-shrink-0">
@@ -1183,7 +1217,9 @@ export default function AITestingPage() {
 
   return (
     <AppShell noPadding>
-      <div className="min-h-full bg-gray-50">
+      {/* No bg-gray-50 -- see the same-named comment on the other Vibe
+          Testing states above. */}
+      <div className="min-h-full">
         {/* Goal bar */}
         <div className="border-b border-gray-100 bg-white px-6 py-3 text-sm">
           <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide mr-2">

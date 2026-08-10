@@ -348,6 +348,24 @@ class AISkillResponse(BaseModel):
     # run as-is. review_reason says what specifically is missing.
     review_status: Optional[str] = None
     review_reason: Optional[str] = None
+    # ── TDD classification (app.services.tdd_extraction) ──
+    # All Optional: skills created before the v2 extractor carry None, which
+    # the UI renders as "unclassified" rather than guessing a value.
+    #
+    # test_type is the one a reviewer cannot do without: a "negative" skill
+    # PASSES when the system refuses the action, so a red result on a
+    # negative skill means the product ACCEPTED something it should have
+    # rejected — the opposite reading from a red positive skill.
+    test_type: Optional[str] = None          # positive | negative | edge
+    category: Optional[str] = None           # tdd_extraction.CATEGORIES code
+    # stated = the source document specifies this expectation.
+    # derived = inferred from standard QA practice; a failure here may be a
+    # spec gap rather than a product defect.
+    grounding: Optional[str] = None
+    # Shared by every variant of one behaviour — lets the Skills tab group
+    # positive/negative/edge for the same feature together.
+    behaviour_key: Optional[str] = None
+    priority: Optional[str] = None           # smoke | sanity | regression
     step_count: int = 0
     times_replayed: int = 0
     last_replay_status: Optional[str] = None
@@ -459,3 +477,54 @@ class CoverageResponse(BaseModel):
     # linked requirement" instead of silently omitting them with no trace.
     unlinked_functional_count: int = 0
     unlinked_ui_count: int = 0
+
+
+class SpecGapEntry(BaseModel):
+    """One derived expectation that the product has never once satisfied.
+
+    A `derived` skill (app.services.tdd_extraction) asserts something the
+    source document never actually stated — it was inferred from standard QA
+    practice, because documents rarely enumerate their own failure modes.
+    When such a test fails there are two possible explanations and they need
+    opposite responses:
+
+      * the product is wrong  -> raise a defect
+      * the INFERENCE is wrong, because the product deliberately behaves
+        differently and the document simply never said so -> fix the document
+
+    Nothing in the pipeline could tell those apart, so in practice every
+    failing derived test was triaged as the first. This entry surfaces the
+    ones where the second is likely.
+    """
+
+    skill_id: UUID
+    name: str
+    test_type: Optional[str] = None       # negative | edge
+    category: Optional[str] = None
+    behaviour_key: Optional[str] = None
+    project_id: Optional[UUID] = None
+    project_name: Optional[str] = None
+    source_type: Optional[str] = None     # sow | video
+    source_artifact_id: Optional[UUID] = None
+    # Decided runs only (passed/failed). needs_review, inconclusive,
+    # cancelled, pending and running are excluded from BOTH counts — an
+    # undecided run is not evidence either way.
+    decided_runs: int = 0
+    fail_count: int = 0
+    last_run_at: Optional[str] = None
+    # The agent's own words on the most recent failure. Usually the fastest
+    # way for a human to tell "the product refused differently than we
+    # guessed" from "the product genuinely accepted something it shouldn't".
+    last_failure_summary: Optional[str] = None
+
+
+class SpecGapResponse(BaseModel):
+    entries: list[SpecGapEntry] = []
+    # Denominators, so the headline number can be read honestly. A report of
+    # "7 spec gaps" means something different against 12 derived skills than
+    # against 400.
+    total_derived_skills: int = 0
+    # Derived skills with at least min_runs decided runs — the only ones that
+    # could have qualified. The rest have simply not been run enough yet.
+    evaluated_skills: int = 0
+    min_runs: int = 2

@@ -43,6 +43,8 @@ from app.schemas.ai_runs import (
     FunctionalTestDataSet,
     OrchestratorDecisionResponse,
     SkillReplayRequest,
+    SpecGapEntry,
+    SpecGapResponse,
     VisualFindingResponse,
 )
 from app.services.audit_service import write_audit_log
@@ -706,6 +708,133 @@ def get_coverage(
         )
     except SQLAlchemyError as exc:
         logger.error("Coverage report DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+def is_spec_gap_candidate(decided_statuses: list, min_runs: int) -> bool:
+    """Has this derived expectation NEVER once been satisfied?
+
+    Pure, and separated from the endpoint on purpose: this rule is the whole
+    report, and it should be testable without a database.
+
+    decided_statuses: the skill's runs that reached passed/failed, in any
+    order. Undecided runs (needs_review, inconclusive, cancelled, pending,
+    running) must already be filtered out by the caller — an undecided run is
+    not evidence in either direction, so it belongs in neither the numerator
+    nor the denominator.
+
+    "Never passed" rather than "fails often" is deliberate. A derived test
+    that sometimes passes is flaky, environment-dependent or data-dependent;
+    those are product and infrastructure concerns. Only consistent failure
+    across several runs looks like a systematic disagreement between the
+    inferred expectation and the product — which is what a spec gap is. The
+    consistency requirement is also what keeps the list short enough to read.
+    """
+    if len(decided_statuses) < min_runs:
+        return False
+    return all(status == AIRunStatus.failed for status in decided_statuses)
+
+
+@router.get("/spec-gaps", response_model=SpecGapResponse)
+def get_spec_gaps(
+    min_runs: int = Query(default=2, ge=1, le=20),
+    project_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Derived expectations the product has never once satisfied.
+
+    Most negative and edge tests are `grounding="derived"`: the source
+    document does not enumerate its own failure modes, so the expectation was
+    inferred from standard QA practice. That is correct and wanted — but it
+    means a failing derived test has TWO possible explanations, needing
+    opposite responses: the product is wrong (raise a defect), or the
+    INFERENCE is wrong because the product deliberately does something else
+    and the document never said so (fix the document). Nothing aggregated
+    that, so in practice every failure was triaged as the first.
+
+    THE SELECTION RULE, and why it is "never once passed" rather than "fails
+    often": a derived test that sometimes passes is flaky, or
+    environment-dependent, or data-dependent — all product/infra concerns. A
+    derived test that has NEVER passed across several decided runs is a
+    systematic disagreement between the inferred expectation and the product,
+    which is what a spec gap looks like. Requiring consistency is what keeps
+    this list short enough to actually read.
+
+    This is a list of CANDIDATES, not a verdict. A never-passing derived test
+    can still be a real, long-standing product defect; the point is that it
+    can no longer only be read that way.
+
+    Undecided runs (needs_review, inconclusive, cancelled, pending, running)
+    are excluded from both the numerator and the denominator — an undecided
+    run is not evidence in either direction.
+    """
+    try:
+        q = db.query(AISkill).filter(AISkill.grounding == "derived")
+        if project_id == "none":
+            q = q.filter(AISkill.project_id.is_(None))
+        elif project_id:
+            try:
+                q = q.filter(AISkill.project_id == UUID(project_id))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="project_id must be a UUID or 'none'")
+        derived_skills = q.all()
+
+        entries: list[SpecGapEntry] = []
+        evaluated = 0
+        for skill in derived_skills:
+            runs = (
+                db.query(AITestRun)
+                .filter(
+                    AITestRun.skill_id == skill.id,
+                    AITestRun.status.in_(
+                        [AIRunStatus.passed, AIRunStatus.failed]
+                    ),
+                )
+                .order_by(AITestRun.created_at.asc())
+                .all()
+            )
+            if len(runs) < min_runs:
+                # Not run enough yet to say anything. Counted nowhere: it is
+                # neither a gap nor evidence that there is no gap.
+                continue
+            evaluated += 1
+            if not is_spec_gap_candidate([r.status for r in runs], min_runs):
+                continue
+
+            last = runs[-1]
+            entries.append(
+                SpecGapEntry(
+                    skill_id=skill.id,
+                    name=skill.name,
+                    test_type=skill.test_type,
+                    category=skill.category,
+                    behaviour_key=skill.behaviour_key,
+                    project_id=skill.project_id,
+                    source_type=skill.source_type,
+                    source_artifact_id=skill.source_artifact_id,
+                    decided_runs=len(runs),
+                    fail_count=len(runs),
+                    last_run_at=last.created_at.isoformat() if last.created_at else None,
+                    last_failure_summary=(last.summary or None),
+                )
+            )
+
+        names = _project_names(db, {e.project_id for e in entries})
+        for entry in entries:
+            entry.project_name = names.get(entry.project_id)
+
+        # Most-failed first: the one with the longest run of disagreement is
+        # the one most likely to be a spec problem rather than a flake.
+        entries.sort(key=lambda e: (-e.fail_count, e.name))
+        return SpecGapResponse(
+            entries=entries,
+            total_derived_skills=len(derived_skills),
+            evaluated_skills=evaluated,
+            min_runs=min_runs,
+        )
+    except SQLAlchemyError as exc:
+        logger.error("Spec-gap report DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 

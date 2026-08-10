@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.core.dependencies import get_current_user, get_db, require_permission
+from app.core.dependencies import (
+    get_current_user,
+    get_db,
+    require_permission,
+    require_roles,
+)
 from app.core.logging import get_logger
 from app.models.defect import DefectSeverity, DefectStatus
 from app.models.user import User, UserRole
@@ -137,15 +142,32 @@ def list_defects(
     severity: Optional[str] = Query(None),
     defect_status: Optional[str] = Query(None, alias="status"),
     assigned_to: Optional[UUID] = Query(None),
+    deleted: bool = Query(
+        False,
+        description="Return soft-deleted defects instead of live ones. "
+        "Admin and QA lead only — this is the recovery view.",
+    ),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """List defects with filters. Developers only see their assigned defects."""
+    # The recovery view is gated here rather than by a route dependency,
+    # because the same endpoint serves the normal list to everyone. Rejecting
+    # rather than silently returning live rows: a caller asking for deleted
+    # defects and getting live ones back would be a much worse failure.
+    if deleted and current_user.role not in (UserRole.admin, UserRole.qa_lead):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an admin or QA lead can view deleted defects",
+        )
+
     try:
         offset = (page - 1) * limit
-        where = "WHERE 1=1"
+        # Soft delete is invisible by default: every caller that does not
+        # explicitly ask for the recovery view sees live defects only.
+        where = "WHERE d.deleted_at IS " + ("NOT NULL" if deleted else "NULL")
         params: dict = {}
 
         # Developer restriction
@@ -184,11 +206,13 @@ def list_defects(
                        r.full_name AS reported_by_name,
                        d.assigned_to, a.full_name AS assigned_to_name,
                        tr.test_name AS linked_test_name,
-                       d.created_at
+                       d.created_at,
+                       d.deleted_at, x.full_name AS deleted_by_name
                 FROM defects d
                 LEFT JOIN projects p ON d.project_id = p.id
                 LEFT JOIN users r ON d.reported_by = r.id
                 LEFT JOIN users a ON d.assigned_to = a.id
+                LEFT JOIN users x ON d.deleted_by = x.id
                 LEFT JOIN test_results tr ON d.test_result_id = tr.id
                 {where}
                 ORDER BY
@@ -208,6 +232,7 @@ def list_defects(
                 project_id=r[5], project_name=r[6],
                 reported_by_name=r[7], assigned_to=r[8], assigned_to_name=r[9],
                 linked_test_name=r[10], created_at=r[11],
+                deleted_at=r[12], deleted_by_name=r[13],
             )
             for r in rows
         ]
@@ -300,11 +325,15 @@ def update_defect(
             text(
                 "SELECT id, test_result_id, project_id, reported_by, title, description, "
                 "severity, status, assigned_to, created_at, updated_at "
-                "FROM defects WHERE id = :did"
+                "FROM defects WHERE id = :did AND deleted_at IS NULL"
             ),
             {"did": str(defect_id)},
         ).fetchone()
 
+        # `deleted_at IS NULL` is part of the lookup, not a separate check: a
+        # soft-deleted defect is gone as far as every write path is concerned,
+        # so editing one 404s exactly as a hard-deleted one would. Restoring is
+        # the only way back, and it has its own endpoint below.
         if not row:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -411,4 +440,123 @@ def update_defect(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update defect",
+        )
+
+
+@router.delete("/{defect_id}", status_code=status.HTTP_200_OK)
+def delete_defect(
+    defect_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("defects")),
+):
+    """Soft delete a defect: stamps deleted_at/deleted_by and drops it out of
+    the list. Nothing is cascaded and no column is cleared, so an admin or QA
+    lead can restore it intact — a bug record is the audit trail for a failure
+    and hard-deleting one loses history that cannot be reconstructed.
+
+    Gated on the same `defects` permission as editing, deliberately: this is a
+    reversible hide, not an erase, so it does not warrant a stricter gate than
+    the operation that can rewrite the bug's title and severity.
+    """
+    try:
+        # UPDATE ... WHERE deleted_at IS NULL rather than SELECT-then-UPDATE:
+        # one statement, and a double-submit lands on the second call finding
+        # no row and returning 404 instead of silently re-stamping a different
+        # user as the deleter.
+        row = db.execute(
+            text(
+                """
+                UPDATE defects
+                SET deleted_at = NOW(), deleted_by = :uid, updated_at = NOW()
+                WHERE id = :did AND deleted_at IS NULL
+                RETURNING id, title
+                """
+            ),
+            {"did": str(defect_id), "uid": str(current_user.id)},
+        ).fetchone()
+
+        if not row:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Defect not found",
+            )
+        db.commit()
+
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="defect_deleted",
+            resource_type="defect",
+            resource_id=str(defect_id),
+            details={"title": row[1], "soft": True},
+        )
+        logger.info("Defect %s soft-deleted by %s", defect_id, current_user.id)
+        # 200 + JSON body, not 204: the shared frontend apiDelete() client
+        # (utils/apiClient.js) unconditionally calls res.json() on success, so a
+        # 204 would parse-error on every successful delete in the UI.
+        return {"message": "Defect deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed to delete defect: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete defect",
+        )
+
+
+@router.post("/{defect_id}/restore", status_code=status.HTTP_200_OK)
+def restore_defect(
+    defect_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.admin, UserRole.qa_lead)),
+):
+    """Put a soft-deleted defect back in the list.
+
+    Admin and QA lead only. Deleting is reversible so it can stay on the
+    ordinary `defects` permission; undoing someone else's delete is a
+    supervisory act, and the Deleted view it is reached from is gated the same
+    way.
+    """
+    try:
+        row = db.execute(
+            text(
+                """
+                UPDATE defects
+                SET deleted_at = NULL, deleted_by = NULL, updated_at = NOW()
+                WHERE id = :did AND deleted_at IS NOT NULL
+                RETURNING id, title
+                """
+            ),
+            {"did": str(defect_id)},
+        ).fetchone()
+
+        if not row:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Deleted defect not found",
+            )
+        db.commit()
+
+        write_audit_log(
+            db,
+            user_id=current_user.id,
+            action="defect_restored",
+            resource_type="defect",
+            resource_id=str(defect_id),
+            details={"title": row[1]},
+        )
+        logger.info("Defect %s restored by %s", defect_id, current_user.id)
+        return {"message": "Defect restored successfully"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed to restore defect: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to restore defect",
         )

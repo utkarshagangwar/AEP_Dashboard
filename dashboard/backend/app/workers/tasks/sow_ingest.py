@@ -40,6 +40,7 @@ into the artifact's single design_rules row after each part completes.
 import os
 
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -86,11 +87,23 @@ def _recompute_artifact_status(session, artifact) -> None:
         artifact.parse_status = ParseStatus.pending
 
 
-def _merge_checkpoints(session, artifact) -> None:
-    """Recompute the artifact's DesignRule as the concatenation (by
-    part_number) of every 'done' part's checkpoints. No cross-chunk dedup —
-    simple, predictable concatenation."""
+def _merge_checkpoints(session, artifact) -> dict[int, set[int]]:
+    """Recompute the artifact's DesignRule from every 'done' part, merging
+    duplicates across parts (tdd_extraction Stage 6).
+
+    A SOW almost always describes a feature twice — once in a summary section,
+    once in detail — and those land in different parts. Per-part extraction
+    cannot see that, so before this the document list carried both copies and
+    each produced its own Skill.
+
+    Returns absorbed: part_number -> indices of that part's checkpoints that
+    were merged into an earlier part's. The caller uses it to skip creating
+    duplicate Skills. Each SowPart.checkpoints is deliberately left untouched:
+    it stays the record of what that section actually produced, and the
+    merging is a document-level view over it.
+    """
     from app.models.visual_qa import DesignRule, ParseStatus, SowPart
+    from app.services import tdd_extraction
 
     done_parts = (
         session.query(SowPart)
@@ -98,12 +111,22 @@ def _merge_checkpoints(session, artifact) -> None:
         .order_by(SowPart.part_number)
         .all()
     )
-    checkpoints: list = []
     models_used: list[str] = []
     for p in done_parts:
-        checkpoints.extend(p.checkpoints or [])
         if p.parsed_by_model and p.parsed_by_model not in models_used:
             models_used.append(p.parsed_by_model)
+
+    # The naming-consolidation call runs once, when the last part lands —
+    # a 12-part document pays for one call, not twelve, and names that are
+    # still arriving are not consolidated against. Merging itself is
+    # deterministic and happens on every call regardless.
+    reconciled = tdd_extraction.reconcile_across_parts(
+        [{"part_number": p.part_number, "checkpoints": p.checkpoints or []} for p in done_parts],
+        finalize=len(done_parts) >= (artifact.total_parts or 1),
+    )
+    checkpoints = reconciled.checkpoints
+    if reconciled.model_used and reconciled.model_used not in models_used:
+        models_used.append(reconciled.model_used)
 
     rule = session.query(DesignRule).filter(DesignRule.artifact_id == artifact.id).first()
     if rule is None:
@@ -111,6 +134,7 @@ def _merge_checkpoints(session, artifact) -> None:
         session.add(rule)
     rule.checkpoints = checkpoints
     rule.parsed_by_model = ", ".join(models_used) if models_used else None
+    return reconciled.absorbed
 
 
 def _chain_next_part(session, artifact, current_part_number: int) -> None:
@@ -198,7 +222,7 @@ def _analyze_part(session, artifact, part) -> None:
     Shared by ingest_sow_task (auto single-part case) and
     analyze_sow_part_task (manual multi-part case)."""
     from app.models.visual_qa import ParseStatus
-    from app.services import design_ingest
+    from app.services import design_ingest, tdd_extraction
 
     part.status = ParseStatus.processing
     artifact.parse_status = ParseStatus.processing
@@ -219,9 +243,57 @@ def _analyze_part(session, artifact, part) -> None:
         content = f"{part.context_header}\n\n<content>\n{part.content}\n</content>"
         part_label = None  # the header already states the part and section
 
+    # The project's UI naming reference, so generated instructions name the
+    # product's real controls instead of the document's wording for them (see
+    # app.services.ui_inventory). Built once per project and cached, so this
+    # costs one vision call for the first part of the first SOW and nothing
+    # afterwards. Returns None — and extraction proceeds on text alone — for
+    # an artifact with no project, with no evidence uploaded, or when the
+    # vision call fails.
+    from app.services import sow_progress, ui_inventory as ui_inventory_service
+
+    progress = sow_progress.reporter(artifact.id, part.part_number)
+    if artifact.total_parts and artifact.total_parts > 1:
+        progress(
+            "part", sow_progress.RUNNING,
+            f"Reading part {part.part_number} of {artifact.total_parts}",
+            {"part": part.part_number, "total": artifact.total_parts},
+        )
+
+    ui_inventory = ui_inventory_service.get_inventory_text(session, artifact.project_id)
+    # Reported per part rather than once, because it is the answer to "will
+    # this test say Apply Now or Submit Application" and that answer applies
+    # to every part. Absence is stated, not left silent: a reader who cannot
+    # see that no reference was used has no way to explain wrong labels later.
+    if ui_inventory:
+        progress(
+            "naming_reference", sow_progress.DONE,
+            f"Using the project's UI naming reference "
+            f"({ui_inventory.count(chr(10) + '- ') + 1} screens) so tests name real controls",
+        )
+    else:
+        progress(
+            "naming_reference", sow_progress.SKIPPED,
+            "No UI naming reference for this project — tests will name controls "
+            "the way the document does",
+        )
+
     try:
-        checkpoints, model_used = design_ingest.parse_sow(content, part_label=part_label)
+        # parse_sow_detailed (not parse_sow) so the testability gate's
+        # exclusions and the coverage scorecard can be persisted on the part.
+        # Losing them would make the gate unauditable — see SowPart.excluded_zones.
+        extraction = design_ingest.parse_sow_detailed(
+            content,
+            part_label=part_label,
+            ui_inventory=ui_inventory,
+            on_progress=progress,
+        )
+        checkpoints, model_used = extraction.checkpoints, extraction.model_used
     except design_ingest.IngestError as exc:
+        # The failure is a progress event too. A panel that simply stops
+        # updating is indistinguishable from one whose worker died, and the
+        # reader is left watching a spinner that will never resolve.
+        progress("extract", sow_progress.ERROR, f"Extraction failed: {exc}")
         part.status = ParseStatus.error
         part.error = str(exc)
         # autoflush is off for this session — flush explicitly so
@@ -239,26 +311,92 @@ def _analyze_part(session, artifact, part) -> None:
         return
 
     part.checkpoints = checkpoints
+    part.excluded_zones = extraction.excluded_zones or None
+    part.coverage_json = extraction.coverage or None
     part.parsed_by_model = model_used
     part.status = ParseStatus.done
     # Same reason as above: flush before the helpers re-query SowPart rows.
     session.flush()
-    _merge_checkpoints(session, artifact)
+    absorbed = _merge_checkpoints(session, artifact)
     _recompute_artifact_status(session, artifact)
-    _save_functional_skills(session, artifact, checkpoints, part.part_number)
+    # Skip the checkpoints this part restated from an earlier one: the Skill
+    # already exists, created by the part that stated it first. Without this
+    # the document list would be reconciled while the Skills tab still showed
+    # both copies — which is the half of the problem the user actually sees.
+    skipped = absorbed.get(part.part_number) or set()
+    if skipped:
+        progress(
+            "reconcile", sow_progress.DONE,
+            f"Merged {len(skipped)} test{'' if len(skipped) == 1 else 's'} that "
+            "an earlier part already covered",
+            {"merged": len(skipped)},
+        )
+    saved = _save_functional_skills(
+        session, artifact, checkpoints, part.part_number,
+        skip_indices=skipped,
+    )
     session.commit()
+    # Emitted after the commit that persists them: an event claiming skills
+    # exist before the transaction that creates them has landed would be a
+    # promise the database has not yet made.
+    progress(
+        "skills", sow_progress.DONE,
+        f"Saved {saved} runnable skill{'' if saved == 1 else 's'} to Vibe Testing",
+        {"skills": saved},
+    )
+    # Closes the RUNNING "Reading part N of M" above -- same emit-don't-edit
+    # reasoning as the read stage in _run_sow_ingest, and guarded on the same
+    # condition that opened it so the pair can never be half-emitted.
+    #
+    # Deliberately only on the success path. The failure path returns early
+    # above, having emitted its own `extract`/ERROR event for this part; the
+    # panel resolves a group whose child errored to error, so the header still
+    # stops spinning without a second error row restating the same failure.
+    if artifact.total_parts and artifact.total_parts > 1:
+        progress(
+            "part", sow_progress.DONE,
+            f"Finished part {part.part_number} of {artifact.total_parts}",
+            {"part": part.part_number, "total": artifact.total_parts},
+        )
+    coverage = extraction.coverage or {}
     logger.info(
-        "SOW ingest: artifact %s part %d/%d parsed into %d checkpoint(s) via %s",
+        "SOW ingest: artifact %s part %d/%d parsed into %d checkpoint(s) "
+        "(neg+edge ratio %.2f, %d zone(s) excluded as non-testable) via %s",
         artifact.id,
         part.part_number,
         artifact.total_parts,
         len(checkpoints),
+        coverage.get("negative_edge_ratio", 0.0),
+        len(extraction.excluded_zones or []),
         model_used,
     )
+    # Extraction QUALITY gate (TDD_EXTRACTION_SPEC.md §10). Distinct from the
+    # error path above, which catches extraction FAILING. This catches
+    # extraction succeeding while producing the wrong shape of output —
+    # happy-path-only checkpoints, the original defect — which is otherwise
+    # invisible until someone reads every generated skill. Warn only: the
+    # checkpoints are kept and the part is still `done`, because a thin
+    # section can legitimately score low and discarding real requirements over
+    # a heuristic would be far worse than a noisy log line.
+    gate_warning = tdd_extraction.ratio_gate_warning(extraction.coverage)
+    if gate_warning:
+        logger.warning(
+            "SOW ingest: artifact %s part %d/%d — %s",
+            artifact.id,
+            part.part_number,
+            artifact.total_parts,
+            gate_warning,
+        )
     _chain_next_part(session, artifact, part.part_number)
 
 
-def _save_functional_skills(session, artifact, checkpoints: list[dict], part_number: int) -> None:
+def _save_functional_skills(
+    session,
+    artifact,
+    checkpoints: list[dict],
+    part_number: int,
+    skip_indices: set[int] | None = None,
+) -> int:
     """Save every functional checkpoint from this part directly as a skill —
     a detailed prompt instruction, no live browser run required. Visual
     checkpoints (pixel-diff/appearance claims) have nothing to execute, so
@@ -277,12 +415,39 @@ def _save_functional_skills(session, artifact, checkpoints: list[dict], part_num
     silently poisoning the whole transaction at the final commit in
     _analyze_part. A single bad checkpoint is logged and skipped; it can
     never take the rest of the part's checkpoints down with it, and parsing
-    itself is never failed by a skill-capture problem."""
-    from app.services.skill_store import upsert_prompt_skill
+    itself is never failed by a skill-capture problem.
 
+    A behaviour now produces SEVERAL checkpoints (positive / negative / edge,
+    per app.services.tdd_extraction), and each becomes its own skill: a
+    negative case is a separate runnable test, not a footnote on the happy
+    path. They stay linked by behaviour_key so the Skills tab can group them.
+
+    Checkpoints with grounding="derived" — the negative/edge cases inferred
+    from standard QA practice rather than stated in the document — become
+    skills by default, because a suite with no negative coverage is the
+    problem this pipeline exists to fix. Set TDD_DERIVED_AS_SKILLS=0 to hold
+    them back for review instead; they remain in the checkpoint list either
+    way."""
+    from app.services.skill_store import upsert_prompt_skill
+    from app.services.tdd_extraction import derived_as_skills
+
+    allow_derived = derived_as_skills()
+    skip_indices = skip_indices or set()
     seen_titles: set[str] = set()
+    saved = 0
     for i, cp in enumerate(checkpoints):
         if cp.get("type") != "functional" or not cp.get("description"):
+            continue
+        if i in skip_indices:
+            # Cross-part reconciliation matched this to a checkpoint an
+            # earlier part already produced. The requirement is not lost —
+            # its Skill exists, and the document-level checkpoint records
+            # this part in merged_from_parts.
+            logger.info(
+                "SOW ingest: checkpoint %r in part %d restates one from an "
+                "earlier part — existing skill kept, no duplicate created",
+                cp.get("title") or "Untitled requirement", part_number,
+            )
             continue
         if cp.get("review_status"):
             logger.info(
@@ -291,8 +456,19 @@ def _save_functional_skills(session, artifact, checkpoints: list[dict], part_num
                 cp.get("review_reason") or "source details are incomplete or conflicting",
             )
             continue
+        if cp.get("grounding") == "derived" and not allow_derived:
+            logger.info(
+                "SOW ingest: held derived checkpoint %r from skill creation "
+                "(TDD_DERIVED_AS_SKILLS is disabled)",
+                cp.get("title") or "Untitled requirement",
+            )
+            continue
         title = (cp.get("title") or cp["description"][:80]).strip()
-        dedup_key = title.lower()
+        # Include the test type in the identity: "Create Job" positive and
+        # "Create Job" negative are two different tests, and a model that
+        # titles both of them identically must not have one overwrite the
+        # other via the shared source_key.
+        dedup_key = f"{title.lower()}|{cp.get('test_type') or ''}"
         if dedup_key in seen_titles:
             # Two checkpoints in this batch would slugify to the same
             # source_key — disambiguate rather than letting the second
@@ -322,14 +498,25 @@ def _save_functional_skills(session, artifact, checkpoints: list[dict], part_num
                     project_id=artifact.project_id,
                     review_status=cp.get("review_status"),
                     review_reason=cp.get("review_reason"),
+                    test_type=cp.get("test_type"),
+                    category=cp.get("category"),
+                    grounding=cp.get("grounding"),
+                    behaviour_key=cp.get("behaviour_key"),
+                    priority=cp.get("priority"),
                 )
                 session.flush()
+            # Counted only after the flush succeeds. Counting the attempt
+            # would let the progress panel report skills that a SAVEPOINT
+            # then rolled back — the panel must not be more optimistic than
+            # the database.
+            saved += 1
         except Exception:
             logger.exception(
                 "SOW ingest: failed to save skill for checkpoint %r of artifact %s "
                 "— skipped, other checkpoints processed normally",
                 title, artifact.id,
             )
+    return saved
 
 
 @celery_app.task(
@@ -337,10 +524,11 @@ def _save_functional_skills(session, artifact, checkpoints: list[dict], part_num
     bind=True,
     max_retries=0,
 )
+@ai_usage.tracked_task("sow_import")
 def ingest_sow_task(self, artifact_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.visual_qa import DesignArtifact, DesignRule, ParseStatus, SowPart
-    from app.services import design_ingest
+    from app.services import design_ingest, sow_progress
 
     session = SessionLocal()
     try:
@@ -369,6 +557,16 @@ def ingest_sow_task(self, artifact_id: str) -> None:
         artifact.parse_status = ParseStatus.processing
         session.commit()
 
+        # Fresh run, fresh timeline. A retried artifact would otherwise show
+        # the failed attempt's steps stacked above the new ones with nothing
+        # marking the boundary, which reads as one very confused run.
+        sow_progress.clear(artifact.id)
+        progress = sow_progress.reporter(artifact.id)
+        progress(
+            "read", sow_progress.RUNNING,
+            f"Reading {artifact.file_name}",
+        )
+
         try:
             # Structure-aware chunking (SOW_CHUNKING_PLAN Phase 3) needs the
             # block list; the flat text is no longer read here at all.
@@ -376,13 +574,28 @@ def ingest_sow_task(self, artifact_id: str) -> None:
                 artifact.storage_path, artifact.file_name
             )
         except design_ingest.IngestError as exc:
+            progress("read", sow_progress.ERROR, f"Could not read the document: {exc}")
             artifact.parse_status = ParseStatus.error
             artifact.parse_error = str(exc)
             session.commit()
             logger.warning("SOW ingest: artifact %s failed: %s", artifact_id, exc)
             return
 
-        from app.services.doc_chunking import chunk_document
+        # Closes the RUNNING event above.
+        #
+        # A stage is finished by EMITTING its completion, never by editing the
+        # row that opened it: the panel polls
+        # visual_audit.get_sow_progress with `?after=<last sequence seen>`, so
+        # it only ever receives rows it has not read yet. An in-place update to
+        # an earlier row would be invisible to every client already past that
+        # sequence -- which is every client that saw the stage start.
+        #
+        # The panel folds this onto the opening row rather than rendering both,
+        # so the timeline still reads "Reading <file>" once, ticked. See
+        # SowExtractionProgress.buildGroups.
+        progress("read", sow_progress.DONE, f"Read {artifact.file_name}")
+
+        from app.services.doc_chunking import STRATEGY_HARD_SPLIT, chunk_document
 
         chunks = chunk_document(
             blocks,
@@ -409,6 +622,17 @@ def ingest_sow_task(self, artifact_id: str) -> None:
         ]
         session.add_all(parts)
         artifact.total_parts = len(parts)
+        # Degraded chunks are named here rather than only in the log: a part
+        # cut mid-paragraph extracts worse, and the reader deserves to know
+        # that before wondering why one section produced weak tests.
+        degraded = sum(1 for c in chunks if c.strategy == STRATEGY_HARD_SPLIT)
+        progress(
+            "chunk", sow_progress.DONE,
+            f"Read the document and split it into {len(parts)} part"
+            f"{'' if len(parts) == 1 else 's'}"
+            + (f" ({degraded} had to be cut mid-section)" if degraded else ""),
+            {"parts": len(parts), "degraded": degraded},
+        )
 
         if not _auto_analyze_enabled() and len(parts) > 1:
             # Explicit opt-out only. Multi-part documents used to land here
@@ -466,6 +690,7 @@ def ingest_sow_task(self, artifact_id: str) -> None:
     bind=True,
     max_retries=0,
 )
+@ai_usage.tracked_task("sow_import")
 def analyze_sow_part_task(self, artifact_id: str, part_number: int) -> None:
     from app.core.database import SessionLocal
     from app.models.visual_qa import DesignArtifact, ParseStatus, SowPart

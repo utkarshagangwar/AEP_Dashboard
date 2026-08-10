@@ -4,6 +4,8 @@ import { useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
+import NavigationLoadingProvider from "./NavigationLoadingProvider";
 
 // The pre-emptive "redeem the refresh cookie before anything else fires"
 // logic that used to live here has moved to module-load time in
@@ -32,10 +34,15 @@ export default function Providers({ children }) {
       {/* Short delay rather than 0: these tooltips sit on table-row action
           icons, and an instant popup on every pointer cross is noise. */}
       <TooltipProvider delay={350}>
-        {children}
+        {/* Outside AppShell on purpose — the loading overlay covers the
+            sidebar as well as the content area. */}
+        <NavigationLoadingProvider>{children}</NavigationLoadingProvider>
         {/* Bottom-right so it never covers the sidebar nav or a page's
             top-right primary actions. */}
         <Toaster position="bottom-right" />
+        {/* One shared confirm dialog for the whole app -- see lib/confirm.ts.
+            Renders nothing until something calls confirmDialog(). */}
+        <ConfirmDialogHost />
       </TooltipProvider>
     </QueryClientProvider>
   );

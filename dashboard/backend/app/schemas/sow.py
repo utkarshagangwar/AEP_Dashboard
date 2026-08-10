@@ -30,6 +30,11 @@ class SowDocumentOut(BaseModel):
     id: UUID
     project_id: Optional[UUID]
     title: str
+    # Current canonical URL identifier (migration 0048). The frontend
+    # compares this against whatever identifier is in its own URL and
+    # replaces the URL when they differ -- that's how an old/renamed-away
+    # slug, or a raw id link, silently redirects to the live one.
+    slug: str
     status: str
     is_active: bool
     current_version_id: Optional[UUID]

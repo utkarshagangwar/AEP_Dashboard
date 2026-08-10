@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timezone
 
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -1052,6 +1053,7 @@ def _maybe_bump_skill_stats(db, run, status: str) -> None:
     soft_time_limit=_VIBE_TEST_SOFT_TIME_LIMIT_S,
     time_limit=_VIBE_TEST_HARD_TIME_LIMIT_S,
 )
+@ai_usage.tracked_task("ai_run")
 def run_ai_test_task(self, run_id: str) -> None:
     """Execute an AI test run identified by run_id."""
     from app.core.database import SessionLocal
@@ -1203,6 +1205,7 @@ def run_ai_test_task(self, run_id: str) -> None:
     max_retries=0,
     acks_late=True,
 )
+@ai_usage.tracked_task("ai_run")
 def replay_skill_task(self, run_id: str, skill_id: str, allow_ai_fallback: bool = False) -> None:
     """Replay a saved skill's recorded actions as a normal AI test run.
 

@@ -233,7 +233,14 @@ export default function VisualAuditSection() {
       <CardContent className="space-y-4">
         {/* Reference picker + upload */}
         <div className="flex gap-3 flex-wrap items-center">
-          <Select value={selectedRef} onValueChange={(v) => setSelectedRef(v ?? "")}>
+          <Select
+            value={selectedRef}
+            onValueChange={(v) => setSelectedRef(v ?? "")}
+            items={references.map((r) => ({
+              value: r.id,
+              label: r.file_name + (r.target_page ? ` — ${r.target_page}` : ""),
+            }))}
+          >
             <SelectTrigger className="w-auto min-w-[220px] h-9 text-sm">
               <SelectValue placeholder="Reference design (PNG)" />
             </SelectTrigger>

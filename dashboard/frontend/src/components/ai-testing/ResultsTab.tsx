@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiFetch } from "@/utils/apiClient";
+import { confirmDialog } from "@/lib/confirm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { BackButton } from "@/components/ui/back-button";
 import { DeleteIconButton } from "@/components/ui/delete-icon-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import OrchestratorRunDetail from "./OrchestratorRunDetail";
@@ -50,12 +52,13 @@ export default function ResultsTab() {
   const queryClient = useQueryClient();
 
   const handleDelete = async (run: RunListItem) => {
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm("Delete this test report? This cannot be undone.")
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: "Delete this test report?",
+      body: "This cannot be undone.",
+      tone: "danger",
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     setDeletingId(run.id);
     setDeleteError(null);
     try {
@@ -143,26 +146,13 @@ export default function ResultsTab() {
   if (selectedRunId) {
     return (
       <div className="space-y-4">
-        <Button
-          variant="ghost"
-          size="sm"
+        <BackButton
+          label="Back to results"
           onClick={() => {
             setSelectedRunId(null);
             setSelectedRunType(null);
           }}
-          className="text-gray-500"
-        >
-          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-            <path
-              d="M10 3L5 8l5 5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          Back to results
-        </Button>
+        />
         {selectedRunType === "ui_test" ? (
           visualDetailLoading || !visualDetail ? (
             <div className="space-y-4">
@@ -303,16 +293,22 @@ export default function ResultsTab() {
                   })}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <DeleteIconButton
-                    onClick={(e) => {
-                      // Row click opens the run detail — this must not.
-                      e.stopPropagation();
-                      handleDelete(run);
-                    }}
-                    disabled={deletingId === run.id}
-                    label={deletingId === run.id ? "Deleting…" : "Delete"}
-                    aria-label="Delete report"
-                  />
+                  {/* A one-segment option group: the row has a single action,
+                      so the group renders it as a rounded square at exactly the
+                      SOW group's 72x28. See `.btn-option-group` in
+                      app/global.css. */}
+                  <div className="btn-option-group">
+                    <DeleteIconButton
+                      onClick={(e) => {
+                        // Row click opens the run detail — this must not.
+                        e.stopPropagation();
+                        handleDelete(run);
+                      }}
+                      disabled={deletingId === run.id}
+                      label={deletingId === run.id ? "Deleting…" : "Delete"}
+                      aria-label="Delete report"
+                    />
+                  </div>
                 </td>
               </tr>
             ))}

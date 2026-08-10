@@ -755,6 +755,9 @@ _RECORDING_MIME_BY_EXT = {
     ".mp4": "video/mp4",
     ".webm": "video/webm",
     ".mov": "video/quicktime",
+    # Converted to MP4 before upload — Gemini has no Matroska type. See
+    # video_ingest._prepare_for_upload, which this path reuses.
+    ".mkv": "video/x-matroska",
     ".mp3": "audio/mpeg",
     ".m4a": "audio/mp4",
     ".wav": "audio/wav",
@@ -768,7 +771,7 @@ def recording_mime_for(file_name: str) -> str:
     if not mime:
         raise IngestError(
             f"Unsupported recording format '{ext}'. Use .mp4, .webm, .mov, "
-            ".mp3, .m4a, .wav, or .ogg."
+            ".mkv, .mp3, .m4a, .wav, or .ogg."
         )
     return mime
 
@@ -835,27 +838,42 @@ def extract_ledger_from_recording(
         _delete_file,
         _extract_still_frames,
         _generate,
+        _prepare_for_upload,
         _upload_video,
         _wait_until_active,
     )
 
-    mime_type = recording_mime_for(file_name)
     key = _api_key()
     prompt = _build_recording_prompt(context_label)
 
-    still_frames = _extract_still_frames(storage_path)  # [] for audio-only, best-effort
-    logger.info(
-        "SOW ledger: extracted %d still frame(s) from %s", len(still_frames), file_name
+    # .mkv recordings are converted to MP4 first (Gemini has no Matroska
+    # type); every other format, audio included, passes straight through with
+    # temp_path None. Same helper the walkthrough path uses.
+    upload_path, mime_type, temp_path = _prepare_for_upload(
+        storage_path, file_name, recording_mime_for(file_name)
     )
 
-    primary = os.environ.get("VISUAL_VIDEO_MODEL", "").strip() or "gemini-3.5-flash"
-    fallback = os.environ.get("VISUAL_VIDEO_FALLBACK", "").strip() or "gemini-2.5-flash"
-    models = [primary] + ([fallback] if fallback != primary else [])
+    try:
+        still_frames = _extract_still_frames(upload_path)  # [] for audio-only, best-effort
+        logger.info(
+            "SOW ledger: extracted %d still frame(s) from %s", len(still_frames), file_name
+        )
 
-    file_info = _upload_video(storage_path, mime_type, key)
-    remote_name = file_info.get("name", "")
-    file_uri = file_info["uri"]
-    logger.info("SOW ledger: uploaded %s as %s", file_name, remote_name)
+        primary = os.environ.get("VISUAL_VIDEO_MODEL", "").strip() or "gemini-3.5-flash"
+        fallback = os.environ.get("VISUAL_VIDEO_FALLBACK", "").strip() or "gemini-2.5-flash"
+        models = [primary] + ([fallback] if fallback != primary else [])
+
+        file_info = _upload_video(upload_path, mime_type, key)
+        remote_name = file_info.get("name", "")
+        file_uri = file_info["uri"]
+        logger.info("SOW ledger: uploaded %s as %s", file_name, remote_name)
+    except BaseException:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
 
     try:
         if file_info.get("state") != "ACTIVE":
@@ -894,6 +912,13 @@ def extract_ledger_from_recording(
     finally:
         if remote_name:
             _delete_file(remote_name, key)
+        # Scratch MP4 from an .mkv conversion — the original recording at
+        # storage_path is untouched and stays the artifact of record.
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                logger.warning("SOW ledger: could not remove temp file %s", temp_path)
 
 
 # ── Design reference (image) extraction ──────────────────────────────────────

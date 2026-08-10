@@ -216,7 +216,6 @@ Three tabs, backed by four real feature modes (the "New" tab's UI is a
 | Mode | Backing component | Backend feature |
 |---|---|---|
 | Quick | plain goal box | goal-based `browser-use` agent run ("The Hands") |
-| Visual | `AutonomousQASection` | orchestrator ("The Brain") — routes to Hands/Judge/self-execute |
 | SOW | `SowCheckpointsSection` (`variant="sow"`) | spec-document → checkpoint extraction |
 | Video | `SowCheckpointsSection` (`variant="video"`) | walkthrough-video → checkpoint extraction |
 
@@ -500,7 +499,7 @@ state — the current user profile lives in `localStorage`
 **Auto-refresh:** Dashboard stats poll every 30s (lowered from 10s to cut
 Neon cold-start load); AI Testing Results tab polls every 15s; Execute page
 and AI Testing's live run view use SSE, not polling.
-`AutonomousQASection.tsx`/`SowCheckpointsSection.tsx` poll via plain
+`SowCheckpointsSection.tsx`/`VisualAuditSection.tsx` poll via plain
 `setInterval` (2s/3s) instead of TanStack Query's `refetchInterval` —
 inconsistent with the rest of the app, not currently broken.
 
@@ -508,10 +507,6 @@ inconsistent with the rest of the app, not currently broken.
 
 - `AppShell.jsx` — sidebar/topbar shell, nav filtered by `user.permissions`.
 - `Providers.jsx` — the single `QueryClientProvider`.
-- `AutonomousQASection.tsx` — combined orchestrator-run form (goal + live
-  URL + environment + Figma/video/SOW dropzones + credential profile),
-  submits to `POST /api/v1/orchestrator/runs`, renders live engine-status
-  cards (THE BRAIN / THE HANDS / THE JUDGE / THE LINE / MEMORY BANK).
 - `SowCheckpointsSection.tsx` — one component, two variants (`sow`/`video`).
 - `FigmaImportSection.tsx`, `VisualAuditSection.tsx` — fully built but not
   currently wired into any page (removed from `/ai-testing` "per product
@@ -690,6 +685,703 @@ Condensed, dated summary of substantive changes. Older entries carried more
 verbose "verified/not verified" build notes in prior versions of this
 document; the underlying facts are preserved here, the verification detail
 is trimmed for readability.
+
+**2026-08-10 — SOW page: extraction loaders, nested live status, collapsible
+version picker.** All frontend; no API, schema, or worker change.
+
+1. *Attached sources status cell* (`app/sow/[id]/page.jsx`,
+   `SourceProgressCell`). The 5px blue bar is now a 22px light-blue capsule
+   with an inset amber fill and a walking turtle riding the fill's leading
+   edge — so the mascot's position IS the percentage rather than a decoration
+   on a timer. The no-denominator mode (recording, design image, file read
+   before chunking) sweeps instead of filling and carries no turtle: there is
+   no finish line for it to walk toward. It also drops its `aria-valuenow`
+   rather than inventing one, which is ARIA's own signal for indeterminate.
+
+2. *Live extraction status* (`components/SowExtractionProgress.tsx` +
+   `workers/tasks/sow_ingest.py`), four fixes:
+   - **Endless spinner.** The worker opened the `read` and `part` stages with
+     a `running` event and never closed them, so those rows spun forever —
+     including long after the run ended. It now emits `read`/DONE and
+     `part`/DONE on the success paths.
+
+     It **emits** a closing event rather than editing the row that opened the
+     stage, and that is not a style choice: `visual_audit.get_sow_progress`
+     filters `sequence > after`, so the panel only ever receives rows it has
+     not read. An in-place update would be invisible to every client already
+     past that sequence — i.e. every client that saw the stage start. The UI
+     folds a closing DONE onto the opening row (`buildGroups`) so the
+     timeline still reads "Reading part 3 of 15" once, ticked, instead of
+     doubling in length. A closing ERROR resolves the row but is still drawn,
+     since its description is the failure message.
+
+     `resolveStatus` survives as the fallback for what no emit can cover: a
+     worker killed mid-stage runs no code, so it writes no closing event and
+     no error event either. Such a run is detected via the artifact's own
+     `parse_status` (an independent failure signal — the timeline can be all
+     successes) and its dead stage renders `stalled`, an amber dash, rather
+     than a tick claiming work that never happened. Header rows settle on a
+     later GROUP, not a later event: a header stands for the whole part, and
+     settling it on its own first sub-step would leave nothing spinning
+     through the long extraction call. A group whose child errored inherits
+     the failure, since a failed part returns early and emits no close.
+   - **Nesting.** Consecutive events sharing a `part_number` are one group —
+     first is the header, the rest indent under it with a hairline connector.
+     Previously a part's sub-steps read as peers of the part itself. Groups
+     nest *only* where the backend actually opened a containing stage: a
+     single-part document emits no `part` event at all (it is guarded on
+     `total_parts > 1`), so its steps render flat rather than hanging off
+     whichever step happened to come first.
+   - **Fixed height.** The list is a 256px internal scroller (same reasoning
+     as the ledger table) that follows the run, but only for a reader already
+     at the bottom. It used to grow the page under the reader for the whole
+     run — eighty-odd rows on a twelve-part document.
+   - **Alignment.** Markers sit on the text centreline (`items-center`).
+   - The `running` marker is now a metaball orb (seven blurred polygons in an
+     SVG mask, snapped by `contrast()`), replacing `Loader2`.
+
+3. *Versions* (`app/sow/[id]/page.jsx`). Now a collapsed-by-default band
+   shaped like the Rewrite panel above it, wrapping the version picker **and
+   the version's own content** — the "Generated by …" line and every section
+   card. Collapsing only the picker split one thing across two boxes: a shut
+   "Versions" band with the version's contents still spilling out below it,
+   belonging to nothing on screen. The picker's original two-column layout is
+   unchanged inside the body; the header names the selected version so the
+   closed state loses no information.
+
+Loader CSS lives in `app/global.css` (`.sow-capsule`, `.sow-orb`) rather than
+per-component `<style>` tags, since both repeat per row/step. Both hold a
+still pose under `prefers-reduced-motion`. One trap worth knowing:
+`--sow-orb-scale` must stay **unitless** — it is the argument to `scale()`,
+and a px value (or a calc dividing one) invalidates the whole transform and
+silently leaves a 100×100 orb on the row.
+
+**2026-08-10 — "Visual and design QA" mode removed from Vibe Testing.** The
+third mode card on `/ai-testing` → New Test (the combined live-site + Figma +
+walkthrough-video + spec-doc + saved-reference Autonomous QA audit) is gone
+per product decision. `ModeSelector`'s `TestMode` is now `"ui" | "functional"`
+and `frontend/src/components/AutonomousQASection.tsx` was deleted (it had no
+other consumer). Deliberately **not** removed: the orchestrator backend
+(`/api/v1/orchestrator/*`, `app/services/orchestrator.py`, its Celery tasks)
+and `OrchestratorRunDetail`/`FindingCard` on the frontend — existing
+orchestrator runs still open from the Results tab, so removing those would
+break run history. Nothing else on the page changed: UI Test, Functional
+Test, Android testing, Results, Coverage, and Skills are untouched.
+
+**2026-08-10 — MKV walkthroughs, nginx upload caps, and whole-surface hover
+targets on the SOW pages.**
+
+1. *`.mkv` accepted everywhere video is.* Added to `visual_audit.
+   _VIDEO_EXTENSIONS` (its EBML magic is the same as WebM's, so
+   `_looks_like_video` just treats the two together — `_WEBM_MAGIC` renamed
+   `_MATROSKA_MAGIC` to say so), to `sow_ledger._RECORDING_MIME_BY_EXT`, and
+   to the four frontend accept lists that post to those endpoints
+   (`ImportSowDialog`, `SowCheckpointsSection`, `AutonomousQASection`,
+   `AttachSourcesFolder`).
+2. *…but converted before analysis.* Gemini's Files API supports
+   mp4/mpeg/mov/avi/flv/mpg/webm/wmv/3gpp — **not** Matroska, so a .mkv
+   cannot be uploaded as-is. Relabelling it `video/webm` was rejected as the
+   cheap fix: WebM permits only VP8/VP9/AV1, while .mkv in practice (OBS's
+   default) carries H.264/HEVC, so the mislabel would fail mid-decode or
+   silently digest a partial stream. New `video_ingest._convert_to_mp4()`
+   runs `ffmpeg -c copy` first (stream copy, no re-encode, seconds even at
+   500MB) and falls back to an H.264/AAC transcode only when the codecs
+   can't live in MP4. `_prepare_for_upload()` wires it into both
+   `digest_video` and `extract_ledger_from_recording`; the converted file is
+   scratch and is deleted in `finally`, with the original .mkv remaining the
+   artifact of record. ffmpeg is elsewhere a best-effort dependency (still
+   frames degrade silently without it) — for .mkv it is required, so failure
+   is an explicit `IngestError` telling the user to re-save as .mp4.
+   `docker/Dockerfile.backend` already installs it.
+3. *nginx upload caps — a pre-existing bug, and a correction to yesterday's
+   entry.* The 2026-08-10 entry below claimed no reverse proxy capped the
+   body size. That was wrong: `docker/nginx.conf` sets no
+   `client_max_body_size`, so nginx's 1MB default applied to the whole API,
+   and nginx **is** in the compose stack. Every upload endpoint has been
+   413'ing above 1MB regardless of its backend cap — SOW import (15MB),
+   screenshots (10MB), transcripts, design images, APKs (200MB). Raised the
+   `/api/` block to 256m, and added a nested regex location for the two
+   large media routes (`/api/v1/visual-audits/video` and
+   `…/sources/recording`) at 512m with `proxy_request_buffering off`, so a
+   500MB walkthrough streams straight through to FastAPI instead of being
+   spooled to nginx's disk first — which would otherwise defeat the
+   streaming size check added earlier the same day. Verified by running the
+   config in an `nginx:alpine` container: syntax passes, and the four URI
+   shapes route as intended (video and recording to the upload block,
+   `existing-sow` and `/api/v1/projects` to the general block, `auth/login`
+   still to its rate-limited block).
+4. *Meeting-recording upload streamed too.* `POST /api/v1/sow/documents/
+   {id}/sources/recording` had the same shape the video endpoint just lost:
+   `content = await file.read()` *before* the size check, so at the 300MB
+   `SOW_MAX_RECORDING_MB` default (since raised to 500 — see below) one
+   upload cost 300MB of resident memory
+   and an over-cap upload was fully resident by the time it was rejected —
+   the cap protected storage, not the process. Now chunked to a temp file
+   with a running cap and an incremental sha256. This one got *simpler*
+   rather than more complex: the duration check already needed the recording
+   on disk for ffprobe, so streaming removed a write instead of adding one.
+   `_ensure_artifact_file` gained a `source_path` alternative to `content` so
+   its rare missing-file heal doesn't pull 300MB back into memory and undo
+   the point; the three existing byte-based callers are untouched.
+   Covered by `tests/test_sow_recording_upload_streaming.py` (6 tests:
+   bounded reads, early cutoff, no temp-file leak on 413, 400-not-413 on
+   empty, chunked hash equals whole-file hash, extension carried to the temp
+   file for ffprobe) plus 3 added to
+   `test_sow_artifact_file_recovery.py` for the `source_path` branch. The two
+   central guards were confirmed to fail against the old implementation, so
+   they are regression tests rather than decoration.
+
+   `SOW_MAX_RECORDING_MB` then raised 300 → 500 so both video uploads in the
+   product share one number — a walkthrough and a meeting recording are both
+   "upload a video" to a user, and two different caps is a trap. Changed in
+   `sow.py`, `docker-compose.yml`, `backend/.env.example` and the local
+   `.env` (which had an *active* `=300` that would otherwise have overridden
+   the new default). Still inside nginx's 512m media block.
+5. *Hover affordance on whole-surface targets.* The SOW library's title cell
+   and the SOW detail page's collapsible headers both used
+   `.link-hover-underline`, which underlined the text on hover. On a target
+   that is really an entire cell or header row, an underline points at the
+   glyphs and misstates where the hit area is. Replaced with `.cell-link`
+   and `.section-toggle`: a `color-mix` surface tint on the same recipe as
+   the existing `.row-interactive`, plus the label deepening from 82% to
+   full contrast. `.link-hover-underline` is retired (it had exactly these
+   two call sites). Two details worth keeping: `.cell-link` is
+   `position: absolute; inset: 0` because a table cell has no definite
+   height for a child's `height: 100%` to resolve against, so an in-flow
+   link left dead strips above and below where the row was taller; and its
+   tint lives on a `::before` because `border-radius` clips pointer hit
+   testing as well as painting, which would have made the cell's four
+   corners unclickable — square box for hits, rounded plate for the eye.
+   Verified in the browser: all four corners plus the centre hit-test to the
+   link, and navigation and the collapse toggles still work.
+
+**2026-08-10 — Import SOW dialog: field heights aligned, walkthrough limit
+raised to 500MB and the upload made streaming.** Three changes:
+
+1. *Field heights.* The dialog's first three rows (SOW document / Title /
+   Project) rendered at three different heights. Two causes: the attached-
+   document chip sized itself from `py-2` + a 24px remove button (42px)
+   instead of matching the 36px empty-state button, and `SelectTrigger`'s own
+   height comes from the arbitrary variant `data-[size=default]:h-8`, which
+   `twMerge` cannot see as conflicting with a plain `h-9` override — so the
+   Project select silently stayed 32px. Fixed locally in
+   `ImportSowDialog.tsx` (`h-9` on the chip, `data-[size=default]:h-9` on the
+   trigger) rather than in `components/ui/select.tsx`, so no other Select in
+   the app changes size. Verified in the browser: all three rows measure 36px
+   in both the empty and filled states.
+2. *Walkthrough size limit → 500MB.* Was three different numbers —
+   `VIDEO_MAX_MB = 50` in the dialog, `VISUAL_VIDEO_MAX_MB` defaulting to
+   `50` in `visual_audit.py` and to `100` in `docker-compose.yml` (the exact
+   inconsistency flagged as High #4 above), plus a commented `=100` hint in
+   `backend/.env.example`. All four are now 500; the env var still overrides.
+   *(Correction, same day: this entry originally said no reverse proxy caps
+   the body size. `docker/nginx.conf` does — see the nginx item in the entry
+   above, which fixes it.)*
+3. *Video upload no longer buffered in memory.* `POST /api/v1/visual-audits/
+   video` did `content = await file.read()` **before** checking the size, so
+   raising the cap to 500MB would have meant 500MB of RAM per concurrent
+   upload — a few of them would OOM the API container. It now streams the
+   body to a `.part` temp file inside the video data dir in 1MB chunks,
+   hashing as it goes and raising 413 the moment the running total passes the
+   cap, then `os.replace`s the temp file onto the sha-named final path (same
+   filesystem, so an atomic rename, not a second copy). The temp file is
+   unlinked on any error and on the dedupe hit. Memory is now flat at one
+   chunk regardless of file size. Behavior is otherwise unchanged: same
+   sha256 dedupe, same magic-byte check (now against the first 16 bytes
+   captured during streaming), same 202 + Celery enqueue.
+
+Screenshots were already multi-select (`multiple` on the input, appended
+across successive picks) — confirmed, not changed.
+
+**2026-08-09 — Vibe Testing page brought onto the shared canvas texture and
+heading style.** Two drifted differences, both on `ai-testing/page.tsx` only:
+
+1. All four of the page's render states (`New Test`, `Results`/`Coverage`/
+   `Skills`, the live-run two-pane view, and the completed-run summary) wrap
+   their content in a full-height local div. Three of the four had their own
+   `bg-gray-50` on that wrapper, painting over the app-wide grid+glow canvas
+   texture from `body` (see 2026-08-08's canvas-texture entry) — every other
+   page in the app renders straight onto `AppShell`'s transparent content
+   area, so this one page alone stayed flat white/gray no matter the theme.
+   Removed `bg-gray-50` from those three. The fourth state — the live action
+   log + browser-frame view — **keeps** its `bg-white` deliberately: the log
+   panel has no background of its own, and PRODUCT.md is explicit that
+   evidence/audit surfaces stay "precise and sober" while loading/empty/
+   onboarding states carry the mascot's texture. Texturing that panel would
+   have put the grid pattern directly behind live step rows, which is a
+   legibility/register regression, not a fix — flagged with a comment at the
+   call site rather than silently left inconsistent.
+2. The page's `<h1>`/subtitle used Tailwind utilities (`text-3xl font-bold
+   text-gray-900` / `text-gray-500 mt-1`) instead of the inline-style pattern
+   every other page uses (`fontSize: 22, fontWeight: 600, color: "#111827",
+   letterSpacing: "-0.02em"` + a 13px `#6B7280` subtitle) — Reports, Defects,
+   SOW, Dashboard, Projects all agree on this exact style. Vibe Testing's
+   heading rendered noticeably larger (30px vs 22px) and heavier (700 vs
+   600) with no letter-spacing, reading as a different design language for
+   the same kind of element. Both headings (Results/Coverage/Skills view and
+   New Test view) now match byte-for-byte.
+
+Verified live via a temporary unauthenticated route (deleted after): computed
+`h1` style resolves to exactly `22px / 600 / rgb(17,24,39) / -0.44px`
+letter-spacing (= `-0.02em`), and `body`'s grid+glow `background-image` reads
+through unobstructed with no wrapper class re-covering it.
+
+**2026-08-08 — `window.confirm()` replaced app-wide with an animated global
+confirm dialog.** Approved from a live, clickable preview before any code
+changed. `lib/confirm.ts` exports `confirmDialog(options): Promise<boolean>`
+— a drop-in replacement for `window.confirm()`'s return value via a
+module-level listener, not a hook, so it's callable from any client function
+without React's hooks-in-components constraint (mirrors how `toastSuccess()`
+already works). `ConfirmDialogHost` (`components/ui/confirm-dialog.tsx`) is
+mounted once in `Providers.jsx`, next to `<Toaster />`, and portals into
+`document.body` so it always renders above the sidebar and every page
+regardless of ancestor stacking contexts. All 7 existing
+`window.confirm(...)` call sites now call `confirmDialog()` instead —
+[reports/page.jsx](frontend/src/app/reports/page.jsx),
+[ResultsTab.tsx](frontend/src/components/ai-testing/ResultsTab.tsx),
+[SkillsTab.tsx](frontend/src/components/ai-testing/SkillsTab.tsx) (×3 —
+delete one, bulk-delete, bulk-run), [SowCheckpointsSection.tsx](frontend/src/components/SowCheckpointsSection.tsx),
+and [sow/[id]/page.jsx](frontend/src/app/sow/%5Bid%5D/page.jsx) — with a
+`tone` of `"danger"` (destructive: delete a run/skill/SOW source) or
+`"neutral"` (a pause that isn't data loss: bulk-running skills, regenerating
+a SOW over hand-edited sections).
+
+Same card-over-dimmed-backdrop shape the app's existing SOW/Defects delete
+modals already use, now shared and properly animated: 220ms scale+fade entry
+on `--ease-out` (the one easing curve already used everywhere in this app),
+a quicker 160ms fade-only exit so leaving reads as dismissing rather than
+rewinding — the same asymmetric-duration logic already on the ink button's
+hover crossfade. The two buttons inside are the platform's real shared
+`Button` component (`outline` for Cancel, `destructive` or `invert` for
+Confirm depending on tone) — no bespoke button CSS lives in the dialog,
+verified live by checking each rendered button actually carries the real
+variant's classes and rim slot, not a lookalike.
+
+The icon is a genuinely animated glyph, not just a static icon riding the
+card's fade: every outline/mark path carries SVG2 `pathLength="1"` so a
+plain `stroke-dasharray`/`stroke-dashoffset` CSS transition draws it in
+(120ms after the card settles, so it reads as the entrance's last beat, not
+a second unrelated animation), and its dot fades in a further beat later.
+Destructive tone alone also gets a soft looping pulse ring behind the icon —
+the one place continuous motion earns its keep, since it's an irreversible
+action awaiting a decision; the neutral tone gets the entrance draw only, no
+loop, so a pulse doesn't turn into decoration repeated on every dialog in the
+app. `prefers-reduced-motion: reduce` collapses the card to an instant
+opacity-only crossfade, the icon to fully drawn with no transition, and kills
+the pulse ring outright — every override is re-stated at the same selector
+specificity as the animated rules it replaces rather than a flatter
+`.confirm-card` guess, since the entered-state selectors are more specific
+and would otherwise silently win mid-transition.
+
+Verified live: mounted a temporary unauthenticated route (deleted after)
+since every real call site is behind auth. Confirmed both promise-resolution
+paths (Cancel → `false`, Confirm → `true`), Esc-to-cancel, backdrop-click-to-
+cancel, click-inside-the-card does *not* dismiss it, the compiled CSS matches
+the approved design exactly byte-for-byte, and each rendered button carries
+its real variant's classes (`bg-foreground`/`text-background` for the ink
+Continue button, the rim slot + `btn-white` family for Cancel and for the
+destructive Delete button). The Browser pane's document was hidden for this
+session, which pauses Chrome's compositor clock entirely (`getComputedStyle`
+froze even on an inline `!important` write) — animation *playback* couldn't
+be screenshotted, but every structural and functional path was confirmed
+through DOM/class assertions instead.
+
+**2026-08-08 — App-wide canvas texture: grid + bottom glow, replacing flat
+white/black.** Approved from a live preview before any code changed (grid
+density, glow color and both themes were signed off first). Implemented as one
+`body` rule in `app/global.css` — a faint 34px grid plus a radial-gradient
+bloom pinned to the bottom of the viewport via `background-attachment: fixed`
+on all three layers, so it reads as one stationary canvas behind login,
+loading and scrolled content alike rather than repeating or drifting with
+scroll. Built entirely on existing tokens (`--background`, `--foreground` for
+the grid lines, `--mascot-accent` for the glow — the same warm orange already
+used on button rims), via a new `--bg-grid-line` custom property that `.dark`
+overrides once; no image asset, so it holds at any width or aspect ratio and
+the not-yet-built dark-mode toggle will pick it up automatically the moment
+`.dark` is applied. `AppShell`'s outer flex container changed from an opaque
+`var(--muted)` fill to `transparent` so the texture shows through the
+authenticated app's content canvas too, not just the pages outside AppShell —
+the sidebar rail keeps its own solid background, unaffected, so nav text stays
+on a flat, fully legible surface.
+
+Getting the rule to actually render surfaced a real bug: `app/layout.jsx` had
+an unlayered `<style>` tag hardcoding `body { background: #F9FAFB; color:
+#111827 }`. Unlayered CSS always wins over `@layer base` regardless of source
+order in the document, so that inline tag was silently shadowing
+`global.css`'s themed `body` rule — including its existing
+`background-color: var(--background)` — on every single page, the whole time,
+independent of this feature. Removed the two hardcoded properties (kept
+margin/padding/font-family, which nothing else claims); `body` now actually
+resolves to the theme.
+
+**2026-08-08 — Option group rolled out platform-wide; defects gained a
+recoverable delete.** The segmented row control introduced on `/sow` (below) is
+now the shared shape for row actions, and `.btn-option-group` was generalised to
+any number of segments: corner rounding is positional (`:first-child` /
+`:last-child` / `:only-child`) rather than passed per call site, so a group
+whose segments vary by row rounds itself correctly. Those positional rules sit
+*unlayered* in `app/global.css` on purpose — `@layer base` loses to Tailwind's
+utilities layer no matter the specificity, and they have to beat the shared
+Button's `rounded-lg`. Segments are `min-width: 72px` rather than a fixed width,
+so a transient label ("Starting…", "Replay") grows instead of clipping. Applied
+to: Reports and Vibe Testing → Results (delete alone, so it renders as a 72×28
+rounded square — same height, width and radius as the SOW half, replacing the
+32px circle), Vibe Testing → Skills (Edit · Run · Delete), and Defects (Edit ·
+Start · Delete; its Actions column widened 90px → 216px to hold three segments,
+and its buttons moved from `size="xs"` to `size="sm"` because a 24px Edit beside
+a 28px Delete is the seam breaking). The free-standing circular delete is
+unchanged everywhere it is still used — Users, the Skills bulk toolbar, the SOW
+detail page — and no hover choreography was touched anywhere.
+
+Defects had no delete at all: the Next proxy forwarded `DELETE /api/defects/:id`
+to a FastAPI route that did not exist. It now does, as a **soft** delete
+(migration `0044`), matching the SOW document delete — a bug record is the audit
+trail for a failure, so removing one hides it rather than erasing it. `defects`
+gains `deleted_at` and `deleted_by` (FK `users` `ON DELETE SET NULL`, so
+removing a user never takes bug history with it) plus a partial index on
+`deleted_at IS NOT NULL`, which is the selective side; every ordinary read adds
+`deleted_at IS NULL` and matches essentially the whole table. `DELETE` is gated
+on the same `defects` permission as editing — it is a reversible hide, not an
+erase — while the new `POST /api/v1/defects/{id}/restore` and the `?deleted=true`
+recovery listing are admin/QA-lead only, since undoing someone else's delete is
+supervisory. Both write single-statement `UPDATE … WHERE deleted_at IS [NOT]
+NULL … RETURNING`, so a double-submit 404s instead of silently re-stamping a
+different user as the deleter. `PATCH` now looks up `AND deleted_at IS NULL`: a
+deleted defect 404s on every write path exactly as a hard-deleted one would.
+In the UI a "Deleted" filter chip (visible only to the roles that can act on it)
+switches the list to the recovery view, where each row reads "Deleted by
+&lt;name&gt; · &lt;date&gt;" under its title and offers Restore in place of
+Edit/Start/Delete. It is a separate axis from the status chips, not another
+status value — a deleted defect still has a status, and conflating them would
+make "Deleted + Open" unexpressible.
+
+**2026-08-08 — SOW library row actions joined into one option group.** Rename
+and Delete on `/sow` were two loose controls with 12px of air between them, so
+a row's two options read as unrelated. They are now a single segmented pill:
+two equal 72×28 halves sharing one 8px outer radius and a flush seam, built
+from the existing shared parts rather than a third button design — the Rename
+half is the standard white `Button` (`variant="outline"`, `size="sm"`) with its
+right radius squared off, and the Delete half is the same `DeleteIconButton`
+whose hover reveal ships everywhere else. A new opt-in `.btn-option-group`
+class in `app/global.css` supplies the only differences: the delete button
+rests at full width and anchors left (in a group there is no empty room to
+expand into — the space to its left *is* the Rename half), squares its left
+corners, and lifts 2px on hover so the half under the pointer detaches from
+the seam. Icon and label offsets are re-derived for the 28px height, and the
+disabled rules are restated inside the group scope because they tie the group's
+hover rules on specificity and would otherwise lose on source order. Scoped to
+the SOW library only: Reports, Users, Skills, Results and the SOW detail page
+keep the free-standing circular delete button unchanged.
+
+**2026-08-08 — TDD extraction surfaced in the SOW tab.** The v2 extractor
+(`backend/app/services/tdd_extraction.py`, migration `0043`, spec in
+`TDD_EXTRACTION_SPEC.md`) already classified every checkpoint by test type,
+behaviour category and grounding, and recorded what its testability gate
+excluded — but none of it reached the API or the UI, so a SOW's negative and
+edge coverage was invisible and the gate was unauditable from the app. `GET
+/api/v1/visual-audits/sow/{id}` now returns `test_type`, `category`,
+`grounding`, `behaviour_key`, `priority` and `coverage_gap` on each
+checkpoint, and `excluded_zones` + `coverage` on each part. The SOW
+Checkpoints panel renders a coloured test-type badge per checkpoint (negative
+red, edge amber — a negative checkpoint PASSES when the system refuses, so it
+can never share a visual register with a happy path), a note under any
+`derived` checkpoint saying the expectation came from standard QA practice
+rather than the document (so a failure is triaged as a possible spec gap
+first), a per-document coverage roll-up whose headline is the
+negative+edge ratio against the spec's 0.40 acceptance gate, and a collapsed
+audit list of the sections the gate skipped as non-testable with the reason
+for each — shown rather than hidden, because a filter nobody can see is a
+filter nobody can audit. The Skills tab carries the same negative/edge badge,
+which is where it matters most operationally: a red replay result on a
+negative skill means the product *accepted* something it should have refused,
+the opposite reading from a red positive skill. All fields are optional
+throughout; skills and parts produced before `0043` render exactly as they did
+before rather than being defaulted to a guessed classification, and
+re-analysing the artifact is the migration path.
+
+The same threshold is now also enforced in the worker: after a part is
+analysed, `ratio_gate_warning()` logs a `WARNING` naming the artifact, the
+part and the actual counts whenever negative+edge coverage lands below 40%.
+This is a *quality* gate, distinct from the existing error path — it catches
+extraction succeeding while producing the wrong shape of output, which is
+otherwise only discoverable by reading every generated skill by hand, and is
+exactly how the original happy-path-only defect survived undetected. It never
+fails the parse or discards checkpoints. It stays silent on parts with fewer
+than four checkpoints (the ratio is statistically meaningless at that size and
+a warning nobody can act on trains everyone to ignore the warning) and on
+parts with none at all (a pricing or timeline section correctly yields
+nothing — that is the testability gate working, not extraction drifting).
+
+**2026-08-09 — Live extraction status: the steps that actually ran.** Clicking
+Extract Skills/TDDs previously produced one sentence and then silence for
+minutes while a multi-part document worked through the pipeline. The obvious
+fix — a fixed list of phases in the UI, ticked off by inspecting SowPart rows —
+would have shown the same four steps in the same order regardless of what
+happened: claiming "identifying feature sections" on a run with `TDD_ZONING=0`,
+and staying silent on gap repair, the variant cap and the cross-part merge,
+which are the stages most worth knowing fired. PRODUCT.md's first design
+principle is that copy must never claim progress that isn't happening, so the
+events are written by the code doing the work (`app/services/sow_progress.py`,
+new `sow_ingest_events` table, migration `0046`) and the panel renders whatever
+it finds, in order, with no step list of its own. A stage that did nothing
+emits nothing; a stage that was skipped says *skipped* and draws a dash rather
+than a green tick, because "the repair pass found nothing to repair" and "the
+repair pass never ran" are different facts. The engine stays database-free —
+it takes an `on_progress` callback rather than a session, so its whole test
+suite still runs with no database, and a callback that throws cannot break the
+extraction it is reporting on. Events are emitted on their **own** session, the
+load-bearing detail: the worker holds one transaction open for an entire part,
+so an event written on it would only become visible once the work it describes
+had already finished. That also means the timeline survives a failed part,
+which is the run most worth looking at. Zoning reports itself rather than
+letting the caller infer from the return value — when the 85% safety valve
+discards an over-aggressive verdict it returns `excluded=[]`, indistinguishable
+from "nothing needed excluding", and only that function knows which happened.
+`GET /api/v1/visual-audits/sow/{id}/progress?after=N` serves the timeline
+incrementally so a poll during a long ingest returns the new rows rather than
+the whole history every two seconds.
+
+**2026-08-09 — The naming reference is visible on the project page.** The UI
+naming reference existed only in a database row, an API endpoint and a worker
+log line, which meant its failure mode was silent: if the vision pass misread
+the UI or managed two screens out of twelve, extraction quietly fell back to
+the document's wording and the cost surfaced weeks later as a failed run that
+looked like a product bug. `ProjectUiInventoryPanel` sits on the project detail
+page under Environments and shows screens, label count, build date, and — on
+expand — the labels themselves, grouped by screen. Read-only with no rebuild
+button on purpose: the reference rebuilds itself when the project's evidence
+changes, so a manual rebuild would only re-run a call that is already current,
+and when it is wrong the fix is better evidence rather than another build. A
+reference older than 90 days gets an age badge, since a confidently wrong label
+is worse than a missing one — the test looks grounded and its failure reads as
+a defect — though age alone cannot prove staleness, so it warns rather than
+invalidates. Feature-detected like the other Vibe Testing surfaces: the
+endpoint 404s when the flag is off and the panel renders nothing rather than an
+error box for a deliberately disabled feature.
+
+**2026-08-08 — The UI naming reference: tests that name real buttons.**
+Extraction only ever read the requirements document, so a checkpoint said
+"click Submit Application" because that is what the document called it, while
+the product's button reads "Apply Now". The test then failed for a reason that
+was neither a product defect nor a spec gap — the most demoralising red result
+there is, because it looks like a bug and isn't. New
+`app/services/ui_inventory.py` (migration `0045`, opt-out via
+`TDD_UI_INVENTORY=0`) runs one vision call per *project* over the evidence
+uploaded with the SOW — screenshots, plus control and field names already
+recovered from digested walkthrough videos, which is text the video digest
+already paid for — and records what each screen, button, field and nav item is
+actually called. That naming reference is stored on `project_ui_inventory` and
+appended to both the extraction and the gap-repair prompts, so a repaired
+negative case names real controls too. Deliberately not live navigation: driving
+the real product would ground the same labels at per-test cost and would need
+working credentials and a deployed environment at extraction time, whereas today
+a SOW for a product that does not exist yet still extracts — a property worth
+keeping. The hard rule is that the inventory is **vocabulary, not
+requirements**: a button visible in a screenshot is not evidence anyone asked
+for it to be tested, and an inventory that could introduce behaviours would
+reintroduce the original "everything becomes a TDD" defect from the opposite
+direction, so that rule is stated in the vision prompt, restated at the point of
+use, and pinned by a test. The prompt also says what to do when a control is
+*absent* from the reference — use the document's wording, don't conclude the
+control is missing — because the reference is partial by nature, and it demands
+transcription rather than paraphrase, since a wrong label looks authoritative
+while a missing one merely falls back to the document. Staleness is keyed on
+which evidence *existed* at build time rather than which the build managed to
+use: keying on "used" would leave the stored set permanently unequal to the
+current one whenever a screenshot was skipped as oversized or a video was still
+digesting, and every part of every SOW would rebuild and pay for another vision
+call. Every failure path — no project, no evidence, an unreadable file, a failed
+vision call — returns nothing and extraction proceeds on document text exactly
+as before; a vision call cannot fail a SOW ingest.
+`GET /api/v1/visual-audits/projects/{id}/ui-inventory` exposes what was read.
+
+**2026-08-08 — TDD_DERIVED_AS_SKILLS now applies to videos too.** The flag is
+documented as keeping derived negative/edge checkpoints out of the Skills
+table, and the SOW worker honoured it — the video worker never checked it at
+all, so with the flag off, derived checkpoints from a walkthrough still became
+skills. The flag defaults on, so nothing was broken in practice, but the flag
+described the Skills *table* while only governing one of the two sources
+feeding it: the table would look filtered while half of it was not, and nothing
+in the UI said which half. That is worse than having no flag. The video worker
+now applies the same check and logs each held checkpoint by name, and a new
+test asserts the two workers produce the same outcome from the same input —
+the property that actually matters is one flag, one result, regardless of
+which source produced the checkpoint.
+
+**2026-08-08 — Walkthrough videos get the same coverage backstop as SOWs.**
+The video path categorised what a recording showed and derived the negative and
+edge cases each category requires, but it never ran the code-side checks the
+SOW path runs afterwards: Stages 4, 4b and 4c were silently document-only. So a
+walkthrough-derived behaviour missing a variant its category demands was
+neither flagged nor re-requested, and a verbose one was unbounded — two sources
+feeding one Skills table at two different levels of rigour, which is exactly the
+kind of difference nobody remembers when reading the results.
+`apply_variant_backstop()` applies the coverage check and the variant cap to an
+already-flat checkpoint list by grouping on `behaviour_key` (the SOW path
+applies both per behaviour as it builds them, having the behaviours in hand),
+and `classify_and_expand` now runs it followed by `repair_coverage_gaps`. The
+expansion prompt *asks* for the required variants; this checks in code that
+they actually arrived rather than trusting the model's claim. Checkpoints with
+no behaviour key — visual ones, anything from the legacy path — pass through
+untouched, having no category contract to enforce, and a behaviour's variants
+are re-emitted at the position of its first member so they stay adjacent and in
+order. Enrichment still never raises: a video that digested successfully is not
+failed by it, now across two provider calls rather than one.
+
+**2026-08-08 — Derived-failure report: inferred expectations that never hold.**
+Most negative and edge tests are `grounding="derived"` — the source document
+does not enumerate its own failure modes, so the expectation was inferred from
+standard QA practice. That means a failing derived test has two possible
+explanations needing opposite responses: the product is wrong (raise a defect),
+or the *inference* is wrong because the product deliberately behaves
+differently and the document never said so (fix the document). Nothing
+aggregated that, so in practice every failure was triaged as the first, and the
+second never surfaced at all. New `GET /api/ai-testing/spec-gaps` lists derived
+skills that have **never once passed** across at least `min_runs` (default 2)
+decided runs, rendered as a "Possible spec gaps" panel at the top of the AI
+Testing → Coverage tab. The selection rule is "never passed" rather than "fails
+often" on purpose: a derived test that sometimes passes is flaky,
+environment-dependent or data-dependent, which are product and infrastructure
+concerns with different owners, while one that has never passed is a systematic
+disagreement between the inferred expectation and the product — and requiring
+consistency is also what keeps the list short enough that someone actually
+reads it. Undecided runs (needs_review, inconclusive, cancelled, pending,
+running) are excluded from both the numerator and the denominator, since
+treating "we don't know" as "it failed" would manufacture spec gaps out of
+infrastructure problems. The response carries its own denominators
+(`total_derived_skills`, `evaluated_skills`) so "7 gaps" can be read honestly
+against 12 inferred expectations or against 400, and the panel says nothing at
+all rather than claiming a clean bill of health when nothing had enough runs to
+judge. The rule lives in `is_spec_gap_candidate()`, separated from the endpoint
+so it is unit-testable without a database. It produces candidates, not a
+verdict — a never-passing derived test can still be a real long-standing
+defect; the point is that it can no longer only be read that way.
+
+**2026-08-08 — Variant volume is capped by priority, not by accident.** A rich
+behaviour legitimately produces many variants — an input-validation rule over
+several fields has a distinct negative case per field, and all of them are real
+tests — and nothing bounded that. The only thing standing between a verbose
+behaviour and an unbounded skill list was the extraction call's `max_tokens`,
+which truncates the model's JSON at whatever character it happens to reach: the
+tests you lose are chosen by accident, the loss is invisible, and it lands in
+the middle of an array so it can take a well-formed checkpoint with it. New
+Stage 4c (`cap_variants()`, opt-out via `TDD_VARIANT_CAP=0`) replaces that
+accident with a decision. The ceiling is per *behaviour* (8), not per part or
+document — a document with fifty modest behaviours is fine and must not be
+trimmed, while one behaviour with twenty variants is where the runaway actually
+happens. Selection keeps one checkpoint of every test type present *before*
+anything else, since dropping the only edge case to keep an eighth negative
+would gut the negative+edge ratio and remove a category's required coverage;
+then fills the remaining slots by priority (smoke > sanity > regression), ties
+broken on document order so re-analysing a part gives the same answer; then
+restores document order for the survivors, because selection is by priority but
+presentation should not be. It runs after the coverage check and before gap
+repair — capping first would drop a required variant, get it flagged as a gap,
+have repair re-request it and drop it again, a loop that spends tokens forever
+and converges on nothing. Nothing is dropped silently: the discarded tests are
+named in a `WARNING`, the surviving checkpoint carries `capped_variants`, the
+scorecard sums it, and the SOW tab shows both.
+
+**2026-08-08 — Cross-part reconciliation: one feature, one set of skills.** A
+SOW almost always describes a feature twice — once in a summary or scope
+section, once in detail — and because extraction runs per chunk and dedupe ran
+inside it, those landed in different parts, got different behaviour names, and
+produced two near-identical sets of checkpoints and two near-identical sets of
+Skills. No per-part stage could see it. New Stage 6
+(`reconcile_across_parts()`, opt-out via `TDD_RECONCILE=0`) runs at the
+document level in `_merge_checkpoints`, and splits the job across two
+deliberately different mechanisms. Merging — "is this the same test?" — is
+decided in Python by string similarity on the objective; it is the step that
+must not be wrong, so it does not get to be creative, and because it is
+deterministic and free it runs on every part completion, which is what stops a
+duplicate Skill being *created* rather than cleaning one up afterwards. It
+deliberately does not require the behaviour names to match, since two parts
+naming one behaviour differently is exactly the case that has to merge. Naming
+— mapping near-duplicate behaviour keys onto a canonical one so a behaviour's
+variants group together — is a judgement call and goes to an LLM, restricted to
+keys actually sent, failing open to identity, and running once when the last
+part lands so a 12-part document pays for one call rather than twelve. The
+threshold is set high (0.90) and guarded three ways — never across test types,
+never within a single part, first occurrence wins — because the costs are not
+symmetric: failing to merge leaves a duplicate someone deletes, while wrongly
+merging silently deletes a test, and the thing that would have reported it is
+the test that no longer exists. Nothing is lost: the survivor carries
+`merged_from_parts`, which the API returns and the SOW tab renders as "also
+stated in part 4", and each part's own stored checkpoints are left untouched as
+the record of what that section actually produced.
+
+**2026-08-08 — Coverage gaps are repaired, not just reported.** The extractor
+already checked in code whether each behaviour had the test types its category
+requires, and flagged the ones that didn't — then shipped the hole anyway. New
+Stage 4b (`repair_coverage_gaps()`, opt-out via `TDD_GAP_REPAIR=0`) re-asks for
+*only* the missing variants, supplying the behaviour's category, its required
+probes and its already-written happy path so the new test reuses real screen
+and field labels instead of inventing them. It runs before dedupe, so a repair
+that restates an existing case collapses under the same rule as everything
+else. Three properties make it safe to have: coverage is recomputed from the
+repaired checkpoints rather than from the model's reply, so a variant that came
+back invalid or was quietly skipped leaves the gap flag standing (reduced to
+what is still missing) — the stage does not grade its own work; every failure
+path returns the checkpoints untouched, because losing a part's real
+requirements to a failed enrichment call is far worse than shipping the flagged
+gap; and everything it produces is `grounding="derived"` regardless of what the
+model claims, since a repaired variant is reasoned from QA practice rather than
+read out of the document. A `behaviour_key` nobody asked about and a
+`test_type` that wasn't missing are both dropped — silently widening the output
+is exactly how the original "everything becomes a TDD" defect behaved. Capped
+at 12 behaviours per part, with the skipped ones named in a `WARNING`, because
+a part with more gaps than that has a systemic problem another call won't fix.
+
+**2026-08-07 — Login form spacing; rocker-switch password reveal.** The login
+form's email and password inputs now sit in bordered wells (44px tall, 14px of
+inner padding, 12px apart) instead of floating as bare transparent inputs, and
+focus is expressed once by the well via `focus-within` rather than a ring that
+only ever appeared on one of the two rows. `PasswordRevealSwitch` — the single
+show/hide control shared by the login form and the AI Testing credential
+dialog, so this changes both — is now a physical rocker switch: neutral grey
+while the password is masked, green while it is visible. Masked is the resting
+state, so colour appears only for the state that is actually happening; a
+permanently red control on a login screen reads as an error when nothing is
+wrong. It is still a real
+`<input type="checkbox">` inside a `<label>` (tab order, Space, screen-reader
+semantics unchanged), and the supplied styled-components snippet was ported to
+a scoped stylesheet rather than adding a CSS-in-JS runtime. Fixed base size of
+13.333px puts it at exactly 44px tall — the minimum touch target and a match
+for the field height beside it. The snippet's 1px focus glow was replaced with
+a real `:focus-visible` ring (it was invisible against the switch's own green),
+and the animation is dropped under `prefers-reduced-motion`, where the colour
+alone carries the state. On hover it shows the shared Base UI tooltip (the same
+dark pill, arrow, and fade/zoom in-out used by Skills' "Test setup" button)
+carrying mascot copy that tracks the switch state: "Let the spider peek" while
+masked, "Back in the web" while revealed. The tooltip picks its own colours from the surface it
+sits on: it is portalled to `<body>`, so it cannot inherit anything from the
+card it visually belongs to, and the shared dark pill was near-black on the
+near-black login card. `surfaceIsDark` walks up from the switch compositing
+background colours until they reach opacity, then inverts the pill (white on
+the login card, unchanged dark on the white credential dialog). Compositing
+rather than first-background-wins is load-bearing: the login wells are
+`bg-white/[0.04]` over `bg-gray-950`, so a naive read returns white and picks
+the wrong tooltip. The tooltip is decoration, not the
+accessible name — that stays on the input's `aria-label`, and the adjacent
+Show/Hide text still carries the state for keyboard users, since Base UI binds
+its focus trigger to the trigger element and focus here lands on the nested
+checkbox. The Radix `Switch` primitive it previously wrapped is
+now unused by any caller.
+
+**2026-08-07 — One global loading overlay; always-visible scrollbar.** Loading
+is now a single fullscreen overlay owned by `NavigationLoadingProvider`
+(mounted in `Providers`, outside `AppShell`, so it covers the sidebar as well
+as the content). It turns on synchronously from a capture-phase click on any
+internal link — before the router starts — so no chrome or page skeleton can
+paint ahead of it, and a `popstate` listener covers back/forward. Pages no
+longer render a loader themselves: they call `usePageLoading(isLoading)`, and
+the overlay stays up until the destination's data lands. The in-page
+`<GlobalLoader fullscreen={false} />` variant is removed entirely (it was what
+produced the boxed loader inside the content area), and `GlobalLoader`'s 90ms
+content delay is now 0. Separately, the main content area moves from
+`overflow-y: auto` to a styled, always-present `overflow-y: scroll` with
+`scrollbar-gutter: stable`, so the scroll position is visible at rest and
+layout no longer shifts sideways between long and short pages.
 
 **2026-07-25 — AXON-primary AI routing.** AXON (`axon/gemini-flash-latest`)
 is now the default provider for every router-backed AI call: browser-use

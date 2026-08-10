@@ -11,6 +11,7 @@ import {
   Users,
   Shield,
   Gauge,
+  LogOut,
 } from "lucide-react";
 import { getStoredUser, clearStoredUser } from "../utils/authStore";
 import { apiFetch, clearTokens } from "../utils/apiClient";
@@ -71,6 +72,10 @@ const ADMIN_NAV = [
   },
 ];
 
+// localStorage key for the collapsed/expanded choice. Scoped with the app
+// prefix used everywhere else (aep_token, aep_user, ...).
+const SIDEBAR_COLLAPSED_KEY = "aep_sidebar_collapsed";
+
 /**
  * Sidebar chrome.
  *
@@ -107,11 +112,16 @@ const SHELL_CSS = `
     background: transparent;
     text-decoration: none;
     cursor: pointer;
+    position: relative; /* anchors the collapsed-state tooltip below */
     /* Named properties, not "all": transitioning "all" also animates layout
        and colour properties we never intended to move. 180ms sits inside the
-       150-250ms band that reads as responsive while still being visible. */
+       150-250ms band that reads as responsive while still being visible.
+       gap/padding are additionally animated so a row recenters around its
+       icon in step with the sidebar's own width slide, instead of snapping
+       the moment the rail finishes. */
     transition: background-color 180ms cubic-bezier(0.22, 1, 0.36, 1),
-      color 180ms cubic-bezier(0.22, 1, 0.36, 1);
+      color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      gap 300ms var(--ease-out), padding 300ms var(--ease-out);
   }
   /* Three measured steps, not two shades of almost-white. --muted alone is
      1.09:1 against the sidebar, which is why the old active row was invisible;
@@ -141,6 +151,11 @@ const SHELL_CSS = `
     display: flex;
     flex-shrink: 0;
     color: currentColor;
+    /* The collapsed rail's one piece of motion that isn't a fade: icons
+       scale up 12% under a slight-overshoot curve as the rail finishes
+       narrowing, reading as the icon "settling" into the now-icon-only row
+       rather than just being what's left after the label disappeared. */
+    transition: transform 300ms cubic-bezier(0.34, 1.42, 0.4, 1) 60ms;
   }
   /* The only saturated colour in the shell, and it carries no text — so the
      mascot orange never has to clear a 4.5:1 contrast check. */
@@ -157,20 +172,271 @@ const SHELL_CSS = `
       transition: none;
     }
   }
+
+  /* ── Collapsible sidebar ──────────────────────────────────────────────
+     Default is open; the collapsed/expanded choice persists in
+     localStorage (aep_sidebar_collapsed) so it survives a reload.
+     The rail's width is the one thing that "slides" — every child inside
+     it quiets on its own terms instead of cross-fading as a screen: nav
+     labels and section headings fade out and lose their reserved width,
+     the active marker disappears, each row recenters around its icon, and
+     the icon itself gets the small overshoot-scale defined above. Nothing
+     here unmounts on collapse — same DOM, same handlers, so collapsing
+     never risks losing nav state or user data mid-interaction. */
+  .aep-sidebar {
+    width: 220px;
+    transition: width 300ms var(--ease-out);
+  }
+  .aep-sidebar[data-collapsed="true"] {
+    width: 64px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .aep-sidebar,
+    .aep-nav-icon {
+      transition: none;
+    }
+  }
+
+  .aep-sidebar[data-collapsed="true"] .aep-nav-link {
+    justify-content: center;
+    gap: 0;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-nav-icon {
+    transform: scale(1.12);
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-nav-marker {
+    display: none;
+  }
+
+  .aep-nav-label {
+    overflow: hidden;
+    white-space: nowrap;
+    opacity: 1;
+    transition: opacity 160ms var(--ease-out);
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-nav-label {
+    opacity: 0;
+    width: 0;
+  }
+
+  /* Collapsed-state tooltip. Always in the DOM (content comes from
+     data-tip); only ever painted while the sidebar itself is collapsed, so
+     it never doubles up with the visible label in the open state. */
+  .aep-nav-link::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%) translateX(-4px);
+    background: var(--foreground);
+    color: var(--background);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 8px;
+    border-radius: 5px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
+    z-index: 20;
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-nav-link:hover::after,
+  .aep-sidebar[data-collapsed="true"] .aep-nav-link:focus-visible::after {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+
+  .aep-logo-row {
+    transition: justify-content 300ms var(--ease-out);
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-logo-row {
+    justify-content: center;
+  }
+  .aep-logo-text {
+    overflow: hidden;
+    white-space: nowrap;
+    opacity: 1;
+    transition: opacity 160ms var(--ease-out);
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-logo-text {
+    opacity: 0;
+    width: 0;
+  }
+
+  .aep-admin-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 4px 12px;
+    margin: 0 0 4px;
+    overflow: hidden;
+    white-space: nowrap;
+    opacity: 1;
+    transition: opacity 160ms var(--ease-out), padding 300ms var(--ease-out);
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-admin-label {
+    opacity: 0;
+    height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin: 0;
+  }
+
+  .aep-user-row {
+    gap: 10px;
+    transition: gap 300ms var(--ease-out);
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-user-row {
+    gap: 0;
+    justify-content: center;
+  }
+  .aep-user-textwrap {
+    flex: 1;
+    overflow: hidden;
+    opacity: 1;
+    transition: opacity 160ms var(--ease-out);
+  }
+  .aep-sidebar[data-collapsed="true"] .aep-user-textwrap {
+    flex: 0 1 0%;
+    width: 0;
+    opacity: 0;
+  }
+
+  /* Floating edge toggle — sits on the seam between sidebar and content,
+     vertically anchored near the top, and slides with the rail because it's
+     positioned relative to the (sticky, so still a containing block) aside
+     rather than tracked in JS. The glyph itself never rotates: a static
+     rectangle-with-divider reads as "this controls the sidebar panel" on
+     sight, and the filled half swaps side to say which state you're in,
+     instead of asking the eye to infer meaning from a chevron's direction
+     mid-flight. */
+  .aep-sidebar-toggle {
+    position: absolute;
+    top: 18px;
+    right: -11px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--background);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px oklch(0 0 0 / 10%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--muted-foreground);
+    z-index: 6;
+    transition: color 160ms var(--ease-out), border-color 160ms var(--ease-out);
+  }
+  .aep-sidebar-toggle:hover {
+    color: var(--foreground);
+    border-color: color-mix(in oklch, var(--loader-accent), transparent 45%);
+  }
+  .aep-sidebar-toggle:focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 2px;
+  }
+
+  /* Always-visible scrollbar.
+     overflow-y: scroll, not auto: the track is reserved whether or not the
+     page overflows, so moving between a long page and a short one no longer
+     shifts the content sideways by the scrollbar's width. Windows 11 and
+     macOS both hide an auto scrollbar until you scroll, which is what made
+     the scroll position of a long page invisible at rest.
+     The styling exists so a permanently-present bar reads as part of the UI
+     rather than a raw OS artifact — same ink-on-transparent ladder as the nav
+     rows, so it inverts correctly in dark mode. */
+  .aep-main {
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
+    /* Firefox */
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground), transparent 78%)
+      transparent;
+  }
+  .aep-main::-webkit-scrollbar {
+    width: 10px;
+  }
+  .aep-main::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .aep-main::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground), transparent 78%);
+    border-radius: 999px;
+    /* Inset the thumb inside the 10px track without changing layout width. */
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .aep-main::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--foreground), transparent 62%);
+    background-clip: content-box;
+  }
 `;
+
+// Static rect-with-divider glyph for the sidebar toggle — approved over a
+// rotating chevron because it stays legible mid-transition (nothing spins)
+// and reads as "the sidebar panel" on sight. The filled half tracks which
+// state you're in/would move to: left filled while open (click collapses
+// the left panel), right filled while collapsed (click reopens it).
+function SidebarToggleIcon({ collapsed }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <line x1="9.5" y1="3" x2="9.5" y2="21" />
+      <rect
+        x={collapsed ? "14.8" : "4"}
+        y="4"
+        width="5.2"
+        height="16"
+        rx="1.6"
+        fill="currentColor"
+        stroke="none"
+        style={{ transition: "x 300ms var(--ease-out)" }}
+      />
+    </svg>
+  );
+}
 
 function NavLink({ href, icon, label, activePaths }) {
   // usePathname, not window.location: with client-side routing the URL changes
   // without a remount, so reading window.location here would leave the active
   // highlight stuck on whichever page happened to be loaded first.
   const pathname = usePathname();
-  const active = (activePaths || [href]).includes(pathname);
+  // Prefix match, not just exact equality: a nav entry for "/sow" should also
+  // read as active on a nested detail route like "/sow/<id>" -- exact
+  // matching only ever lit up on the list page itself, so opening a document
+  // (or a project, or a report) left its section unhighlighted the whole time
+  // you were in it. The "+ '/'" boundary keeps "/sow" from also matching an
+  // unrelated path that merely starts with the same letters (e.g. "/soware").
+  const paths = activePaths || [href];
+  const active = paths.some((p) => pathname === p || pathname.startsWith(p + "/"));
   return (
     // aria-current drives the active styling as well as announcing it, so the
     // two can't drift apart the way a separate `active` class would.
-    <Link href={href} className="aep-nav-link" aria-current={active ? "page" : undefined}>
+    // data-tip feeds the collapsed-rail tooltip (see SHELL_CSS); it's inert
+    // and unused by CSS while the sidebar is open.
+    <Link
+      href={href}
+      className="aep-nav-link"
+      aria-current={active ? "page" : undefined}
+      data-tip={label}
+    >
       <span className="aep-nav-icon">{icon}</span>
-      {label}
+      <span className="aep-nav-label">{label}</span>
       {active && <span className="aep-nav-marker" aria-hidden="true" />}
     </Link>
   );
@@ -178,6 +444,11 @@ function NavLink({ href, icon, label, activePaths }) {
 
 export default function AppShell({ children, noPadding = false }) {
   const [user, setUser] = useState(null);
+  // Default open, per spec — the persisted value (if any) is applied after
+  // mount rather than as the initial state, so server-rendered markup and
+  // the first paint always agree on "open" and there's nothing to hydrate
+  // mismatched.
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     const stored = getStoredUser();
@@ -187,7 +458,19 @@ export default function AppShell({ children, noPadding = false }) {
       return;
     }
     setUser(stored);
+
+    if (window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true") {
+      setCollapsed(true);
+    }
   }, []);
+
+  function toggleSidebar() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      return next;
+    });
+  }
 
   async function handleLogout() {
     try {
@@ -215,12 +498,25 @@ export default function AppShell({ children, noPadding = false }) {
     return n.permissions.some((permission) => (user.permissions || []).includes(permission));
   });
 
+  const initials = user.full_name
+    ?.split(" ")
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+
   return (
     <div
       style={{
         display: "flex",
         height: "100vh",
-        background: "var(--muted)",
+        // Transparent, not var(--muted): the body's grid+glow canvas texture
+        // (app/global.css) is meant to show through the whole authenticated
+        // app, not just the login/loading screens outside AppShell. The
+        // sidebar below keeps its own solid background so nav text stays on
+        // a flat, fully legible surface -- only the content canvas shows
+        // the texture.
+        background: "transparent",
         fontFamily: "Inter, sans-serif",
       }}
     >
@@ -228,8 +524,9 @@ export default function AppShell({ children, noPadding = false }) {
 
       {/* Sidebar */}
       <aside
+        className="aep-sidebar"
+        data-collapsed={collapsed}
         style={{
-          width: 220,
           flexShrink: 0,
           background: "var(--background)",
           borderRight: "1px solid var(--border)",
@@ -240,6 +537,19 @@ export default function AppShell({ children, noPadding = false }) {
           top: 0,
         }}
       >
+        {/* Floating edge toggle. Positioned relative to this (sticky) aside,
+            so it tracks the sidebar's own width transition automatically —
+            no JS-computed offset needed. */}
+        <button
+          type="button"
+          className="aep-sidebar-toggle"
+          onClick={toggleSidebar}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <SidebarToggleIcon collapsed={collapsed} />
+        </button>
+
         {/* Logo */}
         <div
           style={{
@@ -247,7 +557,10 @@ export default function AppShell({ children, noPadding = false }) {
             borderBottom: "1px solid var(--border)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+          <div
+            className="aep-logo-row"
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}
+          >
             <img
               src="/spider-logo.png"
               alt="AEP logo"
@@ -255,7 +568,7 @@ export default function AppShell({ children, noPadding = false }) {
               height={40}
               style={{ flexShrink: 0, objectFit: "contain" }}
             />
-            <div>
+            <div className="aep-logo-text">
               <p
                 style={{
                   margin: 0,
@@ -287,7 +600,13 @@ export default function AppShell({ children, noPadding = false }) {
             navigation named nothing — the divider below is what separates the
             two groups, and "Admin" is the only label carrying real information
             (these routes are privileged). */}
-        <nav style={{ flex: 1, padding: "12px 8px", overflowY: "auto" }}>
+        {/* overflowX explicitly hidden: with only overflow-y set to a
+            scrolling value, browsers compute overflow-x to "auto" too (per
+            spec, an axis left at "visible" next to a non-visible one is
+            coerced), which is what surfaced an unwanted horizontal
+            scrollbar here — nothing in the nav actually needs to scroll
+            sideways. */}
+        <nav style={{ flex: 1, padding: "12px 8px", overflowY: "auto", overflowX: "hidden" }}>
           <div style={{ marginBottom: 4 }}>
             {visibleNav.map((n) => (
               <NavLink key={n.href} {...n} />
@@ -302,19 +621,7 @@ export default function AppShell({ children, noPadding = false }) {
                 borderTop: "1px solid var(--border)",
               }}
             >
-              <p
-                style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: "var(--muted-foreground)",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                  padding: "4px 12px",
-                  margin: "0 0 4px",
-                }}
-              >
-                Admin
-              </p>
+              <p className="aep-admin-label">Admin</p>
               {ADMIN_NAV.map((n) => (
                 <NavLink key={n.href} {...n} />
               ))}
@@ -325,10 +632,10 @@ export default function AppShell({ children, noPadding = false }) {
         {/* User */}
         <div style={{ padding: "12px 8px", borderTop: "1px solid var(--border)" }}>
           <div
+            className="aep-user-row"
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
               padding: "8px 12px",
               borderRadius: 6,
             }}
@@ -349,15 +656,10 @@ export default function AppShell({ children, noPadding = false }) {
               }}
             >
               <span style={{ fontSize: 11, fontWeight: 600, color: "var(--foreground)" }}>
-                {user.full_name
-                  ?.split(" ")
-                  .map((w) => w[0])
-                  .join("")
-                  .toUpperCase()
-                  .slice(0, 2)}
+                {initials}
               </span>
             </div>
-            <div style={{ flex: 1, overflow: "hidden" }}>
+            <div className="aep-user-textwrap">
               <p
                 style={{
                   margin: 0,
@@ -383,6 +685,7 @@ export default function AppShell({ children, noPadding = false }) {
                   padding: "1px 6px",
                   textTransform: "uppercase",
                   letterSpacing: "0.05em",
+                  whiteSpace: "nowrap",
                 }}
               >
                 {user.role?.replace("_", " ")}
@@ -393,23 +696,33 @@ export default function AppShell({ children, noPadding = false }) {
               the sidebar reads as an alarm you can't dismiss. It stays muted
               at rest and turns red on approach, and pointing the rim and bloom
               at --destructive is what keeps that intent inside the shared
-              button rather than beside it. */}
+              button rather than beside it.
+              A faint red border stays visible at rest (30% mix, matching the
+              `destructive` variant's own resting border) and strengthens on
+              hover, so the button reads as "danger action" even before the
+              pointer arrives.
+              Collapsed: the label drops and the icon carries the action
+              alone, with aria-label standing in for the now-hidden text so
+              screen readers still get "Sign out" rather than nothing. */}
           <Button
             variant="ghost"
             size="sm"
             onClick={handleLogout}
-            className="mt-1.5 w-full text-xs text-muted-foreground hover:text-destructive hover:border-[color-mix(in_oklch,var(--destructive),transparent_65%)] [--btn-rim-a:var(--destructive)] [--btn-rim-b:oklch(0.72_0.16_35)] [--btn-bloom:var(--destructive)]"
+            aria-label={collapsed ? "Sign out" : undefined}
+            className="mt-1.5 w-full text-xs text-muted-foreground border-2 border-[color-mix(in_oklch,var(--destructive)_30%,transparent)] hover:text-destructive hover:border-[color-mix(in_oklch,var(--destructive),transparent_65%)] [--btn-rim-a:var(--destructive)] [--btn-rim-b:oklch(0.72_0.16_35)] [--btn-bloom:var(--destructive)]"
           >
-            Sign out
+            <LogOut size={13} aria-hidden="true" />
+            {!collapsed && <span className="ml-1.5">Sign out</span>}
           </Button>
         </div>
       </aside>
 
       {/* Main */}
       <main
+        className="aep-main"
         style={{
           flex: 1,
-          overflowY: "auto",
+          minWidth: 0,
           padding: noPadding ? 0 : "32px 32px",
         }}
       >

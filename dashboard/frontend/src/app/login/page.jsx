@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Terminal, ArrowRight, Loader2 } from "lucide-react";
 import { PasswordRevealSwitch } from "../../components/ui/password-reveal-switch";
+import LoginBackground from "../../components/LoginBackground";
 import { setAccessToken } from "../../lib/api";
 
 export default function LoginPage() {
@@ -73,8 +74,9 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6">
-      <div className="w-full max-w-[400px] animate-fade-in-up">
+    <div className="relative min-h-screen flex items-center justify-center bg-gray-50 px-6 py-12">
+      <LoginBackground />
+      <div className="relative z-10 w-full max-w-[400px] animate-fade-in-up">
         {/* Brand */}
         <div className="text-center mb-8">
           <img
@@ -100,36 +102,44 @@ export default function LoginPage() {
             <span className="text-sm font-medium text-white">Sign in</span>
           </div>
 
-          {/* Terminal-style body */}
-          <div className="bg-gray-950 px-4 py-5 [font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace]">
-            <div className="mb-4">
-              <label htmlFor="login-email" className="sr-only">
-                Email address
-              </label>
-              <div className="flex items-center gap-2.5">
-                <span className="text-sm text-emerald-400 shrink-0">
-                  email:
-                </span>
-                <input
-                  id="login-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleLogin();
-                  }}
-                  placeholder="you@company.com"
-                  autoComplete="email"
-                  className="flex-1 min-w-0 bg-transparent text-sm text-white placeholder:text-gray-400 outline-none caret-emerald-400 rounded-sm focus:ring-1 focus:ring-emerald-400/50"
-                />
-              </div>
+          {/* Terminal-style body.
+              Each field sits in its own bordered well rather than floating as
+              a bare underline-less input: the prompt and the value now have
+              room on all four sides, and focus is expressed once, by the well
+              (focus-within), instead of a ring that only ever appeared around
+              one of the two rows. */}
+          <div className="bg-gray-950 px-5 py-5 [font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace]">
+            <label htmlFor="login-email" className="sr-only">
+              Email address
+            </label>
+            <div className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2.5 transition-colors duration-200 ease-out motion-reduce:transition-none focus-within:border-emerald-400/60 focus-within:bg-white/[0.06]">
+              <span className="text-sm text-emerald-400 shrink-0">email:</span>
+              <input
+                id="login-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleLogin();
+                }}
+                placeholder="you@company.com"
+                autoComplete="email"
+                className="flex-1 min-w-0 bg-transparent text-sm text-white placeholder:text-gray-400 outline-none caret-emerald-400"
+              />
             </div>
 
-            <div>
+            {/* The reveal switch sits outside the well, not in it: at 44px it
+                is taller than the text row, and dropping it inside would make
+                the password field visibly deeper than the email field. */}
+            <div className="mt-3 flex items-center gap-2.5">
               <label htmlFor="login-password" className="sr-only">
                 Password
               </label>
-              <div className="flex items-center gap-2.5">
+              {/* min-w-0: as a flex item this well defaults to min-width:auto,
+                  which resolves to the text input's intrinsic width and stops
+                  it shrinking — at 375px that pushed the switch outside the
+                  card. Nested flex needs the floor released at every level. */}
+              <div className="flex min-h-[44px] min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2.5 transition-colors duration-200 ease-out motion-reduce:transition-none focus-within:border-emerald-400/60 focus-within:bg-white/[0.06]">
                 <span className="text-sm text-emerald-400 shrink-0">
                   password:
                 </span>
@@ -143,14 +153,14 @@ export default function LoginPage() {
                   }}
                   placeholder="••••••••"
                   autoComplete="current-password"
-                  className="flex-1 min-w-0 bg-transparent text-sm text-white placeholder:text-gray-400 outline-none caret-emerald-400 rounded-sm focus:ring-1 focus:ring-emerald-400/50"
-                />
-                <PasswordRevealSwitch
-                  revealed={showPassword}
-                  onRevealedChange={setShowPassword}
-                  labelClassName="text-gray-400"
+                  className="flex-1 min-w-0 bg-transparent text-sm text-white placeholder:text-gray-400 outline-none caret-emerald-400"
                 />
               </div>
+              <PasswordRevealSwitch
+                revealed={showPassword}
+                onRevealedChange={setShowPassword}
+                labelClassName="text-gray-400"
+              />
             </div>
 
             {error && (

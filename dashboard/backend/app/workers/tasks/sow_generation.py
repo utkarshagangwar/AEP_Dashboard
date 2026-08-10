@@ -23,6 +23,7 @@ error message, not silently absent).
 from datetime import datetime, timezone
 
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -64,6 +65,7 @@ def _mark_unexpected_failure(document_id: str, version_id: str) -> None:
     # reasoning as every other multi-call SOW/video task in this codebase.
     soft_time_limit=1200,
 )
+@ai_usage.tracked_task("sow_generation", id_index=2)
 def generate_sow_task(self, document_id: str, version_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.sow import (
@@ -296,6 +298,7 @@ def generate_sow_task(self, document_id: str, version_id: str) -> None:
     max_retries=0,
     soft_time_limit=1200,
 )
+@ai_usage.tracked_task("sow_generation", id_index=2)
 def patch_sow_task(self, document_id: str, version_id: str, target_sections: list[str]) -> None:
     """Phase 7 — regenerate ONLY target_sections into a new patch version;
     every other section was already copied forward unchanged by the API

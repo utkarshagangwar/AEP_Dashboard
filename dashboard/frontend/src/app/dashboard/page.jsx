@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
-import GlobalLoader from "../../components/GlobalLoader";
+import { usePageLoading } from "../../components/NavigationLoadingProvider";
 import PageContainer from "../../components/PageContainer";
 import { apiGet } from "../../utils/apiClient";
 import {
@@ -186,27 +186,20 @@ export default function DashboardPage() {
     refetchInterval: 30000,
   });
 
-  const selectedProjectName = selectedProject
-    ? projects.find((p) => p.id === selectedProject)?.name
-    : null;
-
-  // One loader for the whole page, replacing the per-panel "Loading…" text.
   // isLoading (not isFetching) is deliberate: it's true only on the first
   // load, so the 30s background refetch above never blanks the dashboard out
   // from under someone reading it.
   //
-  // It renders inside the shell, not over it. Returning a bare fullscreen
-  // loader here tore the sidebar down and rebuilt it a beat later, which read
-  // as the whole app reloading rather than one panel filling in.
-  if (isLoading) {
-    return (
-      <AppShell noPadding>
-        <PageContainer>
-          <GlobalLoader fullscreen={false} />
-        </PageContainer>
-      </AppShell>
-    );
-  }
+  // The loader itself is the app-wide overlay, already on screen from the
+  // click that brought us here; this just keeps it up until the data lands.
+  usePageLoading(isLoading);
+
+  const selectedProjectName = selectedProject
+    ? projects.find((p) => p.id === selectedProject)?.name
+    : null;
+
+  // Nothing of the page renders behind the overlay — no chrome, no skeleton.
+  if (isLoading) return null;
 
   return (
     <AppShell noPadding>

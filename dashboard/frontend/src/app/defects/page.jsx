@@ -2,12 +2,13 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
-import GlobalLoader from "../../components/GlobalLoader";
+import { usePageLoading } from "../../components/NavigationLoadingProvider";
 import PageContainer from "../../components/PageContainer";
 import { toastSuccess } from "../../lib/toast";
-import { apiGet, apiPost, apiPatch } from "../../utils/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
 import { Button } from "../../components/ui/button";
+import { DeleteIconButton } from "../../components/ui/delete-icon-button";
 import {
   Select,
   SelectContent,
@@ -47,12 +48,21 @@ export default function DefectsPage() {
   const canWrite =
     user &&
     ["admin", "qa_lead", "qa_engineer", "developer"].includes(user.role);
+  // Deleting a defect only hides it, so it stays on the same gate as editing.
+  // Seeing the recovery view and undoing someone else's delete is supervisory
+  // and matches the backend's require_roles(admin, qa_lead) on those routes.
+  const canRecover = !!user && ["admin", "qa_lead"].includes(user.role);
 
   const [sevFilter, setSevFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("open");
   const [projectFilter, setProjectFilter] = useState("");
+  // The recovery view is a separate axis from status, not another status
+  // chip's value: a deleted defect still HAS a status, and conflating them
+  // would make "Deleted + Open" unexpressible.
+  const [showDeleted, setShowDeleted] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editDefect, setEditDefect] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -65,12 +75,16 @@ export default function DefectsPage() {
   if (sevFilter) params.set("severity", sevFilter);
   if (statusFilter) params.set("status", statusFilter);
   if (projectFilter) params.set("project_id", projectFilter);
+  if (showDeleted) params.set("deleted", "true");
   params.set("limit", "50");
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["defects", sevFilter, statusFilter, projectFilter],
+    queryKey: ["defects", sevFilter, statusFilter, projectFilter, showDeleted],
     queryFn: () => apiGet(`/api/defects?${params.toString()}`),
   });
+
+  // Loading is the app-wide overlay, not a box inside the table.
+  usePageLoading(isLoading);
 
   const { data: projectsData } = useQuery({
     queryKey: ["projects-list"],
@@ -111,6 +125,23 @@ export default function DefectsPage() {
     },
     onError: (e) =>
       setEditError(typeof e.message === "string" ? e.message : "Failed to update defect"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => apiDelete(`/api/defects/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries(["defects"]);
+      setDeleteTarget(null);
+      toastSuccess("Defect deleted");
+    },
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: (id) => apiPost(`/api/defects/${id}/restore`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries(["defects"]);
+      toastSuccess("Defect restored");
+    },
   });
 
   const defects = data?.data || [];
@@ -176,15 +207,36 @@ export default function DefectsPage() {
               ["closed", "Closed"],
             ].map(([val, label]) => (
               <Button
-                variant={statusFilter === val ? "invert" : "outline"}
+                variant={!showDeleted && statusFilter === val ? "invert" : "outline"}
                 size="sm"
                 key={val}
-                aria-pressed={statusFilter === val}
-                onClick={() => setStatusFilter(val)}
+                aria-pressed={!showDeleted && statusFilter === val}
+                onClick={() => {
+                  setStatusFilter(val);
+                  setShowDeleted(false);
+                }}
               >
                 {label}
               </Button>
             ))}
+            {/* The recovery view. Shown only to the roles that can act on it —
+                a chip that 403s on click is worse than no chip. Sits with the
+                status chips because it is the same "which defects am I
+                looking at" decision, and leaving it selected is what makes
+                "Deleted by <name>" visible on each row. */}
+            {canRecover && (
+              <Button
+                variant={showDeleted ? "invert" : "outline"}
+                size="sm"
+                aria-pressed={showDeleted}
+                onClick={() => {
+                  setShowDeleted(true);
+                  setStatusFilter("");
+                }}
+              >
+                Deleted
+              </Button>
+            )}
           </div>
           <Select
             value={sevFilter || "all"}
@@ -257,7 +309,7 @@ export default function DefectsPage() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(0, 3fr) minmax(80px, 1fr) minmax(80px, 0.8fr) minmax(80px, 0.8fr) minmax(80px, 1fr) minmax(80px, 1fr) 90px",
+              gridTemplateColumns: "minmax(0, 3fr) minmax(80px, 1fr) minmax(80px, 0.8fr) minmax(80px, 0.8fr) minmax(80px, 1fr) minmax(80px, 1fr) 216px",
               gap: 16,
               padding: "10px 32px",
               borderBottom: "1px solid #E5E7EB",
@@ -287,9 +339,7 @@ export default function DefectsPage() {
               </span>
             ))}
           </div>
-          {isLoading ? (
-            <GlobalLoader fullscreen={false} />
-          ) : !defects.length ? (
+          {isLoading ? null : !defects.length ? (
             <div
               style={{
                 padding: 40,
@@ -298,7 +348,9 @@ export default function DefectsPage() {
                 fontSize: 13,
               }}
             >
-              No defects found.
+              {showDeleted
+                ? "No deleted defects. Anything removed from the list shows up here, with who removed it."
+                : "No defects found."}
             </div>
           ) : (
             defects.map((d, i) => (
@@ -307,7 +359,7 @@ export default function DefectsPage() {
                 className="row-interactive"
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "minmax(0, 3fr) minmax(80px, 1fr) minmax(80px, 0.8fr) minmax(80px, 0.8fr) minmax(80px, 1fr) minmax(80px, 1fr) 90px",
+                  gridTemplateColumns: "minmax(0, 3fr) minmax(80px, 1fr) minmax(80px, 0.8fr) minmax(80px, 0.8fr) minmax(80px, 1fr) minmax(80px, 1fr) 216px",
               gap: 16,
                   padding: "13px 32px",
                   borderBottom:
@@ -335,6 +387,25 @@ export default function DefectsPage() {
                       }}
                     >
                       - {d.linked_test_name}
+                    </p>
+                  )}
+                  {/* Who removed it and when. Sits with the title rather than
+                      in its own column because it only exists in the recovery
+                      view — a column that is blank on every other view is
+                      chrome. Falls back to "someone" rather than blank if that
+                      account has since been removed: the FK is ON DELETE SET
+                      NULL, and "Deleted by ·" reads like a rendering bug. */}
+                  {d.deleted_at && (
+                    <p
+                      style={{
+                        margin: "3px 0 0",
+                        fontSize: 11,
+                        fontWeight: 500,
+                        color: "#B91C1C",
+                      }}
+                    >
+                      Deleted by {d.deleted_by_name || "a since-removed user"} ·{" "}
+                      {new Date(d.deleted_at).toLocaleString()}
                     </p>
                   )}
                 </div>
@@ -408,29 +479,61 @@ export default function DefectsPage() {
                 <span style={{ fontSize: 12, color: d.assigned_to_name ? "#374151" : "#9CA3AF" }}>
                   {d.assigned_to_name || "Unassigned"}
                 </span>
-                <div style={{ display: "flex", gap: 6 }}>
-                  {canWrite && d.status !== "closed" && (
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      onClick={() => setEditDefect(d)}
-                    >
-                      Edit
-                    </Button>
-                  )}
-                  {canWrite && d.status === "open" && (
-                    <Button
-                      variant="invert"
-                      size="xs"
-                      onClick={() =>
-                        updateMutation.mutate({
-                          id: d.id,
-                          status: "in_progress",
-                        })
-                      }
-                    >
-                      Start
-                    </Button>
+                {/* Edit · Start · Delete as one segmented option group, the
+                    same control the SOW library row uses. `size="sm"` (was
+                    "xs") because the group's segments are 28px tall — a 24px
+                    Edit next to a 28px Delete is the seam breaking. Corner
+                    rounding is positional and lives in `.btn-option-group`
+                    (app/global.css), so the row does not have to work out
+                    which segment is on the end when Start is absent.
+
+                    In the recovery view the row's options are different in
+                    kind, not just disabled: there is nothing to edit or start
+                    on a deleted bug, only to put it back. */}
+                <div className="btn-option-group">
+                  {showDeleted ? (
+                    canRecover && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => restoreMutation.mutate(d.id)}
+                        disabled={restoreMutation.isPending}
+                      >
+                        Restore
+                      </Button>
+                    )
+                  ) : (
+                    <>
+                      {canWrite && d.status !== "closed" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setEditDefect(d)}
+                        >
+                          Edit
+                        </Button>
+                      )}
+                      {canWrite && d.status === "open" && (
+                        <Button
+                          variant="invert"
+                          size="sm"
+                          onClick={() =>
+                            updateMutation.mutate({
+                              id: d.id,
+                              status: "in_progress",
+                            })
+                          }
+                        >
+                          Start
+                        </Button>
+                      )}
+                      {canWrite && (
+                        <DeleteIconButton
+                          onClick={() => setDeleteTarget(d)}
+                          aria-label={`Delete defect ${d.title}`}
+                        />
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -829,6 +932,71 @@ export default function DefectsPage() {
                   disabled={updateMutation.isPending}
                 >
                   {updateMutation.isPending ? "Saving…" : "Save Changes"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete confirmation. A confirm step rather than a straight delete
+            because the row disappears from the list on success, and the copy
+            says plainly that it is recoverable and by whom — an undo the user
+            cannot find is the same as no undo. */}
+        {deleteTarget && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(17,24,39,0.4)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 50,
+            }}
+            onClick={() => !deleteMutation.isPending && setDeleteTarget(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: "#fff",
+                borderRadius: 12,
+                padding: 24,
+                width: 420,
+                maxWidth: "90vw",
+              }}
+            >
+              <h2
+                style={{
+                  margin: "0 0 8px",
+                  fontSize: 16,
+                  fontWeight: 600,
+                  color: "#111827",
+                }}
+              >
+                Delete this defect?
+              </h2>
+              <p style={{ margin: "0 0 18px", fontSize: 13, color: "#6B7280" }}>
+                “{deleteTarget.title}” is hidden from the list. Nothing is
+                erased — an admin or QA lead can put it back from the{" "}
+                <strong style={{ color: "#374151" }}>Deleted</strong> filter,
+                where it will show that you removed it.
+              </p>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <Button
+                  variant="outline"
+                  size="lg"
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={deleteMutation.isPending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="lg"
+                  onClick={() => deleteMutation.mutate(deleteTarget.id)}
+                  disabled={deleteMutation.isPending}
+                >
+                  {deleteMutation.isPending ? "Deleting…" : "Delete"}
                 </Button>
               </div>
             </div>

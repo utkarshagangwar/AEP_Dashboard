@@ -27,6 +27,7 @@ skills, and can be run on demand from there.
 """
 import hashlib
 import os
+import tempfile
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -208,6 +209,40 @@ class CheckpointOut(BaseModel):
     review_status: str | None = None
     review_reason: str | None = None
 
+    # ── TDD classification (app.services.tdd_extraction, migration 0043) ──
+    # All optional: checkpoints extracted before the v2 pipeline (and
+    # anything the TDD_EXTRACTION_V2=0 legacy path produces) carry no such
+    # keys in their stored JSONB, and the UI renders those as unclassified
+    # rather than guessing.
+    #
+    # test_type is the one the reader cannot do without: a NEGATIVE
+    # checkpoint passes when the system REFUSES the action, so it must never
+    # be presented in the same visual register as a happy path.
+    test_type: str | None = None       # positive | negative | edge
+    category: str | None = None        # tdd_extraction.CATEGORIES code
+    # stated = the document specifies this expectation; derived = inferred
+    # from standard QA practice, so a failure may be a spec gap rather than a
+    # product defect.
+    grounding: str | None = None
+    # Shared by every variant of one behaviour, so the UI can group a
+    # behaviour's positive/negative/edge checkpoints together.
+    behaviour_key: str | None = None
+    priority: str | None = None        # smoke | sanity | regression
+    # Variants the checkpoint's category REQUIRES but the model did not
+    # produce — flagged by check_variant_coverage() in Python rather than
+    # trusted from the model's own claim about its work.
+    coverage_gap: list[str] = []
+    # Other parts that stated this same behaviour and were merged into this
+    # checkpoint (tdd_extraction Stage 6). Empty for the common case. Present
+    # so a merge is visible rather than inferred from a checkpoint count that
+    # no longer adds up — nothing is silently lost.
+    merged_from_parts: list[int] = []
+    # Lower-priority variants of this behaviour that Stage 4c dropped to keep
+    # the behaviour under its ceiling. Zero for the common case. Surfaced so a
+    # deliberate cap is visible rather than looking like the extractor simply
+    # found nothing more.
+    capped_variants: int = 0
+
 
 class PartOut(BaseModel):
     part_number: int
@@ -241,6 +276,21 @@ class PartOut(BaseModel):
     #   renders this as a badge; suite 05_failure_surfacing.robot asserts on
     #   it.
     degraded: bool = False
+
+    # ── Testability gate audit trail (migration 0043) ──
+    # excluded_zones -- what tdd_extraction's Stage 0 decided was not product
+    #   behaviour and never sent for extraction:
+    #   [{heading, zone_kind, reason, char_count, classifier}].
+    #   Surfaced because a filter nobody can see is a filter nobody can
+    #   audit — "the extractor quietly decided your requirements section was
+    #   a glossary" has to be noticeable from the UI.
+    # coverage -- tdd_extraction.scorecard() for this part. The headline
+    #   figure is negative_edge_ratio; below 0.40 the extractor has drifted
+    #   back to happy-path-only output.
+    # Both default to null/empty: parts analyzed before migration 0043, and
+    # any part parsed with TDD_EXTRACTION_V2=0, hold NULL.
+    excluded_zones: list[dict] = []
+    coverage: dict | None = None
 
 
 class SowDetailOut(SowOut):
@@ -289,6 +339,23 @@ def _checkpoint_out(c: dict) -> CheckpointOut:
         expected=c.get("expected"),
         review_status=c.get("review_status"),
         review_reason=c.get("review_reason"),
+        test_type=c.get("test_type"),
+        category=c.get("category"),
+        grounding=c.get("grounding"),
+        behaviour_key=c.get("behaviour_key"),
+        priority=c.get("priority"),
+        # Guard the type rather than trusting it: coverage_gap comes out of
+        # stored JSONB, and rows written before migration 0043 have no key
+        # at all while a legacy row could in principle hold anything.
+        coverage_gap=[str(g) for g in (c.get("coverage_gap") or [])]
+        if isinstance(c.get("coverage_gap"), list)
+        else [],
+        merged_from_parts=[p for p in (c.get("merged_from_parts") or []) if isinstance(p, int)]
+        if isinstance(c.get("merged_from_parts"), list)
+        else [],
+        capped_variants=c["capped_variants"]
+        if isinstance(c.get("capped_variants"), int)
+        else 0,
     )
 
 
@@ -323,6 +390,12 @@ def _parts_out(db: Session, artifact: DesignArtifact) -> list["PartOut"]:
                 locator=p.locator,
                 strategy=p.strategy,
                 degraded=(p.strategy == STRATEGY_HARD_SPLIT),
+                # Same JSONB guard as heading_path above — NULL on every part
+                # analyzed before migration 0043.
+                excluded_zones=[z for z in (p.excluded_zones or []) if isinstance(z, dict)]
+                if isinstance(p.excluded_zones, list)
+                else [],
+                coverage=p.coverage_json if isinstance(p.coverage_json, dict) else None,
             )
             for p in sow_parts
         ]
@@ -345,6 +418,161 @@ def _parts_out(db: Session, artifact: DesignArtifact) -> list["PartOut"]:
             preview="",
         )
     ]
+
+
+# ── Live extraction progress ─────────────────────────────────────────────────
+
+class IngestEventOut(BaseModel):
+    sequence: int
+    # Machine-readable stage key, so the UI picks an icon without
+    # pattern-matching on the sentence.
+    stage: str
+    # running | done | skipped | error. `skipped` is distinct from `done`
+    # because "the repair pass found nothing to repair" and "the repair pass
+    # never ran" are different facts.
+    status: str
+    description: str
+    # Null for document-level steps (reading, chunking, the cross-part merge),
+    # which the UI renders unprefixed rather than attributing to a part.
+    part_number: int | None = None
+    detail: dict | None = None
+    created_at: str
+
+
+class IngestProgressOut(BaseModel):
+    artifact_id: uuid.UUID
+    # Mirrors the artifact so a poller can stop on its own without a second
+    # request: pending/processing means keep polling.
+    parse_status: str
+    total_parts: int = 1
+    events: list[IngestEventOut] = []
+
+
+@router.get("/sow/{artifact_id}/progress", response_model=IngestProgressOut)
+def get_sow_progress(
+    artifact_id: uuid.UUID,
+    after: int = 0,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Steps that actually ran during this artifact's extraction.
+
+    Deliberately NOT a fixed list of phases derived from SowPart rows. These
+    rows are written by the code doing the work, so a stage that did not run
+    produces no row and a stage that was skipped says so — see
+    app/services/sow_progress.py for why that distinction is load-bearing.
+
+    `after` returns only events past that sequence number, so a poll during a
+    long ingest sends back the two new rows rather than the whole timeline
+    every two seconds.
+    """
+    _feature_enabled()
+    from app.models.visual_qa import SowIngestEvent
+
+    artifact = db.get(DesignArtifact, artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    rows = (
+        db.query(SowIngestEvent)
+        .filter(
+            SowIngestEvent.artifact_id == artifact_id,
+            SowIngestEvent.sequence > after,
+        )
+        .order_by(SowIngestEvent.sequence)
+        .all()
+    )
+    return IngestProgressOut(
+        artifact_id=artifact_id,
+        parse_status=artifact.parse_status.value
+        if hasattr(artifact.parse_status, "value")
+        else str(artifact.parse_status),
+        total_parts=artifact.total_parts or 1,
+        events=[
+            IngestEventOut(
+                sequence=e.sequence,
+                stage=e.stage,
+                status=e.status,
+                description=e.description,
+                part_number=e.part_number,
+                detail=e.detail if isinstance(e.detail, dict) else None,
+                created_at=e.created_at.isoformat() if e.created_at else "",
+            )
+            for e in rows
+        ],
+    )
+
+
+# ── Project UI naming reference ──────────────────────────────────────────────
+
+class UiInventoryOut(BaseModel):
+    """What app.services.ui_inventory read off a project's evidence.
+
+    Read-only and diagnostic. There is no rebuild endpoint on purpose: the
+    inventory rebuilds itself whenever the project's evidence set changes, so
+    a manual rebuild button would exist only to re-run a vision call that is
+    already up to date. If it is wrong, the fix is better evidence, not
+    another build.
+    """
+
+    project_id: uuid.UUID
+    # [{screen, controls[], fields[], nav[], messages[]}] — the structured
+    # form, for a caller that wants the labels rather than the prose.
+    screens: list[dict] = []
+    screen_count: int = 0
+    label_count: int = 0
+    # Exactly the text handed to the extraction prompt, so what the model
+    # actually saw is inspectable rather than inferred.
+    rendered_text: str | None = None
+    built_by_model: str | None = None
+    # Why the last build produced nothing usable. "no usable evidence
+    # uploaded" and "the vision call failed" need different responses, so
+    # they are not collapsed into an empty result.
+    build_error: str | None = None
+    source_artifact_count: int = 0
+    updated_at: str | None = None
+
+
+@router.get("/projects/{project_id}/ui-inventory", response_model=UiInventoryOut)
+def get_project_ui_inventory(
+    project_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The UI naming reference built for this project, if one exists yet.
+
+    Returns an empty inventory (200, not 404) for a project that has never
+    been through extraction: "no inventory yet" is a normal state, not a
+    missing resource, and the caller renders it the same either way.
+    """
+    _feature_enabled()
+    from app.models.visual_qa import ProjectUiInventory
+
+    row = (
+        db.query(ProjectUiInventory)
+        .filter(ProjectUiInventory.project_id == project_id)
+        .one_or_none()
+    )
+    if row is None:
+        return UiInventoryOut(project_id=project_id)
+
+    screens = row.inventory_json if isinstance(row.inventory_json, list) else []
+    return UiInventoryOut(
+        project_id=project_id,
+        screens=screens,
+        screen_count=row.screen_count or 0,
+        label_count=sum(
+            len(s.get(k) or [])
+            for s in screens
+            if isinstance(s, dict)
+            for k in ("controls", "fields", "nav", "messages")
+        ),
+        rendered_text=row.rendered_text,
+        built_by_model=row.built_by_model,
+        build_error=row.build_error,
+        source_artifact_count=len(row.source_artifact_ids or []),
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+    )
 
 
 # ── Reference uploads ────────────────────────────────────────────────────────
@@ -757,18 +985,31 @@ def delete_sow(
 
 # ── Walkthrough videos (Phase 5) ─────────────────────────────────────────────
 
-_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov")
-_WEBM_MAGIC = b"\x1a\x45\xdf\xa3"
+_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".mkv")
+# EBML header — shared by WebM and MKV, since WebM is a Matroska profile.
+# .mkv is stored as-is and converted to MP4 at ingest time
+# (video_ingest._prepare_for_upload): Gemini's Files API has no Matroska type.
+_MATROSKA_MAGIC = b"\x1a\x45\xdf\xa3"
 
 
 def _max_video_bytes() -> int:
-    return int(os.environ.get("VISUAL_VIDEO_MAX_MB", "50")) * 1024 * 1024
+    return int(os.environ.get("VISUAL_VIDEO_MAX_MB", "500")) * 1024 * 1024
+
+
+# Walkthroughs are now allowed up to 500MB, so the upload can no longer be
+# buffered in memory: `await file.read()` on a half-gigabyte body costs that
+# much RAM per concurrent upload and a handful of them would OOM the API
+# container. Stream it to disk in chunks instead, hashing as we go and
+# aborting the moment the running total passes the cap — memory stays flat at
+# one chunk regardless of file size, and an oversized upload is rejected
+# without ever being fully written.
+_VIDEO_CHUNK_BYTES = 1024 * 1024
 
 
 def _looks_like_video(content: bytes, ext: str) -> bool:
     """Content-based sanity check (extension/content-type are client-controlled)."""
-    if ext == ".webm":
-        return content.startswith(_WEBM_MAGIC)
+    if ext in (".webm", ".mkv"):
+        return content.startswith(_MATROSKA_MAGIC)
     # MP4/MOV: 'ftyp' box appears at offset 4 in well-formed files
     return b"ftyp" in content[:16]
 
@@ -801,21 +1042,43 @@ async def upload_video(
     ext = os.path.splitext(file_name.lower())[1]
     if ext not in _VIDEO_EXTENSIONS:
         raise HTTPException(
-            status_code=400, detail="Video must be a .mp4, .webm, or .mov file"
+            status_code=400, detail="Video must be a .mp4, .webm, .mov, or .mkv file"
         )
 
-    content = await file.read()
     max_bytes = _max_video_bytes()
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Video exceeds the {max_bytes // (1024 * 1024)}MB limit. "
-            "Trim the walkthrough to the relevant screens.",
-        )
-    if not content or not _looks_like_video(content, ext):
-        raise HTTPException(status_code=400, detail="File is not a valid video")
+    video_dir = os.path.join(_data_dir(), "video")
+    os.makedirs(video_dir, exist_ok=True)
 
-    sha = hashlib.sha256(content).hexdigest()
+    # Written into video_dir (not the system temp dir) so the final os.replace
+    # below is an atomic same-filesystem rename rather than a second full copy.
+    digest = hashlib.sha256()
+    header = b""
+    total = 0
+    fd, tmp_path = tempfile.mkstemp(dir=video_dir, suffix=".part")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            while True:
+                chunk = await file.read(_VIDEO_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Video exceeds the {max_bytes // (1024 * 1024)}MB "
+                        "limit. Trim the walkthrough to the relevant screens.",
+                    )
+                if len(header) < 16:
+                    header += chunk[: 16 - len(header)]
+                digest.update(chunk)
+                fh.write(chunk)
+        if not total or not _looks_like_video(header, ext):
+            raise HTTPException(status_code=400, detail="File is not a valid video")
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
+
+    sha = digest.hexdigest()
     # Memory Bank dedupe — the whole point of Phase 5's cost control: the
     # same video is never uploaded to Gemini (or billed) twice.
     existing = (
@@ -828,6 +1091,7 @@ async def upload_video(
         .first()
     )
     if existing:
+        os.unlink(tmp_path)  # same bytes already on disk under the sha name
         existing.platform_name = platform_name
         if existing.parse_status == ParseStatus.error:
             existing.parse_status = ParseStatus.pending
@@ -840,11 +1104,8 @@ async def upload_video(
             db.commit()
         return _sow_out(db, existing)
 
-    video_dir = os.path.join(_data_dir(), "video")
-    os.makedirs(video_dir, exist_ok=True)
     storage_path = os.path.join(video_dir, f"{sha}{ext}")  # server-generated name
-    with open(storage_path, "wb") as fh:
-        fh.write(content)
+    os.replace(tmp_path, storage_path)
 
     artifact = DesignArtifact(
         project_id=project_id,

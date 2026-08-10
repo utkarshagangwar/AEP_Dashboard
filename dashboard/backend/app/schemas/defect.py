@@ -70,6 +70,11 @@ class DefectListItem(BaseModel):
     assigned_to_name: Optional[str] = None
     linked_test_name: Optional[str] = None
     created_at: datetime
+    # Soft-delete attribution. Both NULL on every live defect; the Deleted view
+    # is the only place they are populated, and `deleted_by_name` falls back to
+    # None if that user has since been removed (FK is ON DELETE SET NULL).
+    deleted_at: Optional[datetime] = None
+    deleted_by_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

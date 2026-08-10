@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
-import GlobalLoader from "../../components/GlobalLoader";
+import { usePageLoading } from "../../components/NavigationLoadingProvider";
 import PageContainer from "../../components/PageContainer";
 import ScriptRunTabs from "../../components/ScriptRunTabs";
 import { toastSuccess } from "../../lib/toast";
@@ -44,6 +44,9 @@ export default function ProjectsPage() {
     queryFn: () =>
       apiGet(`/api/projects?search=${encodeURIComponent(search)}&limit=50`),
   });
+
+  // Loading is the app-wide overlay, not a box inside the table.
+  usePageLoading(isLoading);
 
   const updateProjectMutation = useMutation({
     mutationFn: ({ id, body }) => apiPatch(`/api/projects/${id}`, body),
@@ -242,9 +245,7 @@ export default function ProjectsPage() {
             ))}
           </div>
 
-          {isLoading ? (
-            <GlobalLoader fullscreen={false} />
-          ) : !projects.length ? (
+          {isLoading ? null : !projects.length ? (
             <div
               style={{
                 padding: 40,

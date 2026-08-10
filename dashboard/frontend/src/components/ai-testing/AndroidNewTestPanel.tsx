@@ -3,8 +3,8 @@
 /**
  * Android app testing — New Test panel. Mirrors the plain "Quick" web goal
  * card's shape (goal textarea, target selection, optional credential
- * profile, submit) rather than AutonomousQASection's richer Visual QA form
- * — Android Vibe Testing has one mode, not four, for now.
+ * profile, submit) rather than the web side's multi-mode picker — Android
+ * Vibe Testing has one mode, not several, for now.
  *
  * Reuses the existing Live Run / Results / Skills views entirely unchanged:
  * onRunStarted hands off (run_id, goal) exactly like page.tsx's

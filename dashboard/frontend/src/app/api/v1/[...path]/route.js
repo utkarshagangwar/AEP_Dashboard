@@ -3,7 +3,7 @@
  *
  * Every other Next.js API route proxies a specific path (see ../utils/proxy.js),
  * but the Visual QA components (VisualAuditSection, SowCheckpointsSection,
- * FigmaImportSection, AutonomousQASection) call /api/v1/visual-audits/* directly.
+ * FigmaImportSection) call /api/v1/visual-audits/* directly.
  * Without this route those requests 404 on the Next server and the sections
  * feature-detect themselves into rendering nothing.
  *

@@ -68,6 +68,18 @@ export interface Skill {
   // it well enough to execute; review_reason says what is missing.
   review_status?: "needs_review" | "needs_design_flow" | null;
   review_reason?: string | null;
+  // ── TDD classification (backend app/services/tdd_extraction.py) ──
+  // Null on skills captured before the v2 extractor; re-analysing the source
+  // artifact is the migration path, so these render as absent rather than
+  // being defaulted to a guess.
+  //
+  // test_type inverts how a replay result reads: a red result on a NEGATIVE
+  // skill means the product ACCEPTED something it should have refused.
+  test_type?: "positive" | "negative" | "edge" | null;
+  category?: string | null;
+  grounding?: "stated" | "derived" | null;
+  behaviour_key?: string | null;
+  priority?: string | null;
   has_recording: boolean;
   manually_edited: boolean;
   step_count: number;

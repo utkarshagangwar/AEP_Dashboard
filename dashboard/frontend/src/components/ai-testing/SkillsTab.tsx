@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiFetch } from "@/utils/apiClient";
+import { confirmDialog } from "@/lib/confirm";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -293,12 +294,13 @@ export default function SkillsTab({
   };
 
   const handleDelete = async (skill: Skill) => {
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(`Delete skill "${skill.name}"? This cannot be undone.`)
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: `Delete skill "${skill.name}"?`,
+      body: "This cannot be undone.",
+      tone: "danger",
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     setError(null);
     try {
       const resp = await apiFetch(`/api/ai-testing/skills/${skill.id}`, {
@@ -322,14 +324,13 @@ export default function SkillsTab({
   const handleBulkDelete = async () => {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(
-        `Delete ${ids.length} skill${ids.length === 1 ? "" : "s"}? This cannot be undone.`
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: `Delete ${ids.length} skill${ids.length === 1 ? "" : "s"}?`,
+      body: "This cannot be undone.",
+      tone: "danger",
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     setError(null);
     setBulkMessage(null);
     setBulkPending(true);
@@ -392,15 +393,13 @@ export default function SkillsTab({
     // queue hundreds of browser runs from one click. Confirm first — it
     // spends real LLM tokens and browser sessions, and nothing here is
     // undoable once queued.
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(
-        `Run ${ids.length} skill${ids.length === 1 ? "" : "s"} now? ` +
-          `Each one starts its own browser run.`
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: `Run ${ids.length} skill${ids.length === 1 ? "" : "s"} now?`,
+      body: "Each one starts its own browser run.",
+      tone: "neutral",
+      confirmLabel: "Run",
+    });
+    if (!ok) return;
     setError(null);
     setBulkMessage(null);
     setBulkPending(true);
@@ -730,6 +729,31 @@ export default function SkillsTab({
                         from {skill.source_type}
                       </span>
                     )}
+                    {skill.test_type && skill.test_type !== "positive" && (
+                      /* A negative skill PASSES when the system refuses the
+                         action, so a red replay result on it means the
+                         product ACCEPTED something it should have rejected —
+                         the opposite reading from a red positive skill. The
+                         label has to be on the row where the result is. */
+                      <span
+                        title={
+                          (skill.test_type === "negative"
+                            ? "Negative test — passes when the system correctly refuses or safely rejects the action. The action succeeding is a FAIL."
+                            : "Edge-case test — passes when behaviour is defined and consistent, not necessarily when the action succeeds.") +
+                          (skill.grounding === "derived"
+                            ? " Expectation inferred from standard QA practice, not stated in the source document."
+                            : "")
+                        }
+                        className={`flex-shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                          skill.test_type === "negative"
+                            ? "text-red-700 border-red-300 bg-red-50"
+                            : "text-amber-700 border-amber-300 bg-amber-50"
+                        }`}
+                      >
+                        {skill.test_type === "negative" ? "negative" : "edge"}
+                        {skill.grounding === "derived" ? " · derived" : ""}
+                      </span>
+                    )}
                     {skill.review_status && (
                       /* The requirement is real but its source never spelled
                          out how to execute it. Surfaced so it can be
@@ -774,37 +798,43 @@ export default function SkillsTab({
                     </span>
                   </div>
                 </div>
-                <Button
-                  onClick={() => {
-                    setDetailSkill(skill);
-                    setDetailEditing(true);
-                  }}
-                  variant="outline"
-                  size="sm"
-                  className="flex-shrink-0"
-                >
-                  Edit
-                </Button>
-                <Button
-                  onClick={() => handleReplay(skill)}
-                  disabled={replayingId !== null}
-                  size="sm"
-                  className="gap-1.5 flex-shrink-0"
-                >
-                  <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M5 3.5v9l7-4.5-7-4.5z" />
-                  </svg>
-                  {replayingId === skill.id
-                    ? "Starting…"
-                    : skill.has_recording
-                    ? "Replay"
-                    : "Run"}
-                </Button>
-                <DeleteIconButton
-                  onClick={() => handleDelete(skill)}
-                  className="flex-shrink-0"
-                  aria-label={`Delete skill ${skill.name}`}
-                />
+                {/* Edit · Run · Delete as one three-segment option group, the
+                    same control the SOW library row uses. Run keeps its dark
+                    `default` fill as the middle segment, so the primary action
+                    still reads as primary without breaking the pill. Segment
+                    widths and corner rounding come from `.btn-option-group` in
+                    app/global.css. */}
+                <div className="btn-option-group flex-shrink-0">
+                  <Button
+                    onClick={() => {
+                      setDetailSkill(skill);
+                      setDetailEditing(true);
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    onClick={() => handleReplay(skill)}
+                    disabled={replayingId !== null}
+                    size="sm"
+                    className="gap-1.5"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M5 3.5v9l7-4.5-7-4.5z" />
+                    </svg>
+                    {replayingId === skill.id
+                      ? "Starting…"
+                      : skill.has_recording
+                      ? "Replay"
+                      : "Run"}
+                  </Button>
+                  <DeleteIconButton
+                    onClick={() => handleDelete(skill)}
+                    aria-label={`Delete skill ${skill.name}`}
+                  />
+                </div>
               </CardContent>
             </Card>
           ))}

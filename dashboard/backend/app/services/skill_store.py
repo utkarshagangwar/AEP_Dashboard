@@ -118,6 +118,11 @@ def upsert_prompt_skill(
     created_by=None,
     review_status=None,
     review_reason=None,
+    test_type=None,
+    category=None,
+    grounding=None,
+    behaviour_key=None,
+    priority=None,
 ):
     """Create or refresh a prompt-only skill extracted from a parsed SOW/video
     checkpoint (no recorded browser actions — just a detailed instruction).
@@ -135,6 +140,13 @@ def upsert_prompt_skill(
     they describe what the SOURCE document says, not what the human wrote,
     so a re-parse that finds the requirement now fully specified must be
     able to clear the flag (and vice versa) on a hand-edited skill too.
+
+    test_type / category / grounding / behaviour_key / priority are the TDD
+    classification fields (app.services.tdd_extraction). They are treated as
+    provenance too — refreshed on every re-parse even for a hand-edited
+    skill, because they describe what KIND of test the source implies, not
+    the wording the human chose. behaviour_key is what groups a behaviour's
+    positive/negative/edge variants together in the Skills tab.
     """
     from app.models.ai_runs import AISkill
 
@@ -154,6 +166,11 @@ def upsert_prompt_skill(
         skill.source_artifact_id = artifact_id
         skill.review_status = review_status
         skill.review_reason = review_reason
+        skill.test_type = test_type
+        skill.category = category
+        skill.grounding = grounding
+        skill.behaviour_key = behaviour_key
+        skill.priority = priority
         if not skill.manually_edited:
             skill.name = name
             skill.goal = instruction
@@ -175,6 +192,11 @@ def upsert_prompt_skill(
             created_by=created_by,
             review_status=review_status,
             review_reason=review_reason,
+            test_type=test_type,
+            category=category,
+            grounding=grounding,
+            behaviour_key=behaviour_key,
+            priority=priority,
         )
         db.add(skill)
     return skill

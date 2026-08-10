@@ -5,10 +5,12 @@ import { useEffect, useRef, useState } from "react";
 import LoaderMascot from "./LoaderMascot";
 import { Button } from "./ui/button";
 
-// The backdrop paints immediately; only the mascot + bar wait this long before
-// fading in, so a sub-100ms transition never strobes them. Keep in sync with
-// the `global-loader-enter` animation delay below.
-const CONTENT_DELAY_MS = 90;
+// Zero: the loader must be fully visible on the frame the navigation starts.
+// This used to be 90ms, which was an anti-strobe measure for sub-100ms
+// transitions — but it also meant the mascot arrived after the backdrop, which
+// read as lag on exactly the fast navigations it was meant to protect. The
+// short fade below is enough to keep the appearance from being a hard cut.
+const CONTENT_DELAY_MS = 0;
 // Past this, stop implying progress and offer a way out. PRODUCT.md: never
 // claim progress that isn't actually happening.
 const CEILING_MS = 15000;
@@ -32,11 +34,14 @@ const CEILING_MS = 15000;
  *    contents are delayed, which keeps the anti-strobe benefit without the gap.
  * 2. It does not fetch the mascot over the network. See LoaderMascot.
  *
- * `fullscreen` (default) covers the viewport for route transitions.
- * Pass `fullscreen={false}` to fill a content region instead — use that
- * whenever the app shell is already painted and should stay put.
+ * It is always fullscreen. The `fullscreen={false}` region variant is gone:
+ * pages used it to render a loader *inside* AppShell, which meant the app's
+ * chrome and the page's empty skeleton painted first and the loader appeared
+ * in a box a beat later. Loading is now one overlay over everything, driven by
+ * NavigationLoadingProvider — pages report `usePageLoading(isLoading)` instead
+ * of rendering a loader themselves.
  */
-export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boolean }) {
+export default function GlobalLoader() {
   const [pastCeiling, setPastCeiling] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
 
@@ -71,7 +76,7 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
 
   return (
     <div
-      className={`global-loader${fullscreen ? " global-loader--fixed" : ""}`}
+      className="global-loader"
       role="status"
       aria-live="polite"
     >
@@ -102,21 +107,16 @@ export default function GlobalLoader({ fullscreen = true }: { fullscreen?: boole
 
       <style>{`
         .global-loader {
+          position: fixed;
+          inset: 0;
           display: flex;
           align-items: center;
           justify-content: center;
-          width: 100%;
-          min-height: min(60vh, 520px);
           padding: 24px;
           background: var(--background);
-        }
-        .global-loader--fixed {
-          position: fixed;
-          inset: 0;
           /* Above the app shell and every in-page overlay (max is z-50), so a
              route transition genuinely covers what it is replacing. */
           z-index: 60;
-          min-height: 0;
         }
         .global-loader__content {
           display: flex;

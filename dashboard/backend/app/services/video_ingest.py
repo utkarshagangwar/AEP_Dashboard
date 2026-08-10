@@ -49,7 +49,17 @@ _MIME_BY_EXT = {
     ".mp4": "video/mp4",
     ".webm": "video/webm",
     ".mov": "video/quicktime",
+    # .mkv is NOT sent to Gemini as-is — the Files API's supported video list
+    # has no Matroska type, so an upload declaring video/x-matroska is
+    # rejected. Every .mkv is converted to .mp4 by _prepare_for_upload()
+    # before it reaches _upload_video(), and this entry exists only so
+    # mime_for() accepts the extension rather than raising first. See
+    # _remux_to_mp4 for why webm's mime is not reused instead.
+    ".mkv": "video/x-matroska",
 }
+
+# Extensions Gemini cannot ingest directly and that must be converted first.
+_NEEDS_CONVERSION_EXTS = (".mkv",)
 
 
 def _build_video_prompt(platform_name: str) -> str:
@@ -205,9 +215,117 @@ def mime_for(file_name: str) -> str:
     mime = _MIME_BY_EXT.get(ext)
     if not mime:
         raise IngestError(
-            f"Unsupported video format '{ext}'. Use .mp4, .webm, or .mov."
+            f"Unsupported video format '{ext}'. Use .mp4, .webm, .mov, or .mkv."
         )
     return mime
+
+
+# ── Matroska (.mkv) conversion ───────────────────────────────────────────────
+#
+# WHY THIS EXISTS. Gemini's Files API accepts mp4/mpeg/mov/avi/flv/mpg/webm/
+# wmv/3gpp. Matroska is not on that list, so a .mkv upload fails at the API
+# boundary no matter what mime we declare.
+#
+# WHY NOT JUST CALL IT video/webm. WebM *is* a Matroska profile, so the
+# container would parse — but WebM permits only VP8/VP9/AV1 video and
+# Vorbis/Opus audio, while a .mkv in the wild (OBS's default recording
+# format, most desktop screen recorders) almost always carries H.264 or
+# HEVC. Mislabelling it means Gemini either errors mid-decode or, worse,
+# silently reads a partial stream and digests an incomplete walkthrough.
+# Converting is the only option that behaves the same for every .mkv.
+#
+# COST. The common case is a stream copy: the H.264/AAC elementary streams
+# are moved into an MP4 container untouched, no re-encode, seconds even for
+# a 500MB file. Only when the codecs cannot live in MP4 (e.g. VP9 or Opus
+# audio) do we fall back to a real transcode, which is slow but correct.
+#
+# ffmpeg is a hard requirement for .mkv only. It is installed in
+# docker/Dockerfile.backend; everywhere else in this module ffmpeg is
+# best-effort (still frames), so the failure here must be an explicit
+# IngestError rather than a silent degrade — a .mkv that cannot be converted
+# genuinely cannot be digested.
+
+_REMUX_TIMEOUT_S = 900  # a full transcode of a long walkthrough is not quick
+
+
+def _run_ffmpeg(args: list[str]) -> bool:
+    """Run ffmpeg, returning True on a clean exit. Never raises."""
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", *args],
+            capture_output=True, timeout=_REMUX_TIMEOUT_S, check=True,
+        )
+        return True
+    except FileNotFoundError:
+        logger.error("Video ingest: ffmpeg is not installed — cannot convert .mkv")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("Video ingest: ffmpeg timed out after %ss", _REMUX_TIMEOUT_S)
+        return False
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or b"").decode("utf-8", "replace").strip()[-500:]
+        logger.warning("Video ingest: ffmpeg failed: %s", stderr)
+        return False
+
+
+def _convert_to_mp4(path: str) -> str:
+    """Convert a Matroska file to MP4 and return the new temp path.
+
+    Tries a stream copy first (fast, lossless); falls back to an H.264/AAC
+    transcode. The caller owns the returned path and must delete it.
+    Raises IngestError if both attempts fail.
+    """
+    fd, out_path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)  # ffmpeg writes the file itself; we only wanted a unique name
+
+    # +faststart moves the moov atom to the front. Gemini fetches the file
+    # server-side and a trailing moov forces it to read the whole thing before
+    # it can decode anything — same reason ai_run_capture.py sets it.
+    copy_args = ["-i", path, "-c", "copy", "-movflags", "+faststart", out_path]
+    if _run_ffmpeg(copy_args) and os.path.getsize(out_path) > 0:
+        logger.info("Video ingest: remuxed %s to MP4 by stream copy", path)
+        return out_path
+
+    logger.info("Video ingest: stream copy failed for %s, transcoding", path)
+    transcode_args = [
+        "-i", path,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        out_path,
+    ]
+    if _run_ffmpeg(transcode_args) and os.path.getsize(out_path) > 0:
+        logger.info("Video ingest: transcoded %s to MP4", path)
+        return out_path
+
+    try:
+        os.remove(out_path)
+    except OSError:
+        pass
+    raise IngestError(
+        "Could not convert this .mkv file to MP4 for analysis. The file may be "
+        "corrupt, or ffmpeg is unavailable on the server. Re-save the "
+        "walkthrough as .mp4 and upload it again."
+    )
+
+
+def _prepare_for_upload(
+    storage_path: str, file_name: str, mime_type: str
+) -> tuple[str, str, str | None]:
+    """Resolve (path_to_upload, mime_type, temp_path_to_clean_up).
+
+    Formats Gemini accepts natively pass straight through with no temp file
+    (third element is None). .mkv is converted to MP4 first.
+
+    mime_type is passed in rather than looked up here because two callers
+    with different format vocabularies share this: digest_video (video only)
+    and sow_ledger.extract_ledger_from_recording (video *and* audio).
+    """
+    ext = os.path.splitext(file_name.lower())[1]
+    if ext not in _NEEDS_CONVERSION_EXTS:
+        return storage_path, mime_type, None
+    converted = _convert_to_mp4(storage_path)
+    return converted, "video/mp4", converted
 
 
 # ── Still-frame extraction (precision assist) ───────────────────────────────
@@ -470,24 +588,39 @@ def digest_video(storage_path: str, file_name: str, platform_name: str) -> tuple
     (mandatory — see _build_video_prompt for why). Returns (checkpoints,
     model_used). Raises IngestError on failure.
     """
-    mime_type = mime_for(file_name)
     key = _api_key()
     prompt = _build_video_prompt(platform_name)
 
-    still_frames = _extract_still_frames(storage_path)
-    logger.info(
-        "Video ingest: extracted %d still frame(s) from %s for brand/text precision",
-        len(still_frames), file_name,
+    # .mkv is converted to MP4 here; every other format passes straight
+    # through. upload_path/temp_path are the same file for a converted video,
+    # and temp_path is None otherwise — the finally block below is what
+    # guarantees the conversion never leaks a temp file on any exit path.
+    upload_path, mime_type, temp_path = _prepare_for_upload(
+        storage_path, file_name, mime_for(file_name)
     )
 
-    primary = os.environ.get("VISUAL_VIDEO_MODEL", "").strip() or "gemini-3.5-flash"
-    fallback = os.environ.get("VISUAL_VIDEO_FALLBACK", "").strip() or "gemini-2.5-flash"
-    models = [primary] + ([fallback] if fallback != primary else [])
+    try:
+        still_frames = _extract_still_frames(upload_path)
+        logger.info(
+            "Video ingest: extracted %d still frame(s) from %s for brand/text precision",
+            len(still_frames), file_name,
+        )
 
-    file_info = _upload_video(storage_path, mime_type, key)
-    remote_name = file_info.get("name", "")
-    file_uri = file_info["uri"]
-    logger.info("Video ingest: uploaded %s as %s", file_name, remote_name)
+        primary = os.environ.get("VISUAL_VIDEO_MODEL", "").strip() or "gemini-3.5-flash"
+        fallback = os.environ.get("VISUAL_VIDEO_FALLBACK", "").strip() or "gemini-2.5-flash"
+        models = [primary] + ([fallback] if fallback != primary else [])
+
+        file_info = _upload_video(upload_path, mime_type, key)
+        remote_name = file_info.get("name", "")
+        file_uri = file_info["uri"]
+        logger.info("Video ingest: uploaded %s as %s", file_name, remote_name)
+    except BaseException:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
 
     try:
         if file_info.get("state") != "ACTIVE":
@@ -566,6 +699,23 @@ def digest_video(storage_path: str, file_name: str, platform_name: str) -> tuple
                 "recording may be too short, unclear, or not show enough concrete "
                 "UI interaction. Re-record a more detailed walkthrough and try again."
             )
+        # A walkthrough only ever demonstrates success, so the digest above
+        # can only produce happy paths. classify_and_expand categorises what
+        # was observed and derives the negative/edge cases that category
+        # requires, all labelled grounding="derived" — the strict
+        # "only what the recording shows" rule above is untouched, and
+        # nothing derived is ever presented as observed. It also runs the same
+        # coverage backstop and variant cap the SOW path gets, so a behaviour
+        # missing a variant its category requires is flagged and re-requested
+        # here too rather than held to a quietly lower standard. It never
+        # raises: a video that digested successfully is not failed by
+        # enrichment.
+        from app.services import tdd_extraction
+
+        checkpoints, expansion_model = tdd_extraction.classify_and_expand(checkpoints)
+        if expansion_model and expansion_model not in model_used:
+            model_used = f"{model_used}, {expansion_model}"
+
         logger.info(
             "Video ingest: %d checkpoint(s) extracted from %s via %s",
             len(checkpoints), file_name, model_used,
@@ -574,3 +724,10 @@ def digest_video(storage_path: str, file_name: str, platform_name: str) -> tuple
     finally:
         if remote_name:
             _delete_file(remote_name, key)
+        # The converted MP4 is scratch space, not the artifact — the original
+        # .mkv stays at storage_path and remains the file of record.
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                logger.warning("Video ingest: could not remove temp file %s", temp_path)

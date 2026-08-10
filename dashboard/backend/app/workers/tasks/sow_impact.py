@@ -16,12 +16,14 @@ already been committed and is valuable on its own. A failure here costs the
 user a pre-ticked checkbox list, not their facts.
 """
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
 
 
 @celery_app.task(name="sow_impact.analyze_source_impact_task", bind=True, max_retries=0)
+@ai_usage.tracked_task("sow_impact")
 def analyze_source_impact_task(self, source_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.sow import (

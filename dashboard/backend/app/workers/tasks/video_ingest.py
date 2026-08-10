@@ -5,6 +5,7 @@ never digested — or billed — twice), terminal error states on every failure
 path, nothing ever left stuck in 'processing'.
 """
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -20,15 +21,35 @@ def _save_functional_skills(session, artifact, checkpoints: list[dict]) -> None:
     slugifying to the same source_key) to surface right there instead of
     silently poisoning the whole transaction at the final commit. A single
     bad checkpoint is logged and skipped; digestion is never failed by a
-    skill-capture problem."""
-    from app.services.skill_store import upsert_prompt_skill
+    skill-capture problem.
 
+    Checkpoints with grounding="derived" — the negative/edge cases
+    classify_and_expand reasoned from the observed happy path rather than
+    seeing on screen — become skills by default, and are held back when
+    TDD_DERIVED_AS_SKILLS is disabled. Same rule as the SOW worker, because
+    the flag describes the Skills TABLE, not one source of it: a flag that
+    silently applied to documents but not to videos would be worse than no
+    flag, since the table would look filtered while half of it was not."""
+    from app.services.skill_store import upsert_prompt_skill
+    from app.services.tdd_extraction import derived_as_skills
+
+    allow_derived = derived_as_skills()
     seen_titles: set[str] = set()
     for i, cp in enumerate(checkpoints):
         if cp.get("type") != "functional" or not cp.get("description"):
             continue
+        if cp.get("grounding") == "derived" and not allow_derived:
+            logger.info(
+                "Video ingest: held derived checkpoint %r from skill creation "
+                "(TDD_DERIVED_AS_SKILLS is disabled)",
+                cp.get("title") or "Untitled requirement",
+            )
+            continue
         title = (cp.get("title") or cp["description"][:80]).strip()
-        dedup_key = title.lower()
+        # Test type is part of the identity: the observed positive case and
+        # the derived negative case for the same behaviour may carry the same
+        # title, and must not collide on source_key.
+        dedup_key = f"{title.lower()}|{cp.get('test_type') or ''}"
         if dedup_key in seen_titles:
             title = f"{title} ({i + 1})"
         seen_titles.add(dedup_key)
@@ -42,6 +63,11 @@ def _save_functional_skills(session, artifact, checkpoints: list[dict]) -> None:
                     source_type="video",
                     artifact_id=artifact.id,
                     project_id=artifact.project_id,
+                    test_type=cp.get("test_type"),
+                    category=cp.get("category"),
+                    grounding=cp.get("grounding"),
+                    behaviour_key=cp.get("behaviour_key"),
+                    priority=cp.get("priority"),
                 )
                 session.flush()
         except Exception:
@@ -61,6 +87,7 @@ def _save_functional_skills(session, artifact, checkpoints: list[dict]) -> None:
     # occupying the worker for half an hour.
     soft_time_limit=1200,
 )
+@ai_usage.tracked_task("video_import")
 def ingest_video_task(self, artifact_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.visual_qa import DesignArtifact, DesignRule, ParseStatus

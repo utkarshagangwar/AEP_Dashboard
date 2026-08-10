@@ -130,6 +130,76 @@ def test_existing_file_is_left_completely_alone(data_dir):
     assert artifact.storage_path == str(path)
 
 
+# ── Healing from a path instead of bytes ─────────────────────────────────────
+#
+# Recordings are streamed to a temp file rather than buffered in memory (they
+# can be 300MB), so they have no `content` bytes to heal from -- they pass
+# `source_path`. These cover that branch.
+
+def test_missing_file_is_restored_from_source_path(data_dir, tmp_path):
+    src = tmp_path / "streamed.mp4"
+    src.write_bytes(b"\x00\x00\x00 ftypisom fake recording")
+
+    missing = str(data_dir / "sow_meeting_recording" / "abc123.mp4")
+    artifact = make_artifact(missing)
+
+    _ensure_artifact_file(
+        StubDb(),
+        artifact,
+        subdir="sow_meeting_recording",
+        ext=".mp4",
+        source_path=str(src),
+    )
+
+    assert os.path.exists(missing), "the missing recording was not restored"
+    with open(missing, "rb") as fh:
+        assert fh.read() == src.read_bytes()
+
+
+def test_source_path_heal_leaves_the_temp_file_in_place(data_dir, tmp_path):
+    """copyfile, not move: the endpoint's own `finally` owns that temp file
+    and deletes it. If this branch moved it instead, that cleanup would hit a
+    missing path -- and worse, a caller that still needed it would find it
+    gone."""
+    src = tmp_path / "streamed.mp4"
+    src.write_bytes(b"payload")
+
+    _ensure_artifact_file(
+        StubDb(),
+        make_artifact(str(data_dir / "sow_meeting_recording" / "abc123.mp4")),
+        subdir="sow_meeting_recording",
+        ext=".mp4",
+        source_path=str(src),
+    )
+
+    assert src.exists(), "heal consumed the caller's temp file"
+
+
+def test_healthy_path_ignores_source_path_entirely(data_dir, tmp_path):
+    """The streamed variant must be as inert as the bytes variant when the
+    file is already present -- no copy of a 300MB temp file on every reupload."""
+    path = data_dir / "sow_meeting_recording" / "abc123.mp4"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"original recording")
+
+    src = tmp_path / "streamed.mp4"
+    src.write_bytes(b"DIFFERENT recording")
+
+    db = StubDb()
+    artifact = make_artifact(str(path))
+    _ensure_artifact_file(
+        db,
+        artifact,
+        subdir="sow_meeting_recording",
+        ext=".mp4",
+        source_path=str(src),
+    )
+
+    assert path.read_bytes() == b"original recording"
+    assert db.commits == 0
+    assert artifact.storage_path == str(path)
+
+
 def test_original_extension_is_preserved_on_restore(data_dir):
     """Content is byte-identical across extensions, but extension drives
     parser selection downstream -- restoring must not silently change it."""

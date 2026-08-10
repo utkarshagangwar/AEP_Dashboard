@@ -21,6 +21,7 @@ revisit only if duplicate extraction cost across documents turns out to
 matter in practice.
 """
 from app.core.logging import get_logger
+from app.services import ai_usage
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -260,6 +261,7 @@ def _mark_unexpected_failure(source_id: str) -> None:
 
 
 @celery_app.task(name="sow_ledger.extract_transcript_ledger_task", bind=True, max_retries=0)
+@ai_usage.tracked_task("sow_ledger")
 def extract_transcript_ledger_task(self, source_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.sow import SowDocumentSource, SowSourceStatus
@@ -328,6 +330,7 @@ def extract_transcript_ledger_task(self, source_id: str) -> None:
 
 
 @celery_app.task(name="sow_ledger.extract_existing_sow_ledger_task", bind=True, max_retries=0)
+@ai_usage.tracked_task("sow_ledger")
 def extract_existing_sow_ledger_task(self, source_id: str) -> None:
     """Import SOW (SOW tab): extract ledger facts from an uploaded
     pre-existing SOW/requirements document (.docx/.pdf/.txt/.md). Mirrors
@@ -454,6 +457,7 @@ def extract_existing_sow_ledger_task(self, source_id: str) -> None:
     # global 1800s default keeps a hung upload from occupying the worker.
     soft_time_limit=1200,
 )
+@ai_usage.tracked_task("sow_ledger")
 def extract_recording_ledger_task(self, source_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.sow import SowDocumentSource, SowSourceStatus
@@ -520,6 +524,7 @@ def extract_recording_ledger_task(self, source_id: str) -> None:
 
 
 @celery_app.task(name="sow_ledger.extract_design_ledger_task", bind=True, max_retries=0)
+@ai_usage.tracked_task("sow_ledger")
 def extract_design_ledger_task(self, source_id: str) -> None:
     from app.core.database import SessionLocal
     from app.models.sow import SowDocumentSource, SowSourceStatus

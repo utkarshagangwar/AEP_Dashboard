@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
-import GlobalLoader from "../../components/GlobalLoader";
+import { usePageLoading } from "../../components/NavigationLoadingProvider";
 import { apiGet } from "../../utils/apiClient";
 import { Button } from "../../components/ui/button";
 import {
@@ -38,6 +38,9 @@ export default function TestResultsPage() {
         `/api/test-results?${statusFilter ? `status=${statusFilter}&` : ""}${runFilter ? `test_run_id=${runFilter}&` : ""}limit=100`,
       ),
   });
+
+  // Loading is the app-wide overlay, not a box inside the table.
+  usePageLoading(isLoading);
 
   const { data: runsData } = useQuery({
     queryKey: ["runs-list"],
@@ -163,9 +166,7 @@ export default function TestResultsPage() {
                 </span>
               ))}
             </div>
-            {isLoading ? (
-              <GlobalLoader fullscreen={false} />
-            ) : !results.length ? (
+            {isLoading ? null : !results.length ? (
               <div
                 style={{
                   padding: 40,

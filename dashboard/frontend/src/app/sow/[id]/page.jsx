@@ -1,15 +1,19 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
 import PageContainer from "../../../components/PageContainer";
-import GlobalLoader from "../../../components/GlobalLoader";
+import { usePageLoading } from "../../../components/NavigationLoadingProvider";
 import { toastSuccess } from "../../../lib/toast";
+import { confirmDialog } from "../../../lib/confirm";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { DeleteIconButton } from "../../../components/ui/delete-icon-button";
 import { ErrorAlert } from "../../../components/ui/error-state";
 import { Button } from "../../../components/ui/button";
+import { BackButton } from "../../../components/ui/back-button";
+import SowExtractionProgress from "../../../components/SowExtractionProgress";
+import AttachSourcesFolder from "../../../components/AttachSourcesFolder";
 import { apiGet, apiFetch, apiPost, apiDelete } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
 
@@ -84,17 +88,60 @@ const SOURCE_STAGE_LABELS = {
   saving: "Saving to ledger",
 };
 
+// The turtle that walks the capsule below. Drawn from the supplied artwork:
+// ribbed dark-gold dome, lighter gold rim band, green head and three feet
+// that alternate as it moves.
+//
+// aria-hidden and presentational: the percentage beside it and the "part N of
+// M" caption underneath carry the actual meaning, and a screen reader
+// announcing a turtle would be noise on top of a number it already has.
+function CapsuleTurtle() {
+  return (
+    <span className="sow-capsule__turtle">
+      <svg viewBox="0 0 36 23" width="19" height="12" aria-hidden="true" focusable="false">
+        <ellipse className="sow-turtle__foot" cx="8" cy="20" rx="3.1" ry="2.1" fill="#679b46" />
+        <ellipse
+          className="sow-turtle__foot sow-turtle__foot--b"
+          cx="16.5" cy="20.4" rx="3.1" ry="2.1" fill="#679b46"
+        />
+        <ellipse
+          className="sow-turtle__foot sow-turtle__foot--c"
+          cx="24" cy="20" rx="2.9" ry="2" fill="#679b46"
+        />
+        <ellipse className="sow-turtle__head" cx="30" cy="13.6" rx="5.2" ry="4.4" fill="#679b46" />
+        <circle cx="32.4" cy="12.4" r="0.75" fill="#2f4d1f" />
+        <path d="M4 18.4 A12 11.4 0 0 1 26 18.4 Z" fill="#b57400" />
+        <path
+          d="M15 7.2 L15 18.4 M9.4 9.6 L7.2 18.4 M20.6 9.6 L22.8 18.4"
+          stroke="#fcad00"
+          strokeWidth="1"
+          fill="none"
+          strokeLinecap="round"
+        />
+        <path d="M4 18.4 A12 11.4 0 0 1 26 18.4 Z" fill="none" stroke="#fcad00" strokeWidth="1.1" />
+        <rect x="3.4" y="17.6" width="23.2" height="2.5" rx="1.25" fill="#fcad00" />
+      </svg>
+    </span>
+  );
+}
+
 // Live progress cell for the Attached sources table.
 //
 // Replaces a status badge that could only ever read "Processing", with no
 // way to tell a working extraction from a dead worker. Three render modes,
 // picked by what the backend can honestly report:
 //   1. not processing            -> the plain badge, exactly as before.
-//   2. processing, total > 1     -> real bar + percentage + "part N of M".
-//   3. processing, no total      -> stage label only (single indivisible
-//                                   LLM call: a recording, a design image,
-//                                   or file-read before chunking). No fake
-//                                   percentage is invented for these.
+//   2. processing, total > 1     -> filling capsule + percentage + "part N
+//                                   of M", with the turtle riding the fill's
+//                                   leading edge.
+//   3. processing, no total      -> sweeping capsule + stage label (single
+//                                   indivisible LLM call: a recording, a
+//                                   design image, or file-read before
+//                                   chunking). No fake percentage is
+//                                   invented for these, and no turtle --
+//                                   a mascot at a position on a bar with no
+//                                   denominator would be claiming progress
+//                                   nothing is measuring.
 // A source mid-flight when this shipped, or one whose worker never reported,
 // has progress_stage === null and lands in mode 3 with a generic label.
 function SourceProgressCell({ source }) {
@@ -125,60 +172,54 @@ function SourceProgressCell({ source }) {
   const pct = hasBar ? Math.min(100, Math.max(0, Math.round((current / total) * 100))) : null;
 
   return (
-    <div style={{ minWidth: 150 }}>
+    <div style={{ minWidth: 170 }}>
       {hasBar ? (
         <>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div
+              className="sow-capsule"
               role="progressbar"
               aria-valuenow={pct}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-label={`${stageLabel}: ${pct}% complete`}
-              style={{
-                flex: 1,
-                height: 5,
-                background: "#F3F4F6",
-                borderRadius: 999,
-                overflow: "hidden",
-              }}
             >
-              <div
-                style={{
-                  width: `${pct}%`,
-                  height: "100%",
-                  background: "#2563EB",
-                  transition: "width 300ms ease",
-                }}
-              />
+              <div className="sow-capsule__fill" style={{ width: `${pct}%` }}>
+                <span className="sow-capsule__sheen" aria-hidden="true" />
+                <CapsuleTurtle />
+              </div>
             </div>
             <span
-              style={{ fontSize: 12, fontWeight: 600, color: "#1D4ED8", minWidth: 34, textAlign: "right" }}
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#92400E",
+                minWidth: 32,
+                textAlign: "right",
+              }}
             >
               {pct}%
             </span>
           </div>
-          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 6 }}>
             {stageLabel} · part {Math.min(current + 1, total)} of {total}
           </div>
         </>
       ) : (
         <>
-          <span
-            style={{
-              display: "inline-block",
-              fontSize: 11,
-              fontWeight: 600,
-              color: SOURCE_STATUS_COLORS[source.status] || "#6B7280",
-              background: SOURCE_STATUS_BG[source.status] || "#F3F4F6",
-              borderRadius: 999,
-              padding: "2px 9px",
-              textTransform: "capitalize",
-            }}
+          {/* No aria-valuenow: this is a genuinely indeterminate bar, and the
+              ARIA spec's own signal for that is the absence of the value,
+              not a made-up one. */}
+          <div
+            className="sow-capsule sow-capsule--indeterminate"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`${stageLabel} — in progress`}
           >
-            {source.status}
-          </span>
-          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 4 }}>{stageLabel}…</div>
+            <div className="sow-capsule__sweep" />
+          </div>
+          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 6 }}>{stageLabel}…</div>
         </>
       )}
     </div>
@@ -313,13 +354,15 @@ function CollapsibleSection({ title, description, badge, open, onToggle, childre
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="link-hover-underline"
+        // .section-toggle replaces the old underline-on-hover: the whole
+        // header band is the toggle, so it tints as a surface. `padding`,
+        // `width` and `color` all live in the class -- setting any of them
+        // inline here would outrank it and break the effect.
+        className="section-toggle"
         style={{
           display: "flex",
           alignItems: "center",
           gap: 8,
-          width: "100%",
-          padding: 0,
           background: "transparent",
           border: "none",
           cursor: "pointer",
@@ -328,17 +371,18 @@ function CollapsibleSection({ title, description, badge, open, onToggle, childre
       >
         <span
           aria-hidden="true"
+          className="section-toggle-caret"
           style={{
             fontSize: 11,
-            color: "#6B7280",
             display: "inline-block",
             transform: open ? "rotate(90deg)" : "none",
-            transition: "transform 150ms ease",
           }}
         >
           ▶
         </span>
-        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#111827" }}>{title}</h2>
+        {/* color: inherit so the heading deepens with the button's hover
+            state instead of pinning itself to a fixed near-black. */}
+        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "inherit" }}>{title}</h2>
         {badge != null && (
           <span
             style={{
@@ -822,7 +866,12 @@ function SectionDiffCard({ sectionKey, oldSection, newSection }) {
 }
 
 export default function SowDocumentPage() {
+  // `id` here is whatever identifier is in the URL -- the document's
+  // current slug (the normal case), an old/renamed-away slug, or a raw
+  // UUID. The backend resolves any of those; the effect below is what
+  // canonicalizes the URL itself once the real document loads.
   const { id } = useParams();
+  const router = useRouter();
   const qc = useQueryClient();
   const user = typeof window !== "undefined" ? getStoredUser() : null;
   const canWrite =
@@ -1016,6 +1065,19 @@ export default function SowDocumentPage() {
   // freshly imported SOW nothing needs rewriting at all. It opens when the
   // user asks for it, or when the affected-sections banner sends them here.
   const [rewriteOpen, setRewriteOpen] = useState(false);
+  // Open by default -- this panel holds the actual document (or the
+  // Skills/TDDs extraction action) and collapsing it on load would hide the
+  // page's primary content the moment someone lands here. Collapsible only
+  // so a user who's done with it can put it away, same as Imported SOW.
+  const [versionsOpen, setVersionsOpen] = useState(true);
+  // The version PICKER, distinct from `versionsOpen` above (which is the
+  // whole Generate/Skills section). Collapsed by default and shaped like the
+  // Rewrite panel: on the overwhelmingly common single-version document the
+  // list is one row that only restates what is already on screen, and the
+  // 200px column it used to occupy was taken out of the document's width on
+  // every page load to show it. The header still names the selected version,
+  // so collapsing costs no information.
+  const [versionPickerOpen, setVersionPickerOpen] = useState(false);
 
   function toggleRewriteTarget(key) {
     setRewriteTargets((prev) => {
@@ -1212,15 +1274,34 @@ export default function SowDocumentPage() {
     onSuccess: () => invalidateAll(),
   });
 
-  if (docLoading) {
-    return (
-      <AppShell noPadding>
-        <PageContainer>
-          <GlobalLoader fullscreen={false} />
-        </PageContainer>
-      </AppShell>
-    );
-  }
+  // The browser tab/history entry otherwise just shows the app-wide default
+  // (or, before that existed, nothing) -- never which document you're on.
+  // Runs before the loading-gate return below so hook order stays fixed
+  // regardless of docLoading; restoring the previous title on unmount keeps
+  // it from leaking onto whatever page you navigate to next.
+  useEffect(() => {
+    if (!doc?.title) return undefined;
+    const previous = document.title;
+    document.title = `${doc.title} — SOW`;
+    return () => {
+      document.title = previous;
+    };
+  }, [doc?.title]);
+
+  // Canonicalize the URL to the document's current slug. Fires whenever the
+  // URL segment isn't that slug -- a stale slug from before a rename (the
+  // backend still resolves it via slug history, but the address bar should
+  // catch up), or a raw id link (e.g. an old bookmark, or an audit-log
+  // entry). replace(), not push(): this is correcting the current entry,
+  // not creating a new page in history the back button would stop on.
+  useEffect(() => {
+    if (!doc?.slug || doc.slug === id) return;
+    router.replace(`/sow/${doc.slug}`);
+  }, [doc?.slug, id, router]);
+
+  // The app-wide overlay carries the loading state; nothing renders behind it.
+  usePageLoading(docLoading);
+  if (docLoading) return null;
   if (docError || !doc) {
     return (
       <AppShell noPadding>
@@ -1273,19 +1354,11 @@ export default function SowDocumentPage() {
   return (
     <AppShell noPadding>
       <PageContainer>
-        <a
+        <BackButton
           href="/sow"
-          style={{
-            display: "inline-block",
-            color: "#2563EB",
-            fontSize: 12,
-            fontWeight: 500,
-            textDecoration: "none",
-            marginBottom: 12,
-          }}
-        >
-          ← Back to SOW
-        </a>
+          label="Back to SOW"
+          className="mb-3"
+        />
 
         <div style={{ marginBottom: 24 }}>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "#111827" }}>
@@ -1299,165 +1372,23 @@ export default function SowDocumentPage() {
         </div>
 
         {canWrite && (
-          <Section
-            title="Attach sources"
-            description="Each source is extracted independently into the requirements ledger below. Attaching the same file again re-runs extraction (useful as a Retry after an error)."
-          >
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 16 }}>
-              {/* Transcript */}
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 600, color: "#111827", margin: "0 0 8px" }}>
-                  Meeting transcript
-                </p>
-                <label style={labelStyle}>Paste text</label>
-                <textarea
-                  value={transcriptText}
-                  onChange={(e) => setTranscriptText(e.target.value)}
-                  rows={4}
-                  placeholder="Paste meeting notes/transcript…"
-                  style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
-                />
-                <label style={labelStyle}>…or upload .txt / .md</label>
-                <input
-                  type="file"
-                  accept=".txt,.md"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      transcriptUploadMutation.mutate({ file: f });
-                      e.target.value = "";
-                    }
-                  }}
-                  style={{ fontSize: 12, marginBottom: 10, display: "block" }}
-                  disabled={transcriptUploadMutation.isPending}
-                />
-                <Button
-                  variant="invert"
-                  size="lg"
-                  onClick={() =>
-                    transcriptUploadMutation.mutate({ text: transcriptText })
-                  }
-                  disabled={!transcriptText.trim() || transcriptUploadMutation.isPending}
-                >
-                  {transcriptUploadMutation.isPending ? "Attaching…" : "Attach pasted text"}
-                </Button>
-                {transcriptError && (
-                  <p style={{ fontSize: 11, color: "#DC2626", margin: "6px 0 0" }}>
-                    {transcriptError}
-                  </p>
-                )}
-              </div>
-
-              {/* Recording */}
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 600, color: "#111827", margin: "0 0 8px" }}>
-                  Meeting recording
-                </p>
-                <label style={labelStyle}>Context (optional)</label>
-                <input
-                  value={recordingLabel}
-                  onChange={(e) => setRecordingLabel(e.target.value)}
-                  placeholder="e.g. Sprint planning, July 18"
-                  style={inputStyle}
-                />
-                <label style={labelStyle}>
-                  Upload audio/video (.mp4 .webm .mov .mp3 .m4a .wav .ogg — up to 300MB / 60min
-                  by default)
-                </label>
-                <input
-                  type="file"
-                  accept=".mp4,.webm,.mov,.mp3,.m4a,.wav,.ogg"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      recordingUploadMutation.mutate({ file: f, label: recordingLabel.trim() });
-                      e.target.value = "";
-                    }
-                  }}
-                  style={{ fontSize: 12, marginBottom: 10, display: "block" }}
-                  disabled={recordingUploadMutation.isPending}
-                />
-                {recordingUploadMutation.isPending && (
-                  <p style={{ fontSize: 12, color: "#2563EB", margin: "0 0 6px" }}>
-                    Uploading & digesting — this can take a few minutes for longer
-                    recordings…
-                  </p>
-                )}
-                {recordingError && (
-                  <p style={{ fontSize: 11, color: "#DC2626", margin: "6px 0 0" }}>
-                    {recordingError}
-                  </p>
-                )}
-              </div>
-
-              {/* Design reference */}
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 600, color: "#111827", margin: "0 0 8px" }}>
-                  Design reference
-                </p>
-                <label style={labelStyle}>Page/screen label (optional)</label>
-                <input
-                  value={designLabel}
-                  onChange={(e) => setDesignLabel(e.target.value)}
-                  placeholder="e.g. Checkout screen"
-                  style={inputStyle}
-                />
-                <label style={labelStyle}>Upload a PNG mockup/screenshot</label>
-                <input
-                  type="file"
-                  accept=".png"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      designUploadMutation.mutate({ file: f, label: designLabel.trim() });
-                      e.target.value = "";
-                    }
-                  }}
-                  style={{ fontSize: 12, marginBottom: 10, display: "block" }}
-                  disabled={designUploadMutation.isPending}
-                />
-                {designError && (
-                  <p style={{ fontSize: 11, color: "#DC2626", margin: "6px 0 0" }}>
-                    {designError}
-                  </p>
-                )}
-              </div>
-
-              {/* Existing SOW document (Import) */}
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 600, color: "#111827", margin: "0 0 8px" }}>
-                  Existing SOW document
-                </p>
-                <p style={{ fontSize: 11, color: "#6B7280", margin: "0 0 8px" }}>
-                  A pre-existing SOW/requirements document to use as a baseline.
-                </p>
-                <label style={labelStyle}>Upload .docx / .pdf / .txt / .md</label>
-                <input
-                  type="file"
-                  accept=".docx,.pdf,.txt,.md"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      existingSowUploadMutation.mutate({ file: f });
-                      e.target.value = "";
-                    }
-                  }}
-                  style={{ fontSize: 12, marginBottom: 10, display: "block" }}
-                  disabled={existingSowUploadMutation.isPending}
-                />
-                {existingSowUploadMutation.isPending && (
-                  <p style={{ fontSize: 12, color: "#2563EB", margin: "0 0 6px" }}>
-                    Uploading & extracting…
-                  </p>
-                )}
-                {existingSowError && (
-                  <p style={{ fontSize: 11, color: "#DC2626", margin: "6px 0 0" }}>
-                    {existingSowError}
-                  </p>
-                )}
-              </div>
-            </div>
-          </Section>
+          <AttachSourcesFolder
+            attachedCount={sourceList.length}
+            transcriptText={transcriptText}
+            setTranscriptText={setTranscriptText}
+            transcriptError={transcriptError}
+            transcriptUploadMutation={transcriptUploadMutation}
+            recordingLabel={recordingLabel}
+            setRecordingLabel={setRecordingLabel}
+            recordingError={recordingError}
+            recordingUploadMutation={recordingUploadMutation}
+            designLabel={designLabel}
+            setDesignLabel={setDesignLabel}
+            designError={designError}
+            designUploadMutation={designUploadMutation}
+            existingSowError={existingSowError}
+            existingSowUploadMutation={existingSowUploadMutation}
+          />
         )}
 
         <Section title="Attached sources" description={sourcesLoading ? "Loading…" : null}>
@@ -1510,12 +1441,19 @@ export default function SowDocumentPage() {
                     </td>
                     <td style={{ padding: "8px 12px", textAlign: "right" }}>
                       {canWrite && (
-                        <DeleteIconButton
-                          onClick={() => deleteSourceMutation.mutate(s.id)}
-                          disabled={deleteSourceMutation.isPending}
-                          label="Remove"
-                          aria-label="Remove attached source"
-                        />
+                        // A one-segment option group: the row has a single
+                        // action, so it renders as a rounded square at the
+                        // shared 72x28 instead of the bigger standalone
+                        // circular slot. Matches Reports and Vibe Testing →
+                        // Results. See `.btn-option-group` in global.css.
+                        <div className="btn-option-group">
+                          <DeleteIconButton
+                            onClick={() => deleteSourceMutation.mutate(s.id)}
+                            disabled={deleteSourceMutation.isPending}
+                            label="Remove"
+                            aria-label="Remove attached source"
+                          />
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -1690,13 +1628,16 @@ export default function SowDocumentPage() {
           </CollapsibleSection>
         )}
 
-        <Section
+        <CollapsibleSection
           title={isImportedBaseline ? "Skills & TDDs" : "Generate SOW"}
           description={
             isImportedBaseline
               ? "This SOW was imported and is shown below exactly as you wrote it — no AI rewrote it. Extract Skills/TDDs turns it into runnable Vibe Testing skills. Attach a meeting transcript, recording or design reference to unlock Generate SOW, which rewrites only the sections that new material affects."
               : "Groups the ledger into sections and drafts the full document. A partial failure (some sections done, some errored) still produces a usable version — errored sections are flagged individually below, never silently dropped."
           }
+          badge={versionList.length > 0 ? `${versionList.length} version${versionList.length === 1 ? "" : "s"}` : null}
+          open={versionsOpen}
+          onToggle={() => setVersionsOpen((v) => !v)}
         >
           {/* The primary action for an imported SOW is extracting skills, not
               generating a document that already exists. Generate only earns
@@ -1730,6 +1671,16 @@ export default function SowDocumentPage() {
                   action={{ label: "Try again", onClick: () => sendToCheckpointsMutation.mutate() }}
                 />
               )}
+              {/* Live step-by-step progress for the artifact this document was
+                  just sent as. Renders whatever the pipeline actually did —
+                  see SowExtractionProgress. Full width beneath the button row
+                  rather than inline: the timeline grows to dozens of rows on a
+                  multi-part document. */}
+              <div style={{ flexBasis: "100%" }}>
+                <SowExtractionProgress
+                  artifactId={sendToCheckpointsMutation.data?.artifact_id || null}
+                />
+              </div>
             </div>
           )}
 
@@ -1738,7 +1689,7 @@ export default function SowDocumentPage() {
               <Button
                 variant="invert"
                 size="lg"
-                onClick={() => {
+                onClick={async () => {
                   // A full generation always creates a brand-new version
                   // from scratch (it does not patch the current one), so
                   // any hand-edits made in the Phase 5 editor won't carry
@@ -1746,14 +1697,14 @@ export default function SowDocumentPage() {
                   // be a silent surprise. This will stop being necessary
                   // once Phase 7's rewrite/patch flow can respect
                   // edited_by_human sections.
-                  if (
-                    currentVersionHasHumanEdits &&
-                    !window.confirm(
-                      "This version has hand-edited sections. Generating a new version starts " +
-                        "fully fresh and will NOT carry those edits forward. Continue?"
-                    )
-                  ) {
-                    return;
+                  if (currentVersionHasHumanEdits) {
+                    const ok = await confirmDialog({
+                      title: "Regenerate this SOW from scratch?",
+                      body: "This version has hand-edited sections. A new version starts fully fresh and will NOT carry those edits forward.",
+                      tone: "neutral",
+                      confirmLabel: "Continue",
+                    });
+                    if (!ok) return;
                   }
                   generateMutation.mutate();
                 }}
@@ -2033,61 +1984,123 @@ export default function SowDocumentPage() {
           )}
 
           {versionList.length > 0 && (
-            <div style={{ display: "flex", gap: 24 }}>
-              <div style={{ width: 200, flexShrink: 0 }}>
-                <p
+            <div>
+              {/* Same shape as the Rewrite panel above: a bordered band whose
+                  header is the toggle.
+
+                  It wraps the version PICKER AND THE DOCUMENT ITSELF, not just
+                  the picker. Collapsing only the picker would have split one
+                  thing across two boxes — a closed "Versions" band with the
+                  version's own contents still spilling out underneath it,
+                  belonging to nothing on screen. "Versions" here means the
+                  chosen version and what is in it. */}
+              <div
+                style={{
+                  padding: "12px 14px",
+                  background: "#fff",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setVersionPickerOpen((open) => !open)}
+                  aria-expanded={versionPickerOpen}
                   style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: "#6B7280",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.05em",
-                    margin: "0 0 8px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    width: "100%",
+                    padding: 0,
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    textAlign: "left",
                   }}
                 >
-                  Versions
-                </p>
-                {/* On/off carried by the two designs themselves — ink when
-                    engaged, white when not — rather than by the blue fill this
-                    used to swap in. */}
-                <Button
-                  variant={diffMode ? "invert" : "outline"}
-                  size="xs"
-                  onClick={() => setDiffMode((v) => !v)}
-                  aria-pressed={diffMode}
-                  disabled={versionList.length < 2}
-                  className="mb-2.5 w-full"
-                >
-                  {diffMode ? "✓ Comparing versions" : "Compare with previous"}
-                </Button>
-                {versionList.map((v) => (
-                  <button
-                    key={v.id}
-                    onClick={() => setSelectedVersionId(v.id)}
-                    className="chip-toggle"
-                    aria-pressed={v.id === selectedVersionId}
+                  <span style={{ fontSize: 12, color: "#6B7280", width: 10 }}>
+                    {versionPickerOpen ? "▾" : "▸"}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+                    Versions
+                  </span>
+                  <span
                     style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "8px 10px",
-                      marginBottom: 6,
-                      fontSize: 12,
-                      border: "1px solid " + (v.id === selectedVersionId ? "#2563EB" : "#E5E7EB"),
-                      borderRadius: 8,
-                      background: v.id === selectedVersionId ? "#EFF6FF" : undefined,
-                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: "#374151",
+                      background: "#F3F4F6",
+                      borderRadius: 999,
+                      padding: "2px 9px",
                     }}
                   >
-                    <div style={{ fontWeight: 600, color: "#111827", marginBottom: 4 }}>
-                      v{v.version_number} — {v.kind === "full_generation" ? "Full" : "Patch"}
-                    </div>
-                    <Badge status={v.status} colors={VERSION_STATUS_COLORS} bg={VERSION_STATUS_BG} />
-                  </button>
-                ))}
-              </div>
+                    {versionList.length} version{versionList.length === 1 ? "" : "s"}
+                  </span>
+                  {/* Collapsed, this line is the only thing telling you which
+                      version the document below belongs to — without it the
+                      closed state would be ambiguous on a multi-version doc. */}
+                  {selectedVersion && (
+                    <span style={{ fontSize: 11, color: "#6B7280" }}>
+                      v{selectedVersion.version_number} selected
+                    </span>
+                  )}
+                  {diffMode && (
+                    <span style={{ fontSize: 11, color: "#B45309" }}>comparing</span>
+                  )}
+                </button>
 
-              <div style={{ flex: 1, minWidth: 0 }}>
+                {versionPickerOpen && (
+                  // The original two-column layout, unchanged, now living
+                  // inside the collapsible body: picker rail on the left, the
+                  // version's own content on the right.
+                  <div style={{ display: "flex", gap: 24, marginTop: 14 }}>
+                    <div style={{ width: 200, flexShrink: 0 }}>
+                      {/* On/off carried by the two designs themselves — ink when
+                          engaged, white when not — rather than by the blue fill this
+                          used to swap in. */}
+                      <Button
+                        variant={diffMode ? "invert" : "outline"}
+                        size="xs"
+                        onClick={() => setDiffMode((v) => !v)}
+                        aria-pressed={diffMode}
+                        disabled={versionList.length < 2}
+                        className="mb-2.5 w-full"
+                      >
+                        {diffMode ? "✓ Comparing versions" : "Compare with previous"}
+                      </Button>
+                      {versionList.map((v) => (
+                        <button
+                          key={v.id}
+                          onClick={() => setSelectedVersionId(v.id)}
+                          className="chip-toggle"
+                          aria-pressed={v.id === selectedVersionId}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 10px",
+                            marginBottom: 6,
+                            fontSize: 12,
+                            border:
+                              "1px solid " + (v.id === selectedVersionId ? "#2563EB" : "#E5E7EB"),
+                            borderRadius: 8,
+                            background: v.id === selectedVersionId ? "#EFF6FF" : undefined,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, color: "#111827", marginBottom: 4 }}>
+                            v{v.version_number} — {v.kind === "full_generation" ? "Full" : "Patch"}
+                          </div>
+                          <Badge
+                            status={v.status}
+                            colors={VERSION_STATUS_COLORS}
+                            bg={VERSION_STATUS_BG}
+                          />
+                        </button>
+                      ))}
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
               {diffMode ? (
                 <>
                   {!previousVersion && (
@@ -2270,10 +2283,13 @@ export default function SowDocumentPage() {
                 )}
                 </>
               )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
-        </Section>
+        </CollapsibleSection>
       </PageContainer>
     </AppShell>
   );

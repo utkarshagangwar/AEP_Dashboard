@@ -2,10 +2,11 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AppShell from "../../components/AppShell";
-import GlobalLoader from "../../components/GlobalLoader";
+import { usePageLoading } from "../../components/NavigationLoadingProvider";
 import PageContainer from "../../components/PageContainer";
 import ScriptRunTabs from "../../components/ScriptRunTabs";
 import { toastSuccess } from "../../lib/toast";
+import { confirmDialog } from "../../lib/confirm";
 import { DeleteIconButton } from "../../components/ui/delete-icon-button";
 import { apiGet, apiDelete } from "../../utils/apiClient";
 import { getStoredUser } from "../../utils/authStore";
@@ -111,6 +112,9 @@ export default function ReportsPage() {
     // 30s — was 10s. See dashboard/page.jsx for the same change/reasoning.
     refetchInterval: 30000,
   });
+
+  // Loading is the app-wide overlay, not a box inside the table.
+  usePageLoading(isLoading);
 
   const { data: summaryData } = useQuery({
     queryKey: ["reports-summary"],
@@ -405,9 +409,7 @@ export default function ReportsPage() {
               </span>
             ))}
           </div>
-          {isLoading ? (
-            <GlobalLoader fullscreen={false} />
-          ) : !runs.length ? (
+          {isLoading ? null : !runs.length ? (
             <div
               style={{
                 padding: 40,
@@ -508,17 +510,24 @@ export default function ReportsPage() {
                     month: "short",
                   })}
                 </span>
-                <div>
+                {/* A one-segment option group: the row has a single action, so
+                    the group renders it as a rounded square at exactly the SOW
+                    group's 72x28. See `.btn-option-group` in app/global.css. */}
+                <div className="btn-option-group">
                   {canWrite &&
                     !["running", "queued", "pending"].includes(run.status) && (
                       <DeleteIconButton
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           // The whole row is an <a> — stop it navigating.
                           e.preventDefault();
                           e.stopPropagation();
-                          if (window.confirm("Delete this test run permanently?")) {
-                            deleteMutation.mutate(run.id);
-                          }
+                          const ok = await confirmDialog({
+                            title: "Delete this test run?",
+                            body: "This removes it permanently. There is no undo.",
+                            tone: "danger",
+                            confirmLabel: "Delete",
+                          });
+                          if (ok) deleteMutation.mutate(run.id);
                         }}
                         aria-label="Delete test run"
                       />

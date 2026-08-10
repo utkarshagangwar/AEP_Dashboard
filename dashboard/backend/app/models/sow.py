@@ -159,6 +159,13 @@ class SowDocument(Base):
         index=True,
     )
     title = mapped_column(String(500), nullable=False)
+    # URL identifier, derived from title (migration 0048). Globally unique
+    # against SowDocumentSlugHistory.slug, not just against other documents'
+    # CURRENT slugs -- see that table's docstring for why. Assigned on
+    # create and rotated on rename (api/v1/sow.py's _assign_slug); every
+    # value it has ever held stays resolvable via history, so an old
+    # bookmark keeps working instead of 404ing after a rename.
+    slug = mapped_column(String(120), nullable=False, index=True, unique=True)
     status = mapped_column(
         Enum(SowDocumentStatus, name="sow_document_status_enum", create_type=False),
         nullable=False,
@@ -196,6 +203,44 @@ class SowDocument(Base):
     updated_at = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class SowDocumentSlugHistory(Base):
+    """Every slug a SowDocument has ever been assigned (migration 0048), one
+    row per slug. `slug` is UNIQUE across this ENTIRE table, not scoped to a
+    document -- that is the whole point of it. Two consequences:
+
+      1. Old-link redirects: when a rename rotates a document onto a new
+         slug, the previous row is left in place. Resolving a request finds
+         it, follows document_id to the still-live document, and the caller
+         (api/v1/sow.py's document lookup) can tell the slug in the URL no
+         longer matches the document's current one -- that is what lets the
+         frontend silently redirect an old bookmark to the live URL instead
+         of 404ing it.
+
+      2. Slug hijack prevention: because uniqueness is global and permanent,
+         a *different* document can never be created or renamed onto a slug
+         some other document used to own, even after that document renamed
+         away from it or was soft-deleted. Without this, someone could title
+         a new document to reclaim another document's old URL and silently
+         receive whatever traffic/bookmarks were meant for the original.
+
+    Never pruned. At this app's scale (one row per document per rename) an
+    unbounded history is not a real storage concern, and pruning would
+    reopen the hijack window above for whatever it deleted.
+    """
+
+    __tablename__ = "sow_document_slug_history"
+
+    id = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sow_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    slug = mapped_column(String(120), nullable=False, unique=True, index=True)
+    created_at = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
 class SowDocumentVersion(Base):

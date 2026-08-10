@@ -2,36 +2,36 @@
 
 /**
  * Mode selector for the Vibe Testing "New test" tab — replaces the old
- * stacked-cards layout (UI test, Functional Test, and Visual and design QA)
- * with a single "choose how to test"
+ * stacked-cards layout (UI test, Functional Test) with a single
+ * "choose how to test"
  * step. Picking a mode just toggles which panel is visible in page.tsx —
  * this component owns no data/API logic of its own, it's purely the picker.
  *
- * Three modes map 1:1 to existing backend-backed features:
+ * Both modes map 1:1 to existing backend-backed features:
  *  - ui         → VisualAuditSection (reference design + target URL,
  *                 backed by visual_judge.judge() / visual_runs). Replaces
  *                 the old single free-text "quick" goal box's UI-testing
  *                 half — see Vibe_Test_Gaps_and_Implementation_Checklist.md
- *                 Phase 1. A leaner, single-reference-vs-one-URL check;
- *                 "Visual and design QA" below remains the richer combined
- *                 Figma+video+SOW Autonomous QA audit — different tool.
+ *                 Phase 1. A leaner, single-reference-vs-one-URL check.
  *  - functional → FunctionalTestPanel (preconditions + ordered steps +
  *                 expected results + optional data sets, compiled into a
  *                 goal server-side and run by the existing Hands agent).
  *                 Replaces the old "quick" goal box's functional half.
- *  - visual     → AutonomousQASection (URL + Figma + video + SOW + saved
- *                 reference + credentials, all submitted together as one
- *                 run) — unchanged.
- * Figma Import (standalone) is intentionally not represented here — removed
- * from the Vibe Testing page per product decision; still reachable inside
- * the "ui" mode's reference picker via VisualAuditSection.
+ *
+ * The former "Visual and design QA" mode (the combined Figma+video+SOW
+ * Autonomous QA audit) was removed from this page per product decision
+ * (2026-08-10). Its backend/orchestrator endpoints are untouched, and
+ * existing orchestrator runs still render in the Results tab.
+ * Figma Import (standalone) is likewise intentionally not represented here —
+ * still reachable inside the "ui" mode's reference picker via
+ * VisualAuditSection.
  */
 
 import type { ReactNode } from "react";
-import { LayoutTemplate, ListChecks, ScanEye } from "lucide-react";
+import { ListChecks, ScanEye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type TestMode = "ui" | "functional" | "visual";
+export type TestMode = "ui" | "functional";
 
 interface ModeCardConfig {
   id: TestMode;
@@ -64,16 +64,6 @@ const CARDS: ModeCardConfig[] = [
     accentClasses: "bg-indigo-600",
     iconClasses: "bg-indigo-100 text-indigo-700",
     focusClasses: "focus-visible:ring-indigo-500",
-  },
-  {
-    id: "visual",
-    title: "Visual and design QA",
-    desc: "Combine a live site, Figma file, walkthrough video, spec doc, and saved references into one audit run.",
-    icon: <LayoutTemplate className="h-4 w-4" />,
-    selectedClasses: "border-violet-200 bg-violet-50/80",
-    accentClasses: "bg-violet-600",
-    iconClasses: "bg-violet-100 text-violet-700",
-    focusClasses: "focus-visible:ring-violet-500",
   },
 ];
 

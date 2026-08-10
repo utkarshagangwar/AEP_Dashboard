@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import AppShell from "../../../components/AppShell";
+import { usePageLoading } from "../../../components/NavigationLoadingProvider";
 import PageContainer from "../../../components/PageContainer";
 import { apiGet } from "../../../utils/apiClient";
 import { getStoredUser } from "../../../utils/authStore";
@@ -124,11 +125,22 @@ export default function AuditLogsPage() {
     staleTime: 1000 * 30,
   });
 
+  // Drives the app-wide overlay for the FIRST load only — a filter/page
+  // change afterward re-triggers isLoading for its own (uncached) query key,
+  // but that should stay a lightweight AuditTableSkeleton below, not
+  // blank the whole page again. See admin/ai-usage's identical comment.
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  useEffect(() => {
+    if (!isLoading && !hasLoadedOnce) setHasLoadedOnce(true);
+  }, [isLoading, hasLoadedOnce]);
+  const showGlobalLoader = !hasLoadedOnce && isLoading;
+  usePageLoading(showGlobalLoader);
+
   const total = data?.total || 0;
   const logs = data?.data || [];
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
-  if (!user) return null;
+  if (!user || showGlobalLoader) return null;
 
   return (
     <AppShell noPadding>
