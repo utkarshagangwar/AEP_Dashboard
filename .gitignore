@@ -83,3 +83,7 @@ docker-compose.override.yml
 # Test artifacts
 results/
 test-artifacts/
+
+# Internal engineering doc (renamed from dashboard/README.md) — kept locally
+# only, never pushed to GitHub. See root README.md for the public overview.
+dashboard/Changelog_and_Specs.md
