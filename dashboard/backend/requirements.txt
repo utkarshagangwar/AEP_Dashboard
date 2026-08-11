@@ -35,7 +35,11 @@ requests==2.34.2
 # 0.1.40->0.1.45 (diffed both wheels directly).
 browser-use==0.1.45
 playwright==1.49.0
-cryptography==48.0.1
+# SECURITY (2026-08-11): 48.0.1 -> 50.0.0 fixes a Bleichenbacher-oracle
+# timing leak in PKCS#7 EnvelopedData decryption (GHSA-g6cj-pr64-35w5).
+# Only Fernet (symmetric, unrelated code path) is used directly in this repo
+# -- credential_service.py -- so the jump carries no API-surface risk here.
+cryptography==50.0.0
 # Pinned to 2.1.2 (down from 2.1.12) because browser-use==0.1.45 hard-pins
 # langchain-google-genai==2.1.2 as a core dependency (was dev-only under
 # 0.1.40). Verified _generate/_agenerate signatures used by the
@@ -61,11 +65,16 @@ langchain-openai==0.3.11
 # these are reachable. Bumping would also force openai>=2.20.0, breaking the
 # pin above. Left as-is; do not install the "proxy" extra on this package.
 litellm==1.74.15.post2
-Pillow==12.2.0
-Pillow==12.2.0
+# SECURITY (2026-08-11): 12.2.0 -> 12.3.0 fixes 13 CVEs disclosed after 12.2.0
+# shipped (heap out-of-bounds writes, several decompression-bomb-check
+# bypasses). Was also listed twice here by accident -- deduped to one line.
+Pillow==12.3.0
 pixelmatch==0.3.0
 # Visual QA (Phase 3): SOW PDF text extraction
-pypdf==6.14.2
+# SECURITY (2026-08-11): 6.14.2 -> 6.15.0 fixes two memory/runtime DoS CVEs
+# on crafted /ToUnicode and CID-font-width PDF streams (GHSA-fp3f-mc75-235c,
+# GHSA-fwg2-594c-jp42).
+pypdf==6.15.0
 # Android Vibe Testing: Appium client for the Hands loop in android_runner.py.
 # Talks to a remote cloud device-farm Appium endpoint (BrowserStack) over
 # HTTP -- no local Appium server, no Android SDK, no emulator dependency.
