@@ -1,8 +1,8 @@
 # AEP Dashboard
 
-A web app that helps QA teams manage, run, and track their automated tests — all from one place.
+A web app that helps QA teams manage, run, and track their automated tests — all from one place, plus an AI-assisted testing suite for goal-based browser testing and requirements-to-checkpoint extraction.
 
-Instead of digging through CI logs or asking "did anyone run the regression suite today?", your team gets a shared dashboard with live stats, test history, defect tracking, and the ability to kick off test runs with a button click.
+Instead of digging through CI logs or asking "did anyone run the regression suite today?", your team gets a shared dashboard with live stats, test history, defect tracking, and the ability to kick off test runs with a button click. On top of that, an AI testing layer ("Vibe Testing") can run goal-based browser tests from a plain-English prompt, extract QA checkpoints from a spec document or a walkthrough video, and turn meeting notes into a Statement of Work.
 
 ---
 
@@ -16,22 +16,24 @@ This repo has two main parts:
 └── automation/         # Robot Framework test suites (the actual tests that get run)
 ```
 
-**Dashboard** is a Next.js frontend talking to a FastAPI backend, backed by PostgreSQL and Redis. It handles user login, project management, test execution, results, reports, and defect tracking.
+**Dashboard** is a Next.js frontend talking to a FastAPI backend, backed by PostgreSQL and Redis. It handles user login, project management, test execution, results, reports, defect tracking, and the AI testing / SOW authoring suite.
 
-**Automation** holds the Robot Framework + Playwright test suites that test the InterviewGod application. The dashboard can trigger these tests and display their results.
+**Automation** holds the Robot Framework + Playwright test suites. The dashboard discovers and triggers these tests and displays their results.
 
 ---
 
 ## Features
 
 - **Dashboard home** — pass rates, recent runs, open defects, active projects, all at a glance
-- **Projects** — group your test suites by project
+- **Projects** — group your test suites by project, with per-project environments and credential profiles
 - **Test suites & runs** — organize tests, trigger runs, watch status (queued/running/passed/failed)
 - **Results & reports** — drill into individual test results, see errors, screenshots, and execution times
 - **Defect tracking** — log bugs from failed tests, assign severity, track them to closure
-- **User management** — roles (Admin, QA Lead, QA Engineer, Viewer) with JWT auth
+- **Vibe Testing (AI testing)** — goal-based AI browser agent, spec-document / walkthrough-video → QA checkpoint extraction, and reusable "Skills" recorded from passing runs
+- **SOW authoring** — turn meeting transcripts, recordings, and design references into a structured Statement of Work, with section-level rewrite and export to Markdown/Word/PDF
+- **User management** — roles with granular, per-feature permissions and JWT auth
 - **Audit logs** — who did what and when
-- **Auto-refresh** — dashboard stats update every 10 seconds
+- **Auto-refresh / live updates** — dashboard stats and running tests update automatically
 
 ---
 
@@ -39,14 +41,15 @@ This repo has two main parts:
 
 | Layer | What we use |
 |-------|-------------|
-| Frontend | Next.js 16, React 18, Tailwind CSS, shadcn/ui, TanStack Query, Recharts |
+| Frontend | Next.js (App Router), React, TypeScript/JavaScript, Tailwind CSS, shadcn-style UI components, TanStack Query |
 | Backend | FastAPI, SQLAlchemy, Alembic (migrations), Pydantic |
-| Database | PostgreSQL 15 |
-| Cache & Queue | Redis 7, Celery (for async test execution) |
+| Database | PostgreSQL (managed/external — e.g. Neon; not bundled in Docker Compose) |
+| Cache & Queue | Redis, Celery (async test execution and AI job processing) |
 | Proxy | Nginx |
-| Test Framework | Robot Framework 7.4 + Playwright (Browser library) |
+| Test Framework | Robot Framework + Playwright (Browser library) |
+| AI / browser agent | Playwright-driven goal-based browser agent, with pluggable LLM providers (Google Gemini, OpenAI, Anthropic, OpenRouter — bring your own API key) |
 | CI/CD | GitHub Actions (automation suite runs daily + on demand) |
-| Containers | Docker Compose (everything in one command) |
+| Containers | Docker Compose (backend, frontend, worker, Redis, Nginx in one command) |
 
 ---
 
@@ -55,13 +58,14 @@ This repo has two main parts:
 ### What you need
 
 - Docker and Docker Compose
+- A PostgreSQL 15+ database (local install or a free managed instance, e.g. Neon)
 - Python 3.11+ (for backend, if running locally)
 - Node.js 18+ (for frontend, if running locally)
 - Git
 
 ### Quickest way — Docker Compose
 
-This brings up everything: database, Redis, backend, frontend, Nginx.
+This brings up the app, Redis, the Celery worker, and Nginx (you provide the Postgres connection string).
 
 ```bash
 # 1. Clone the repo
@@ -69,8 +73,9 @@ git clone <repo-url>
 cd AEP_Dashboard
 
 # 2. Set up your environment file
-cp dashboard/.env.sample dashboard/.env
-# Open dashboard/.env and fill in your values (see Environment Variables below)
+cp dashboard/backend/.env.example dashboard/.env
+# Open dashboard/.env, uncomment the values you need, and fill them in
+# (see Environment Variables below)
 
 # 3. Start everything
 cd dashboard
@@ -85,20 +90,12 @@ Give it a minute, then open:
 
 ### For active development
 
-If you're writing code and want hot reload, run the databases in Docker but the app locally:
+If you're writing code and want hot reload, run Redis in Docker but the app locally (point `DATABASE_URL` at your own Postgres instance):
 
 ```bash
 # Start just Redis
 cd dashboard
 docker-compose up redis
-
-# In a new terminal — start PostgreSQL
-docker run -d --name aep_postgres \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=aepdb \
-  -p 5432:5432 \
-  postgres:15-alpine
 
 # In a new terminal — start the backend
 cd dashboard/backend
@@ -121,20 +118,25 @@ Backend at http://localhost:8000, frontend at http://localhost:3000.
 
 ## Environment Variables
 
-Copy `dashboard/.env.sample` to `dashboard/.env` and fill these in:
+Copy `dashboard/backend/.env.example` as a starting template and fill these in (in `dashboard/.env` for Docker Compose, or `dashboard/backend/.env` for running the backend locally):
 
 | Variable | What it does | Example |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:postgres@localhost:5432/aepdb` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:password@host/dbname` |
 | `JWT_SECRET_KEY` | Signing key for auth tokens | Generate with: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `JWT_ALGORITHM` | Token signing algorithm | `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | How long access tokens last | `15` |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | How long refresh tokens last | `7` |
-| `FIRST_ADMIN_EMAIL` | Seed admin account (created on first run only) | `admin@aep.local` |
+| `FIRST_ADMIN_EMAIL` | Seed admin account (created on first run only) | `admin@example.com` |
 | `FIRST_ADMIN_PASSWORD` | Seed admin password | Pick something strong |
 | `CELERY_BROKER_URL` | Redis URL for task queue | `redis://redis:6379/0` |
 | `CELERY_RESULT_BACKEND` | Redis URL for task results | `redis://redis:6379/0` |
-| `FASTAPI_URL` | Backend URL (used by frontend) | `http://backend:8000` (Docker) or `http://localhost:8000` (local) |
+| `AUTOMATION_ROOT` | Path to the `automation/` folder (enables the Execute feature) | `/automation` (Docker) |
+| `VISUAL_AUDIT_ENABLED` | Turns on the Vibe Testing / visual QA feature set | `true` |
+| `SOW_ENABLED` | Turns on the SOW authoring feature set | `true` |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | At least one, to power the AI features | your own key |
+
+Full, current, inline-commented list: `dashboard/backend/.env.example`.
 
 ---
 
@@ -145,36 +147,37 @@ dashboard/
 ├── backend/                # FastAPI app
 │   ├── app/
 │   │   ├── main.py         # Entry point
-│   │   ├── models/         # SQLAlchemy models (User, Project, TestRun, Defect, etc.)
-│   │   ├── routers/        # API routes
-│   │   └── workers/        # Celery tasks for async test execution
-│   ├── alembic/            # Database migrations
+│   │   ├── api/v1/         # API route modules
+│   │   ├── core/           # config, security, permissions, dependencies
+│   │   ├── models/         # SQLAlchemy models
+│   │   ├── schemas/        # Pydantic request/response schemas
+│   │   ├── services/       # business logic (LLM routing, ingestion, etc.)
+│   │   └── workers/        # Celery tasks for async test execution & AI jobs
+│   ├── alembic/             # Database migrations
 │   └── requirements.txt
-├── frontend/               # Next.js app
+├── frontend/                # Next.js app
 │   └── src/
-│       ├── app/            # Pages (dashboard, projects, reports, defects, etc.)
-│       ├── components/     # Shared UI components
-│       └── utils/          # API client, auth helpers
-├── docker/                 # Dockerfiles and Nginx config
-├── docker-compose.yml
-├── .env.example
-└── LOCAL_SETUP.md          # Detailed setup guide with troubleshooting
+│       ├── app/             # Pages (dashboard, projects, reports, defects, ai-testing, sow, etc.)
+│       ├── components/      # Shared UI components
+│       └── utils/, lib/     # API client, auth helpers
+├── docker/                  # Dockerfiles and Nginx config
+└── docker-compose.yml
 
 automation/
-├── ig_automation/          # Primary test suite
-│   ├── tests/              # Test cases (login, dashboard, jobs, candidates)
-│   ├── pages/              # Page objects (locators)
-│   ├── resources/          # Keywords and config
-│   ├── libs/               # Python helpers (auth bypass, AI locator healing)
+├── ig_automation/           # Primary test suite
+│   ├── tests/                # Test cases (login, dashboard, jobs, candidates)
+│   ├── pages/                 # Page objects (locators)
+│   ├── resources/              # Keywords and config
+│   ├── libs/                    # Python helpers (auth bypass, AI locator healing)
 │   └── requirements.txt
-└── ig_automation_2/        # Secondary test suite
+└── ig_automation_2/          # Secondary test suite
 ```
 
 ---
 
 ## Running the Automation Tests
 
-The test suites use Robot Framework with Playwright. They test the InterviewGod app, not the dashboard itself.
+The test suites use Robot Framework with Playwright.
 
 ```bash
 cd automation/ig_automation
@@ -190,9 +193,9 @@ robot --argumentfile local.args
 robot --outputdir results --pythonpath . tests/dashboard/dashboard_tests.robot
 ```
 
-Tests need a `.env` file with the target app's credentials — see the automation CLAUDE.md for details.
+Tests need a `.env` file with the target app's credentials — see the automation project's own docs for details.
 
-**CI**: The automation suite runs daily at 3:30 AM UTC via GitHub Actions, plus on-demand via manual trigger. Only tests tagged `ci-safe` run in CI (no CAPTCHA or file dialog tests).
+**CI**: The automation suite runs daily via GitHub Actions, plus on-demand via manual trigger. Only tests tagged `ci-safe` run in CI (no CAPTCHA or file-dialog tests).
 
 ---
 
@@ -212,6 +215,8 @@ The main routes:
 | `GET /api/v1/test-results/` | Query test results |
 | `GET/POST /api/v1/defects/` | List or log defects |
 | `GET /api/v1/dashboard/stats` | All dashboard metrics in one call |
+| `GET/POST /api/v1/ai-testing/` | Goal-based AI test runs and saved skills |
+| `GET/POST /api/v1/sow/` | SOW document CRUD, generation, and export |
 | `GET /api/v1/audit/` | Audit log |
 | `GET /health` | Health check |
 
@@ -244,5 +249,3 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 | Redis connection error | Make sure Redis is running: `docker ps \| grep redis` or `redis-cli ping` (should return PONG) |
 | Alembic migration fails | Run `CREATE EXTENSION IF NOT EXISTS pgcrypto;` in your database first |
 | Docker Compose won't start | Check your `.env` file exists at `dashboard/.env` and has valid values |
-
-For more details, see `dashboard/LOCAL_SETUP.md`.
