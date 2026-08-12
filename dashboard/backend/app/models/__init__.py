@@ -51,6 +51,26 @@ from app.models.sow import (
     SowSourceStatus,
 )
 from app.models.ai_usage import AIUsageEvent, AIKeyLimit
+from app.models.project_intelligence import (
+    PiStatus,
+    PiScreen,
+    PiNavigationEdge,
+    PiComponent,
+    PiBehaviorNote,
+    PiCaptureEvent,
+    PiChangeLog,
+    PiReviewAction,
+    PiFlow,
+    PiDriftType,
+    PiDriftFlag,
+    PiDesignPattern,
+    # Phase 5 — always importable as a NAME (either the real ORM class or
+    # None), never an ImportError: see project_intelligence.py's
+    # defensive `_PGVECTOR_AVAILABLE` guard. A stale environment without
+    # the `pgvector` package still boots; app.services.pi_embed checks for
+    # None before ever touching this.
+    PiEmbedding,
+)
 
 __all__ = [
     "User",
@@ -106,4 +126,17 @@ __all__ = [
     "SowSourceStatus",
     "AIUsageEvent",
     "AIKeyLimit",
+    "PiStatus",
+    "PiScreen",
+    "PiNavigationEdge",
+    "PiComponent",
+    "PiBehaviorNote",
+    "PiCaptureEvent",
+    "PiChangeLog",
+    "PiReviewAction",
+    "PiFlow",
+    "PiDriftType",
+    "PiDriftFlag",
+    "PiDesignPattern",
+    "PiEmbedding",
 ]

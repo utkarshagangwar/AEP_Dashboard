@@ -71,7 +71,13 @@ export default function ProjectDetailPage({ params }) {
   const [formError, setFormError] = useState("");
 
   const [showEditProject, setShowEditProject] = useState(false);
-  const [projectForm, setProjectForm] = useState({ name: "", description: "", is_active: true });
+  const [projectForm, setProjectForm] = useState({
+    name: "",
+    description: "",
+    is_active: true,
+    pi_crawl_enabled: false,
+    pi_crawl_production_approved: false,
+  });
   const [projectFormError, setProjectFormError] = useState("");
 
   const [showEnvModal, setShowEnvModal] = useState(false);
@@ -136,6 +142,8 @@ export default function ProjectDetailPage({ params }) {
       name: project?.name || "",
       description: project?.description || "",
       is_active: project?.is_active ?? true,
+      pi_crawl_enabled: project?.pi_crawl_enabled ?? false,
+      pi_crawl_production_approved: project?.pi_crawl_production_approved ?? false,
     });
     setProjectFormError("");
     setShowEditProject(true);
@@ -845,6 +853,36 @@ export default function ProjectDetailPage({ params }) {
                 })}
               </div>
 
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#374151", marginBottom: 6 }}>
+                Project Intelligence — Scheduled Crawling
+              </label>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#374151", cursor: "pointer" }}>
+                  <Checkbox
+                    checked={projectForm.pi_crawl_enabled}
+                    onCheckedChange={(v) =>
+                      setProjectForm((f) => ({ ...f, pi_crawl_enabled: Boolean(v) }))
+                    }
+                  />
+                  Enable scheduled crawling for this project
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#374151", cursor: "pointer" }}>
+                  <Checkbox
+                    checked={projectForm.pi_crawl_production_approved}
+                    onCheckedChange={(v) =>
+                      setProjectForm((f) => ({ ...f, pi_crawl_production_approved: Boolean(v) }))
+                    }
+                  />
+                  Approved for crawling production environments
+                </label>
+                <p style={{ margin: 0, fontSize: 12, color: "#9CA3AF" }}>
+                  Off by default. Crawling only ever runs against an
+                  environment marked &quot;production&quot; (set under Test
+                  setup → Advanced) if both this project has opted in and
+                  production crawling is approved here.
+                </p>
+              </div>
+
               {projectFormError && (
                 <p style={{ fontSize: 13, color: "#DC2626", marginBottom: 12 }}>
                   {projectFormError}
@@ -863,6 +901,8 @@ export default function ProjectDetailPage({ params }) {
                       name: projectForm.name,
                       description: projectForm.description,
                       is_active: projectForm.is_active,
+                      pi_crawl_enabled: projectForm.pi_crawl_enabled,
+                      pi_crawl_production_approved: projectForm.pi_crawl_production_approved,
                     })
                   }
                   disabled={updateProjectMutation.isPending}

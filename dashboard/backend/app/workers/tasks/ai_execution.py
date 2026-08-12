@@ -1128,6 +1128,43 @@ def run_ai_test_task(self, run_id: str) -> None:
                 run.viewport_preset or "desktop", VIEWPORT_PRESETS["desktop"]
             )
 
+            # Project Intelligence: AI Context Feedback Loop (Phase 4, spec
+            # §20). Injected here — after run inputs are resolved, before
+            # the agent starts, while `db` is still open for the brief's
+            # own queries — and NEVER in start_context.py (see
+            # pi_context.py's module docstring for why). `run.goal` itself
+            # is deliberately left untouched: it is the user's original
+            # request, still used below for skill-save goal hashing and
+            # dedup, and must not silently vary run to run with whatever
+            # the brief happened to contain. Only the local `effective_goal`
+            # passed to run_ai_test_sync is augmented. Fail-open: any error
+            # here falls back to the plain, unmodified goal — this feature
+            # must never be able to block or slow a run.
+            effective_goal = run.goal
+            try:
+                from app.services import pi_context, pi_ingest as _pi_ingest
+
+                environment_id = pi_context.resolve_environment_id(
+                    db, project_id=run.project_id, environment_label=run.environment,
+                )
+                brief = pi_context.build_project_brief(
+                    db,
+                    project_id=run.project_id,
+                    environment_id=environment_id,
+                    budget_tokens=_pi_ingest.context_budget_tokens(),
+                )
+                if brief:
+                    effective_goal = f"{run.goal}\n\n{brief}"
+                    pi_context.log_context_injection(
+                        run_id=run_id, brief_tokens=pi_context.estimate_tokens(brief),
+                    )
+            except Exception:
+                logger.warning(
+                    "Project Intelligence: context brief injection failed for run %s — "
+                    "proceeding with the original goal, unmodified",
+                    run_id, exc_info=True,
+                )
+
             db.close()
             db = None
 
@@ -1135,7 +1172,7 @@ def run_ai_test_task(self, run_id: str) -> None:
             from app.services.ai_runner import run_ai_test_sync
 
             result = run_ai_test_sync(
-                goal=run.goal,
+                goal=effective_goal,
                 environment_url=environment_url,
                 allowed_domains=allowed_domains,
                 sensitive_data=sensitive_data,
@@ -1165,6 +1202,27 @@ def run_ai_test_task(self, run_id: str) -> None:
         _persist_result(db, run, run_id, result)
         db.commit()
         logger.info("AI run %s completed with status: %s", run_id, run.status.value)
+
+        # Project Intelligence: best-effort capture ingestion (New Vibe Test /
+        # PI Phase 1). Fire-and-forget — queued after this run's own result is
+        # already committed, never awaited, so a failure to queue it or a
+        # failure inside the task itself can never affect this run's result.
+        # Deliberately NOT gated on run.status == passed (unlike the skill-save
+        # block below): a failed or needs_review run still traversed real
+        # screens and controls, and excluding it would just make Project
+        # Intelligence's catalog blind to whatever the run actually observed.
+        try:
+            from app.workers.tasks.pi_ingest import ingest_vibe_capture
+
+            ingest_vibe_capture.delay(
+                str(run_id), str(run.project_id) if run.project_id else None,
+                result.get("history_json"),
+            )
+        except Exception:
+            logger.warning(
+                "Project Intelligence: could not queue Vibe capture ingestion for run %s",
+                run_id, exc_info=True,
+            )
 
         # Auto-save a replayable skill from passed AI-planned runs. Reads
         # run.status (post-GEval-gating, Phase 4), not result["status"] --

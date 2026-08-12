@@ -6,6 +6,7 @@ import { apiGet, apiFetch } from "@/utils/apiClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -43,6 +44,7 @@ interface ProjectEnvironmentRow {
   id: string;
   environment: string;
   base_url: string | null;
+  is_production?: boolean;
 }
 
 interface TestSetup {
@@ -84,6 +86,9 @@ export default function ProjectTestSetupDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [envLabel, setEnvLabel] = useState<string>(environments[0] ?? "default");
   const [baseUrl, setBaseUrl] = useState("");
+  // Project Intelligence — Phase 3 (spec §28 Q1: set explicitly by an
+  // Admin/QA Lead per environment, never inferred from the label string).
+  const [isProduction, setIsProduction] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -118,6 +123,7 @@ export default function ProjectTestSetupDialog({
     if (existing) {
       setEnvLabel(existing.environment);
       setBaseUrl(existing.base_url ?? "");
+      setIsProduction(Boolean(existing.is_production));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setup]);
@@ -151,7 +157,11 @@ export default function ProjectTestSetupDialog({
           // the login carries no address, or the user opened Advanced to
           // override it deliberately.
           ...(!loginProvidesUrl || advancedOpen
-            ? { environment: envLabel.trim(), base_url: trimmedUrl || null }
+            ? {
+                environment: envLabel.trim(),
+                base_url: trimmedUrl || null,
+                is_production: isProduction,
+              }
             : {}),
         }),
       });
@@ -314,6 +324,19 @@ export default function ProjectTestSetupDialog({
                         only. Leave blank to use the login&apos;s URL.
                       </p>
                     </div>
+                    <label className="flex cursor-pointer items-center gap-2.5 text-sm text-gray-700">
+                      <Checkbox
+                        checked={isProduction}
+                        onCheckedChange={(v) => setIsProduction(Boolean(v))}
+                      />
+                      Is production environment
+                    </label>
+                    <p className="text-xs text-gray-500">
+                      Marks this address as production for Project
+                      Intelligence&apos;s scheduled crawler. A production
+                      environment is only ever crawled if the project has
+                      also been explicitly approved for production crawling.
+                    </p>
                   </div>
                 )}
               </div>

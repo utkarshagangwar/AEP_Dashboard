@@ -12,6 +12,7 @@ import {
   Shield,
   Gauge,
   LogOut,
+  BrainCircuit,
 } from "lucide-react";
 import { getStoredUser, clearStoredUser } from "../utils/authStore";
 import { apiFetch, clearTokens } from "../utils/apiClient";
@@ -55,6 +56,21 @@ const NAV = [
 ];
 
 const ADMIN_NAV = [
+  {
+    label: "AI Intelligence",
+    href: "/admin/ai-intelligence",
+    // The one ADMIN_NAV item with a `permission` key — every other item
+    // below stays admin-only exactly as before (no key = admin-only, see
+    // visibleAdminNav's filter). This one is deliberately grantable to a
+    // non-admin reviewer on its own (app/core/permissions.py:
+    // "project_intelligence" — read/browse the queue; distinct from
+    // "project_intelligence_review", which gates the approve/edit/reject
+    // actions inside the page itself, not this nav entry), so a QA
+    // engineer can review Project Intelligence without also getting
+    // Users/Audit Logs/AI Usage.
+    permission: "project_intelligence",
+    icon: <BrainCircuit size={16} />,
+  },
   {
     label: "Users",
     href: "/admin/users",
@@ -498,6 +514,16 @@ export default function AppShell({ children, noPadding = false }) {
     return n.permissions.some((permission) => (user.permissions || []).includes(permission));
   });
 
+  // Unlike visibleNav above, an ADMIN_NAV item with no `permission` key is
+  // admin-only (not "open to anyone logged in" — that reading only applies
+  // to the top nav group). Only an item that explicitly opts in with a
+  // `permission` key (currently just AI Intelligence) can be seen by a
+  // non-admin, and only once that permission is actually granted.
+  const visibleAdminNav = ADMIN_NAV.filter((n) => {
+    if (isAdmin) return true;
+    return n.permission ? (user.permissions || []).includes(n.permission) : false;
+  });
+
   const initials = user.full_name
     ?.split(" ")
     .map((w) => w[0])
@@ -613,7 +639,7 @@ export default function AppShell({ children, noPadding = false }) {
             ))}
           </div>
 
-          {isAdmin && (
+          {visibleAdminNav.length > 0 && (
             <div
               style={{
                 marginTop: 16,
@@ -622,7 +648,7 @@ export default function AppShell({ children, noPadding = false }) {
               }}
             >
               <p className="aep-admin-label">Admin</p>
-              {ADMIN_NAV.map((n) => (
+              {visibleAdminNav.map((n) => (
                 <NavLink key={n.href} {...n} />
               ))}
             </div>

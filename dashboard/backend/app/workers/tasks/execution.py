@@ -460,6 +460,22 @@ def execute_test_suite(self, run_id: str):
             run_id, total, passed_count, failed_count,
         )
 
+        # Project Intelligence: best-effort capture ingestion (New Vibe Test /
+        # PI Phase 1). Fire-and-forget — queued after this run's own status is
+        # already committed, never awaited, so a failure to queue it or a
+        # failure inside the task itself can never affect this run's result.
+        # results_dir is where rf_listener.py's close() wrote pi_capture.json,
+        # if Project Intelligence was enabled during this run.
+        try:
+            from app.workers.tasks.pi_ingest import ingest_rf_capture
+
+            ingest_rf_capture.delay(str(run_uuid), str(results_dir))
+        except Exception:
+            logger.warning(
+                "Project Intelligence: could not queue capture ingestion for run %s",
+                run_id, exc_info=True,
+            )
+
         return {
             "run_id": str(run_uuid),
             "status": run.status.value,

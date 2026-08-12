@@ -3,6 +3,19 @@ uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
 psycopg2-binary==2.9.10
 alembic==1.14.0
+# Project Intelligence Phase 5 (Scale): SQLAlchemy `Vector` column type for
+# pi_embeddings (app/models/project_intelligence.py, migration 0053) and
+# its cosine_distance()/l2_distance() comparator used by
+# app/services/pi_embed.py's semantic search. Requires the matching
+# `vector` Postgres EXTENSION to also be installed on the DB server itself
+# (see migration 0053's docstring) — this pip package alone only teaches
+# SQLAlchemy the Python-side column type. Import of this package is
+# defensively guarded in models/project_intelligence.py, so a deployment
+# that has NOT yet run `pip install -r requirements.txt` since Phase 5
+# landed still boots normally (PiEmbedding just isn't defined) rather
+# than crashing on import — but a fresh install always gets it, same as
+# every other pin in this file.
+pgvector==0.5.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
 python-jose[cryptography]==3.4.0

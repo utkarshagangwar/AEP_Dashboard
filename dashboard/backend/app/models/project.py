@@ -94,6 +94,27 @@ class Project(Base):
         ForeignKey("ai_credential_profiles.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # ── Project Intelligence — Phase 3 scheduled crawler (migration 0052) ──
+    # See AEP_Project_Intelligence_Consolidated_Spec v3.0 §14.3/§24 and the
+    # Phase 3 sign-off answers to §28 Q1/Q2. Both default false: a project
+    # is never crawled just because Project Intelligence itself is on.
+    #
+    # pi_crawl_enabled: the per-PROJECT opt-in (§28 Q2 — "off everywhere by
+    # default, opt-in per project"). Combined with the PI_CRAWL_ENABLED
+    # global kill switch (an env var, not a column — table 16) — both must
+    # be on for any environment of this project to ever be crawled.
+    pi_crawl_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # pi_crawl_production_approved: spec §14.3/§24's own baseline design —
+    # "Default target is staging. Production crawling is opt-in per project
+    # and recorded on the project record." Only consulted for an
+    # environment whose ProjectEnvironment.is_production is true (§28 Q1 —
+    # that classification is set explicitly by an Admin/QA Lead per
+    # environment, never inferred from the environment's free-text label).
+    pi_crawl_production_approved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -178,6 +199,21 @@ class ProjectEnvironment(Base):
         # clear "no credential profile" message rather than a vanished row.
         ForeignKey("ai_credential_profiles.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    # Project Intelligence — Phase 3 scheduled crawler (migration 0052).
+    # Whether THIS address is production, set explicitly by whoever can
+    # already write this row (Admin/QA Lead — require_permission("projects"),
+    # unchanged). Deliberately not inferred from `environment` (a free-text
+    # label — see the class docstring): AEP_Project_Intelligence_
+    # Consolidated_Spec v3.0 §28 Q1's answer is that staging-vs-production
+    # "will be set by the Admin or QA Lead at the time of creating a new
+    # project [environment]", not guessed from whether the label happens to
+    # contain the word "production". Defaults false, so every existing row
+    # is treated as non-production until someone says otherwise — the
+    # conservative default for a boundary a scheduled, unattended crawler
+    # reads (services/pi_crawl.py).
+    is_production: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

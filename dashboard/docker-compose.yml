@@ -67,6 +67,66 @@ services:
       SOW_ENABLED: ${SOW_ENABLED:-false}
       SOW_MAX_RECORDING_MB: ${SOW_MAX_RECORDING_MB:-500}
       SOW_MAX_RECORDING_MINUTES: ${SOW_MAX_RECORDING_MINUTES:-60}
+      # Project Intelligence — same allowlist gotcha as SOW_ENABLED/AXON_API_KEY
+      # above: setting these in .env alone does nothing, they must be listed
+      # here too. PI_ENABLED is the master switch (default off); the three
+      # PI_CAPTURE_* flags are opt-out (default on once PI_ENABLED=true) and
+      # only need to be set when you want to disable one specific capture
+      # source. Must match celery_worker's block below — the worker is where
+      # ingest_rf_capture/ingest_vibe_capture actually run.
+      PI_ENABLED: ${PI_ENABLED:-false}
+      PI_CAPTURE_RF: ${PI_CAPTURE_RF:-true}
+      PI_CAPTURE_VIBE: ${PI_CAPTURE_VIBE:-true}
+      PI_CAPTURE_BEHAVIOR_NOTES: ${PI_CAPTURE_BEHAVIOR_NOTES:-true}
+      # Phase 2 — Change Detection & Healing. PI_HEAL_LEDGER is its own kill
+      # switch, default OFF regardless of PI_ENABLED (spec table 16: "off
+      # until Phase 2 is signed off") — detection/flags work either way,
+      # only the sow_requirements_ledger WRITE is gated by this. The two
+      # tuning knobs below have safe in-code defaults (3 visits / 0.93
+      # similarity) and only need to be set to override them per project.
+      PI_HEAL_LEDGER: ${PI_HEAL_LEDGER:-false}
+      PI_REMOVED_THRESHOLD: ${PI_REMOVED_THRESHOLD:-3}
+      PI_RENAME_SIMILARITY_THRESHOLD: ${PI_RENAME_SIMILARITY_THRESHOLD:-0.93}
+      # Phase 3 — Active Crawler & Visual. PI_CRAWL_ENABLED is its own kill
+      # switch, default OFF regardless of PI_ENABLED (spec table 16: "off
+      # until Phase 3") — a project must ALSO have pi_crawl_enabled set on
+      # its own project record (§28 Q2: "opt-in per project") before any of
+      # its environments are ever crawled. The crawl itself runs in
+      # celery_worker (see that block below), but api/v1/project_
+      # intelligence.py's design-pattern endpoints run here, so both
+      # containers need PI_ENABLED regardless — these crawl-specific knobs
+      # only matter where the crawl runs, listed here anyway to keep both
+      # blocks identical and avoid the exact allowlist gap Phase 1 hit.
+      PI_CRAWL_ENABLED: ${PI_CRAWL_ENABLED:-false}
+      PI_ARTIFACT_RETENTION_DAYS: ${PI_ARTIFACT_RETENTION_DAYS:-90}
+      PI_CRAWL_MAX_STEPS: ${PI_CRAWL_MAX_STEPS:-40}
+      PI_CRAWL_MAX_DURATION_S: ${PI_CRAWL_MAX_DURATION_S:-1200}
+      PI_CRAWL_MAX_SCREENSHOTS: ${PI_CRAWL_MAX_SCREENSHOTS:-5}
+      PI_CRAWL_STAGGER_S: ${PI_CRAWL_STAGGER_S:-300}
+      PI_CAPTURE_DESIGN_PATTERNS: ${PI_CAPTURE_DESIGN_PATTERNS:-true}
+      # Phase 4 — AI Context Feedback Loop. PI_CONTEXT_ENABLED is its own
+      # kill switch, default OFF regardless of PI_ENABLED (spec table 16:
+      # "off until Phase 4") — turning it on changes what every AI run's
+      # agent actually sees (its goal is augmented with a generated
+      # brief), so it stays a deliberate admin opt-in. Brief injection
+      # itself runs in celery_worker (ai_execution.run_ai_test_task), but
+      # api/v1/project_intelligence.py's context-effectiveness endpoint
+      # runs here, so both containers need these regardless — same
+      # both-blocks-identical convention as Phase 3.
+      PI_CONTEXT_ENABLED: ${PI_CONTEXT_ENABLED:-false}
+      PI_CONTEXT_BUDGET_TOKENS: ${PI_CONTEXT_BUDGET_TOKENS:-1200}
+      PI_CONTEXT_BUILD_TIMEOUT_S: ${PI_CONTEXT_BUILD_TIMEOUT_S:-5}
+      # Phase 5 — Scale (pgvector + semantic search). Its own switch,
+      # default OFF, deliberately separate from PI_ENABLED and every other
+      # PI_* switch above (confirmed directly at Phase 5 kickoff, not
+      # inferred) — turning this on requires the `vector` Postgres
+      # extension to already be installed on the DB server (see alembic
+      # migration 0053's docstring) and the `pgvector` pip package
+      # (requirements.txt) to be present; neither is true by default, so
+      # this stays off until both are deliberately set up. Reuses
+      # GOOGLE_API_KEY(S)/GEMINI_API_KEY above for the embedding model —
+      # no separate credential.
+      PI_SEMANTIC_SEARCH_ENABLED: ${PI_SEMANTIC_SEARCH_ENABLED:-false}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       # Must be identical to celery_worker's value below — both
       # encrypt/decrypt the same ai_credential_profiles rows in separate
@@ -148,6 +208,45 @@ services:
       SOW_ENABLED: ${SOW_ENABLED:-false}
       SOW_MAX_RECORDING_MB: ${SOW_MAX_RECORDING_MB:-500}
       SOW_MAX_RECORDING_MINUTES: ${SOW_MAX_RECORDING_MINUTES:-60}
+      # Project Intelligence — must match backend's block above (this is the
+      # worker; workers/tasks/pi_ingest.py's Celery tasks and the beat-
+      # scheduled sweep run here, not in the API process). See backend's
+      # comment above for why these entries exist at all.
+      PI_ENABLED: ${PI_ENABLED:-false}
+      PI_CAPTURE_RF: ${PI_CAPTURE_RF:-true}
+      PI_CAPTURE_VIBE: ${PI_CAPTURE_VIBE:-true}
+      PI_CAPTURE_BEHAVIOR_NOTES: ${PI_CAPTURE_BEHAVIOR_NOTES:-true}
+      # Phase 2 — must match backend's block above. apply_heal() (services/
+      # pi_heal.py) runs wherever the API request lands, i.e. the backend
+      # container, not here — but classification (services/pi_drift.py)
+      # runs inline inside ingest_rf_capture/ingest_vibe_capture, which DO
+      # run here, so PI_REMOVED_THRESHOLD / PI_RENAME_SIMILARITY_THRESHOLD
+      # must be set on this container too, not just backend's.
+      PI_HEAL_LEDGER: ${PI_HEAL_LEDGER:-false}
+      PI_REMOVED_THRESHOLD: ${PI_REMOVED_THRESHOLD:-3}
+      PI_RENAME_SIMILARITY_THRESHOLD: ${PI_RENAME_SIMILARITY_THRESHOLD:-0.93}
+      # Phase 3 — must match backend's block above. This is where the crawl
+      # actually runs (workers/tasks/pi_crawl.py's Beat-scheduled tasks),
+      # so these are the values that matter in practice; kept identical to
+      # backend's block regardless (see that comment).
+      PI_CRAWL_ENABLED: ${PI_CRAWL_ENABLED:-false}
+      PI_ARTIFACT_RETENTION_DAYS: ${PI_ARTIFACT_RETENTION_DAYS:-90}
+      PI_CRAWL_MAX_STEPS: ${PI_CRAWL_MAX_STEPS:-40}
+      PI_CRAWL_MAX_DURATION_S: ${PI_CRAWL_MAX_DURATION_S:-1200}
+      PI_CRAWL_MAX_SCREENSHOTS: ${PI_CRAWL_MAX_SCREENSHOTS:-5}
+      PI_CRAWL_STAGGER_S: ${PI_CRAWL_STAGGER_S:-300}
+      PI_CAPTURE_DESIGN_PATTERNS: ${PI_CAPTURE_DESIGN_PATTERNS:-true}
+      # Phase 4 — must match backend's block above. This is where context
+      # briefs are actually built and injected
+      # (ai_execution.run_ai_test_task), so these are the values that
+      # matter in practice.
+      PI_CONTEXT_ENABLED: ${PI_CONTEXT_ENABLED:-false}
+      PI_CONTEXT_BUDGET_TOKENS: ${PI_CONTEXT_BUDGET_TOKENS:-1200}
+      PI_CONTEXT_BUILD_TIMEOUT_S: ${PI_CONTEXT_BUILD_TIMEOUT_S:-5}
+      # Phase 5 — must match backend's block above. This is where the
+      # nightly backfill/cleanup tasks and the per-approval embed hook
+      # actually run (workers/tasks/pi_embed.py).
+      PI_SEMANTIC_SEARCH_ENABLED: ${PI_SEMANTIC_SEARCH_ENABLED:-false}
       # Must match backend's value above — see its comment.
       AI_CREDENTIAL_KEY: ${AI_CREDENTIAL_KEY:-}
       # Android Vibe Testing — see backend's block above for why both

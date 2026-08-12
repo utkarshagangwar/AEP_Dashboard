@@ -97,15 +97,38 @@ _NEGATED = (
 def get_flow_model(session=None, project_id=None) -> dict | None:
     """Return the flow model for a project, or None if it has none.
 
-    THIS IS THE SEAM. Today it resolves only the TDD_FLOW_MODEL_PATH escape
-    hatch, so every project returns None and the feature is inert. The
-    memory/intelligence layer replaces the body of this one function — the
-    signature mirrors ui_inventory.get_inventory_text(session, project_id) so
-    the worker's call site is already the right shape and will not move.
+    THIS WAS THE SEAM. It now prefers Project Intelligence's verified
+    pi_flows row (app.services.pi_flow.get_verified_model) for `project_id`,
+    when Project Intelligence is enabled and has one; otherwise — PI is off,
+    has no verified model yet for this project, or the lookup itself
+    failed — it falls through to the original TDD_FLOW_MODEL_PATH escape
+    hatch unchanged, so every project that predates Project Intelligence, or
+    every project PI simply hasn't learned yet, behaves exactly as it did
+    before this function's body changed.
 
-    Never raises: a project whose flow model is missing or malformed is a
-    project without flow validation, not a failed ingest.
+    `session`/`project_id` were always this function's real signature (see
+    ui_inventory.get_inventory_text(session, project_id), the sibling this
+    mirrors) even though the file-based fallback never used them — that's
+    what made this a seam in the first place, not a new integration.
+
+    Never raises: a project whose flow model is missing, malformed, or
+    whose lookup errored is a project without flow validation, not a failed
+    ingest — identical contract to before.
     """
+    if session is not None and project_id is not None:
+        try:
+            from app.services import pi_flow
+
+            model = pi_flow.get_verified_model(session, project_id)
+            if model:
+                return model
+        except Exception:  # noqa: BLE001 — fall through to the file-based path
+            logger.warning(
+                "Flow validation: Project Intelligence flow lookup failed for "
+                "project %s — falling back to TDD_FLOW_MODEL_PATH", project_id,
+                exc_info=True,
+            )
+
     path = os.environ.get("TDD_FLOW_MODEL_PATH", "").strip()
     if not path:
         return None

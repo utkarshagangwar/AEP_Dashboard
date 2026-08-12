@@ -22,6 +22,12 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     is_active: Optional[bool] = None
     environments: Optional[list[str]] = None
+    # Project Intelligence — Phase 3 scheduled crawler (migration 0052).
+    # Both None = "leave unchanged" (PATCH semantics, same as every other
+    # field here); explicit True/False sets it. See app/models/project.py
+    # for the full precedence rationale.
+    pi_crawl_enabled: Optional[bool] = None
+    pi_crawl_production_approved: Optional[bool] = None
 
 
 class ProjectResponse(BaseModel):
@@ -33,6 +39,8 @@ class ProjectResponse(BaseModel):
     is_active: bool
     environments: Optional[list[str]] = None
     suite_count: int = 0
+    pi_crawl_enabled: bool = False
+    pi_crawl_production_approved: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -94,6 +102,13 @@ class ProjectTestSetup(BaseModel):
     # overrides the login's own target_url under "Advanced".
     environment: Optional[str] = Field(default=None, max_length=200)
     base_url: Optional[str] = Field(default=None, max_length=2000)
+    # Project Intelligence — Phase 3 (migration 0052). None = leave the
+    # environment row's current classification unchanged; only meaningful
+    # together with `environment` (the same "Advanced" section sets both).
+    # See app/models/project.py's ProjectEnvironment.is_production for the
+    # full rationale (spec §28 Q1 — explicit, Admin/QA-Lead-set, never
+    # inferred from the `environment` label string).
+    is_production: Optional[bool] = None
 
     @field_validator("base_url")
     @classmethod
@@ -164,6 +179,10 @@ class ProjectEnvironmentUpsert(BaseModel):
     # one layer later and harder to diagnose.
     base_url: Optional[str] = Field(default=None, max_length=2000)
     default_credential_profile_id: Optional[UUID] = None
+    # Project Intelligence — Phase 3 (migration 0052). Always sent by this
+    # upsert (idempotent-write semantics, same as base_url above) — an
+    # omitted value defaults false, matching every existing row's default.
+    is_production: bool = False
 
     @field_validator("base_url")
     @classmethod
@@ -181,6 +200,7 @@ class ProjectEnvironmentResponse(BaseModel):
     # round-trip to name the profile. Same convention as
     # AITestRun.credential_profile_name.
     default_credential_profile_name: Optional[str] = None
+    is_production: bool = False
     created_at: datetime
     updated_at: datetime
 

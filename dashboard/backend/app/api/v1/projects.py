@@ -96,6 +96,8 @@ def create_project(
             is_active=project.is_active,
             environments=project.environments,
             suite_count=0,
+            pi_crawl_enabled=project.pi_crawl_enabled,
+            pi_crawl_production_approved=project.pi_crawl_production_approved,
             created_at=project.created_at,
             updated_at=project.updated_at,
         )
@@ -162,6 +164,8 @@ def list_projects(
                 is_active=p.is_active,
                 environments=p.environments,
                 suite_count=sc or 0,
+                pi_crawl_enabled=p.pi_crawl_enabled,
+                pi_crawl_production_approved=p.pi_crawl_production_approved,
                 created_at=p.created_at,
                 updated_at=p.updated_at,
             )
@@ -217,6 +221,8 @@ def get_project(
             is_active=project.is_active,
             environments=project.environments,
             suite_count=suite_count or 0,
+            pi_crawl_enabled=project.pi_crawl_enabled,
+            pi_crawl_production_approved=project.pi_crawl_production_approved,
             created_at=project.created_at,
             updated_at=project.updated_at,
             suites=[
@@ -263,6 +269,8 @@ def update_project(
             and payload.description is None
             and payload.is_active is None
             and payload.environments is None
+            and payload.pi_crawl_enabled is None
+            and payload.pi_crawl_production_approved is None
         ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -293,6 +301,16 @@ def update_project(
         if payload.environments is not None:
             project.environments = payload.environments
 
+        # Project Intelligence — Phase 3 scheduled crawler (migration 0052).
+        # Admin/QA-Lead only (this endpoint's existing require_permission
+        # ("projects") gate), matching spec §28 Q2's "opt-in per project"
+        # answer and §14.3/§24's "production crawling ... recorded on the
+        # project record".
+        if payload.pi_crawl_enabled is not None:
+            project.pi_crawl_enabled = payload.pi_crawl_enabled
+        if payload.pi_crawl_production_approved is not None:
+            project.pi_crawl_production_approved = payload.pi_crawl_production_approved
+
         db.commit()
         db.refresh(project)
 
@@ -320,6 +338,8 @@ def update_project(
             is_active=project.is_active,
             environments=project.environments,
             suite_count=suite_count or 0,
+            pi_crawl_enabled=project.pi_crawl_enabled,
+            pi_crawl_production_approved=project.pi_crawl_production_approved,
             created_at=project.created_at,
             updated_at=project.updated_at,
         )
@@ -439,6 +459,7 @@ def list_project_environments(
                 default_credential_profile_name=profile_names.get(
                     r.default_credential_profile_id
                 ),
+                is_production=r.is_production,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
             )
@@ -507,6 +528,7 @@ def upsert_project_environment(
 
         row.base_url = payload.base_url
         row.default_credential_profile_id = payload.default_credential_profile_id
+        row.is_production = payload.is_production
 
         db.commit()
         db.refresh(row)
@@ -521,6 +543,7 @@ def upsert_project_environment(
                 "environment": environment,
                 "base_url": row.base_url,
                 "created": created,
+                "is_production": row.is_production,
                 "default_credential_profile_id": (
                     str(row.default_credential_profile_id)
                     if row.default_credential_profile_id
@@ -551,6 +574,7 @@ def upsert_project_environment(
             base_url=row.base_url,
             default_credential_profile_id=row.default_credential_profile_id,
             default_credential_profile_name=profile_name,
+            is_production=row.is_production,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -691,6 +715,7 @@ def _resolve_setup_view(db, project) -> ProjectTestSetupResponse:
                 base_url=r.base_url,
                 default_credential_profile_id=r.default_credential_profile_id,
                 default_credential_profile_name=None,
+                is_production=r.is_production,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
             )
@@ -774,6 +799,11 @@ def save_project_test_setup(
                 row = ProjectEnvironment(project_id=project_id, environment=environment)
                 db.add(row)
             row.base_url = payload.base_url
+            # Project Intelligence — Phase 3 (migration 0052). None = leave
+            # this environment's production classification unchanged (see
+            # ProjectTestSetup.is_production's docstring).
+            if payload.is_production is not None:
+                row.is_production = payload.is_production
 
         db.commit()
         db.refresh(project)
@@ -792,6 +822,7 @@ def save_project_test_setup(
                 ),
                 "environment": payload.environment,
                 "base_url": payload.base_url,
+                "is_production": payload.is_production,
             },
             ip_address=_client_ip(request),
         )
