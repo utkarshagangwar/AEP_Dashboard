@@ -786,12 +786,23 @@ _EXTRACTION_RESPONSE_SHAPE = (
 
 
 def build_extraction_system(
-    part_label: str | None = None, ui_inventory: str | None = None
+    part_label: str | None = None,
+    ui_inventory: str | None = None,
+    *,
+    flow_model: dict | None = None,
 ) -> str:
     """The Stage 1-3 system prompt.
 
     Assembled at call time from CATEGORIES so the contract the model is held
     to is literally the same object check_variant_coverage() enforces.
+
+    flow_model: the project's execution-state graph (app.services.
+    flow_validation). When present the prompt gains the state list and the
+    rule that every checkpoint must name the state it starts from, so the
+    model produces anchored tests instead of the validator rejecting
+    unanchored ones afterwards. When absent — every project today — the
+    returned string is byte-identical to what this function returned before
+    flow validation existed. test_ui_inventory pins that equality.
     """
     prompt = (
         "You are a senior QA engineer converting a requirements document into "
@@ -914,11 +925,23 @@ def build_extraction_system(
         from app.services.ui_inventory import format_for_prompt
 
         prompt += format_for_prompt(ui_inventory)
+    if flow_model:
+        # After the naming reference, because the flow rules are about WHERE a
+        # test may start, which only makes sense once the model knows what it
+        # is naming. render_flow_reference returns "" for an unusable model,
+        # so a malformed flow model costs the rules and not the extraction.
+        from app.services.flow_validation import render_flow_reference
+
+        prompt += render_flow_reference(flow_model)
     return prompt
 
 
 def extract_behaviours(
-    text: str, *, part_label: str | None = None, ui_inventory: str | None = None
+    text: str,
+    *,
+    part_label: str | None = None,
+    ui_inventory: str | None = None,
+    flow_model: dict | None = None,
 ) -> tuple[list[dict], str]:
     """Stage 1-3. Returns (flat checkpoint list, model_used).
 
@@ -936,7 +959,9 @@ def extract_behaviours(
     try:
         result = design_ingest._complete_via_brain(
             prompt,
-            system=build_extraction_system(part_label, ui_inventory),
+            system=build_extraction_system(
+                part_label, ui_inventory, flow_model=flow_model
+            ),
             max_tokens=8192,
         )
     except llm_router.LLMRouterError as exc:
@@ -1634,7 +1659,11 @@ def dedupe(checkpoints: list[dict]) -> list[dict]:
     return kept
 
 
-def scorecard(checkpoints: list[dict], excluded_zones: list[dict] | None = None) -> dict:
+def scorecard(
+    checkpoints: list[dict],
+    excluded_zones: list[dict] | None = None,
+    flow: dict | None = None,
+) -> dict:
     """Coverage metrics for one part or one whole document.
 
     This is the acceptance gate for the extractor itself. The headline number
@@ -1693,6 +1722,11 @@ def scorecard(checkpoints: list[dict], excluded_zones: list[dict] | None = None)
         "excluded_zone_kinds": sorted(
             {str(z.get("zone_kind")) for z in (excluded_zones or []) if z.get("zone_kind")}
         ),
+        # Flow anchoring (app.services.flow_validation). The key is absent —
+        # not zero — when the project has no flow model, so "this part was
+        # never flow-checked" reads differently from "it was checked and
+        # everything anchored". Existing parts keep the shape they have.
+        **({"flow": flow} if flow else {}),
     }
 
 
@@ -2027,6 +2061,7 @@ def extract(
     *,
     part_label: str | None = None,
     ui_inventory: str | None = None,
+    flow_model: dict | None = None,
     on_progress=None,
 ) -> ExtractionResult:
     """Full Stage 0-5 pipeline over one part's text.
@@ -2064,11 +2099,16 @@ def extract(
             on_progress, "extract", SKIPPED,
             "Nothing testable here — no requirements to extract from this part",
         )
+        # No checkpoints means nothing to anchor, so no flow stage is
+        # reported — the panel must not show work that did not happen.
         return ExtractionResult([], excluded, scorecard([], excluded), zoning_model)
 
     testable_text = "\n\n".join(seg["body"] for seg in testable)
     checkpoints, extraction_model = extract_behaviours(
-        testable_text, part_label=part_label, ui_inventory=ui_inventory
+        testable_text,
+        part_label=part_label,
+        ui_inventory=ui_inventory,
+        flow_model=flow_model,
     )
     behaviours = len({cp.get("behaviour_key") for cp in checkpoints})
     report(
@@ -2113,10 +2153,36 @@ def extract(
             {"removed": before_dedupe - len(checkpoints)},
         )
 
+    # Stage 4d. After dedupe, so a checkpoint is anchored once rather than
+    # once per near-duplicate, and after repair, so repaired variants are
+    # anchored too. Advisory: it annotates and counts, it never removes.
+    from app.services import flow_validation
+
+    flow = flow_validation.validate(checkpoints, flow_model)
+    if not flow:
+        report(
+            on_progress, "flow", SKIPPED,
+            "No navigation flow is defined for this project yet — tests were "
+            "not checked for a reachable starting point",
+        )
+    else:
+        unanchored = flow.get("unanchored", 0)
+        report(
+            on_progress, "flow", DONE,
+            f"Anchored {flow.get('anchored', 0)} test"
+            f"{'' if flow.get('anchored') == 1 else 's'} to the navigation flow"
+            + (
+                f"; {unanchored} could not be reached from a cold start and "
+                "need a human to place them"
+                if unanchored else ""
+            ),
+            flow,
+        )
+
     models = [m for m in (extraction_model, repair_model, zoning_model) if m]
     return ExtractionResult(
         checkpoints,
         excluded,
-        scorecard(checkpoints, excluded),
+        scorecard(checkpoints, excluded, flow or None),
         ", ".join(dict.fromkeys(models)),
     )

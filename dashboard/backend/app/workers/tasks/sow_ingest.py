@@ -250,7 +250,11 @@ def _analyze_part(session, artifact, part) -> None:
     # afterwards. Returns None — and extraction proceeds on text alone — for
     # an artifact with no project, with no evidence uploaded, or when the
     # vision call fails.
-    from app.services import sow_progress, ui_inventory as ui_inventory_service
+    from app.services import (
+        flow_validation,
+        sow_progress,
+        ui_inventory as ui_inventory_service,
+    )
 
     progress = sow_progress.reporter(artifact.id, part.part_number)
     if artifact.total_parts and artifact.total_parts > 1:
@@ -261,6 +265,11 @@ def _analyze_part(session, artifact, part) -> None:
         )
 
     ui_inventory = ui_inventory_service.get_inventory_text(session, artifact.project_id)
+    # The project's execution flow, so a test is anchored to a state a tester
+    # can reach rather than to a document section. Returns None for every
+    # project until the flow layer supplies one, and a None flow model makes
+    # the whole stage a no-op — this line is safe to ship before that exists.
+    flow_model = flow_validation.get_flow_model(session, artifact.project_id)
     # Reported per part rather than once, because it is the answer to "will
     # this test say Apply Now or Submit Application" and that answer applies
     # to every part. Absence is stated, not left silent: a reader who cannot
@@ -286,6 +295,7 @@ def _analyze_part(session, artifact, part) -> None:
             content,
             part_label=part_label,
             ui_inventory=ui_inventory,
+            flow_model=flow_model,
             on_progress=progress,
         )
         checkpoints, model_used = extraction.checkpoints, extraction.model_used

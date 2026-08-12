@@ -629,6 +629,7 @@ def parse_sow_detailed(
     *,
     part_label: str | None = None,
     ui_inventory: str | None = None,
+    flow_model: dict | None = None,
     on_progress=None,
 ):
     """Extract checkpoints from SOW text — full result including zoning.
@@ -645,6 +646,12 @@ def parse_sow_detailed(
     means extract from text alone, which is what every caller without a
     project gets and is exactly the pre-inventory behaviour.
 
+    flow_model: the project's execution-state graph (see
+    app.services.flow_validation), so each checkpoint is anchored to a state a
+    tester can actually reach. None — every project until the flow layer
+    lands — means the flow stage is skipped entirely and extraction behaves
+    exactly as it did before.
+
     Set TDD_EXTRACTION_V2=0 to fall back to the legacy single-pass extractor,
     which produces no zoning data and no negative/edge variants. The fallback
     exists as an escape hatch for a provider that cannot hold the larger v2
@@ -657,6 +664,7 @@ def parse_sow_detailed(
             text,
             part_label=part_label,
             ui_inventory=ui_inventory,
+            flow_model=flow_model,
             on_progress=on_progress,
         )
 

@@ -243,6 +243,20 @@ class CheckpointOut(BaseModel):
     # found nothing more.
     capped_variants: int = 0
 
+    # ── Flow anchoring (app.services.flow_validation, Stage 4d) ──
+    # Both empty for every checkpoint extracted without a project flow model,
+    # which is all of them until the flow layer lands, and for every row
+    # stored before this feature existed. The UI renders a checkpoint with no
+    # precondition_state as unanchored rather than implying it starts from
+    # nowhere.
+    #
+    # precondition_state is the state at which this checkpoint's first
+    # instruction becomes possible; setup_path is the ordered chain of states
+    # from the entry state to it — literally what a runner must do before
+    # step 1 of this test means anything.
+    precondition_state: str | None = None
+    setup_path: list[str] = []
+
 
 class PartOut(BaseModel):
     part_number: int
