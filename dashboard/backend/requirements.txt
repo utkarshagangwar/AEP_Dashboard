@@ -77,7 +77,7 @@ langchain-openai==0.3.11
 # litellm.completion() as an SDK -- the proxy never runs here, so none of
 # these are reachable. Bumping would also force openai>=2.20.0, breaking the
 # pin above. Left as-is; do not install the "proxy" extra on this package.
-litellm==1.74.15.post2
+litellm==1.93.0
 # SECURITY (2026-08-11): 12.2.0 -> 12.3.0 fixes 13 CVEs disclosed after 12.2.0
 # shipped (heap out-of-bounds writes, several decompression-bomb-check
 # bypasses). Was also listed twice here by accident -- deduped to one line.
